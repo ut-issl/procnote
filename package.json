@@ -34,7 +34,7 @@
     "@sveltejs/vite-plugin-svelte": "7.0.0",
     "@tauri-apps/cli": "2.11.0",
     "svelte": "5.55.5",
-    "svelte-check": "4.4.7",
+    "svelte-check": "4.4.8",
     "typescript": "6.0.3",
     "vite": "catalog:",
     "vite-plus": "catalog:"
