@@ -384,11 +384,6 @@ packages:
     peerDependencies:
       acorn: ^8.9.0
 
-  '@sveltejs/acorn-typescript@1.0.9':
-    resolution: {integrity: sha512-lVJX6qEgs/4DOcRTpo56tmKzVPtoWAaVbL4hfO7t7NVwl9AAXzQR6cihesW1BmNMPl+bK6dreu2sOKBP2Q9CIA==}
-    peerDependencies:
-      acorn: ^8.9.0
-
   '@sveltejs/adapter-static@3.0.10':
     resolution: {integrity: sha512-7D9lYFWJmB7zxZyTE/qxjksvMqzMuYrrsyh1f4AlZqeZeACPRySjbC3aFiY55wb1tWUaKOQG9PVbm74JcN2Iew==}
     peerDependencies:
@@ -888,8 +883,8 @@ packages:
     resolution: {integrity: sha512-LKWqWJRhstyYo9pGvgor/ivk2w94eSjE3RGVuzLGlr3NmD8bf7RcYGze1mNdEHRP6TRP6rMuDHk5t44hnTRyow==}
     engines: {node: '>=14.19.0'}
 
-  postcss@8.5.14:
-    resolution: {integrity: sha512-SoSL4+OSEtR99LHFZQiJLkT59C5B1amGO1NzTwj7TT1qCUgUO6hxOvzkOYxD+vMrXBM3XJIKzokoERdqQq/Zmg==}
+  postcss@8.5.15:
+    resolution: {integrity: sha512-FfR8sjd4em2T6fb3I2MwAJU7HWVMr9zba+enmQeeWFfCbm+UOC/0X4DS8XtpUTMwWMGbjKYP7xjfNekzyGmB3A==}
     engines: {node: ^10 || ^12 || >=14}
 
   readdirp@4.1.2:
@@ -929,8 +924,8 @@ packages:
   tinybench@2.9.0:
     resolution: {integrity: sha512-0+DUvqWMValLmha6lr4kD8iAMK1HzV0/aKnCtWb9v9641TnP/MFb7Pc2bxoxQjTXAErryXVgUOfv2YqNllqGeg==}
 
-  tinyexec@1.1.2:
-    resolution: {integrity: sha512-dAqSqE/RabpBKI8+h26GfLq6Vb3JVXs30XYQjdMjaj/c2tS8IYYMbIzP599KtRj7c57/wYApb3QjgRgXmrCukA==}
+  tinyexec@1.2.2:
+    resolution: {integrity: sha512-M/Q0B2cp4K7kynaT/vnED1j8TlLY+Pp7C6Wl2bl/7u/F0mUVwdyOpwomQb8JpYLitHUssAJRmLZdMCGsrx7i+g==}
     engines: {node: '>=18'}
 
   tinyglobby@0.2.16:
@@ -963,8 +958,8 @@ packages:
       vite:
         optional: true
 
-  ws@8.20.1:
-    resolution: {integrity: sha512-It4dO0K5v//JtTXuPkfEOaI3uUN87iYPnqo/ZzqCoG3g8uhA66QUMs/SrM0YK7/NAu+r4LMh/9dq2A7k+rHs+w==}
+  ws@8.21.0:
+    resolution: {integrity: sha512-Vsp28b7DRcimFQvrqu2Wek3z1iYxDCWqHYB8Qsnk/S4RfaCQzPGPyBNuVjJV3cd6UiKtUtp6sNM77gWvzcCH+g==}
     engines: {node: '>=10.0.0'}
     peerDependencies:
       bufferutil: ^4.0.1
@@ -1145,10 +1140,6 @@ snapshots:
     dependencies:
       acorn: 8.16.0
 
-  '@sveltejs/acorn-typescript@1.0.9(acorn@8.16.0)':
-    dependencies:
-      acorn: 8.16.0
-
   '@sveltejs/adapter-static@3.0.10(@sveltejs/kit@2.60.1(@sveltejs/vite-plugin-svelte@7.1.2(@voidzero-dev/vite-plus-core@0.1.22(typescript@6.0.3))(svelte@5.55.9))(@voidzero-dev/vite-plus-core@0.1.22(typescript@6.0.3))(svelte@5.55.9)(typescript@6.0.3))':
     dependencies:
       '@sveltejs/kit': 2.60.1(@sveltejs/vite-plugin-svelte@7.1.2(@voidzero-dev/vite-plus-core@0.1.22(typescript@6.0.3))(svelte@5.55.9))(@voidzero-dev/vite-plus-core@0.1.22(typescript@6.0.3))(svelte@5.55.9)(typescript@6.0.3)
@@ -1156,7 +1147,7 @@ snapshots:
   '@sveltejs/kit@2.60.1(@sveltejs/vite-plugin-svelte@7.1.2(@voidzero-dev/vite-plus-core@0.1.22(typescript@6.0.3))(svelte@5.55.9))(@voidzero-dev/vite-plus-core@0.1.22(typescript@6.0.3))(svelte@5.55.9)(typescript@6.0.3)':
     dependencies:
       '@standard-schema/spec': 1.1.0
-      '@sveltejs/acorn-typescript': 1.0.9(acorn@8.16.0)
+      '@sveltejs/acorn-typescript': 1.0.10(acorn@8.16.0)
       '@sveltejs/vite-plugin-svelte': 7.1.2(@voidzero-dev/vite-plus-core@0.1.22(typescript@6.0.3))(svelte@5.55.9)
       '@types/cookie': 0.6.0
       acorn: 8.16.0
@@ -1261,7 +1252,7 @@ snapshots:
       '@oxc-project/runtime': 0.129.0
       '@oxc-project/types': 0.129.0
       lightningcss: 1.32.0
-      postcss: 8.5.14
+      postcss: 8.5.15
     optionalDependencies:
       fsevents: 2.3.3
       typescript: 6.0.3
@@ -1296,10 +1287,10 @@ snapshots:
       sirv: 3.0.2
       std-env: 4.1.0
       tinybench: 2.9.0
-      tinyexec: 1.1.2
+      tinyexec: 1.2.2
       tinyglobby: 0.2.16
       vite: '@voidzero-dev/vite-plus-core@0.1.22(typescript@6.0.3)'
-      ws: 8.20.1
+      ws: 8.21.0
     transitivePeerDependencies:
       - '@arethetypeswrong/core'
       - '@tsdown/css'
@@ -1512,7 +1503,7 @@ snapshots:
 
   pngjs@7.0.0: {}
 
-  postcss@8.5.14:
+  postcss@8.5.15:
     dependencies:
       nanoid: 3.3.12
       picocolors: 1.1.1
@@ -1571,7 +1562,7 @@ snapshots:
 
   tinybench@2.9.0: {}
 
-  tinyexec@1.1.2: {}
+  tinyexec@1.2.2: {}
 
   tinyglobby@0.2.16:
     dependencies:
@@ -1637,6 +1628,6 @@ snapshots:
     optionalDependencies:
       vite: '@voidzero-dev/vite-plus-core@0.1.22(typescript@6.0.3)'
 
-  ws@8.20.1: {}
+  ws@8.21.0: {}
 
   zimmerframe@1.1.4: {}
