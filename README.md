@@ -84,7 +84,7 @@ Define data-entry fields using a fenced code block with the `inputs` language ta
 - id: log-file
   label: "Attach log file"
   type: attachment
-```​
+```
 ````
 
 Input types:
@@ -128,7 +128,7 @@ Connect PSU to DUT J1 connector. Set voltage to 5.0V. Enable output.
   expected:
     min: 100
     max: 150
-```​
+```
 
 ## Postconditions
 
