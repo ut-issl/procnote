@@ -67,8 +67,8 @@ Use Markdown task list syntax for interactive checkboxes:
 
 Define data-entry fields using a fenced code block with the `inputs` language tag. The block body is YAML:
 
-`````markdown
-````inputs
+````markdown
+```inputs
 - id: current-draw
   label: "Measure current draw"
   type: measurement
@@ -86,9 +86,6 @@ Define data-entry fields using a fenced code block with the `inputs` language ta
   type: attachment
 ```​
 ````
-`````
-
-`````
 
 Input types:
 
@@ -123,7 +120,7 @@ Connect PSU to DUT J1 connector. Set voltage to 5.0V. Enable output.
 
 - [ ] Confirm voltage stable
 
-````inputs
+```inputs
 - id: current-draw
   label: "Measure current draw"
   type: measurement
@@ -137,8 +134,6 @@ Connect PSU to DUT J1 connector. Set voltage to 5.0V. Enable output.
 
 - [ ] DUT powered off
 - [ ] Chamber returned to ambient
-`````
-
 ````
 
 ## Installation
@@ -200,4 +195,3 @@ Three layers with strict dependency direction:
 3. **`src/`** -- SvelteKit + Svelte 5 frontend.
 
 Executions are stored as append-only JSONL event logs under `.executions/`.
-````
