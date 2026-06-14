@@ -31,7 +31,7 @@ importers:
         version: 2.5.4
       dompurify:
         specifier: ^3.3.1
-        version: 3.4.8
+        version: 3.4.9
       highlight.js:
         specifier: ^11.11.1
         version: 11.11.1
@@ -705,8 +705,8 @@ packages:
   devalue@5.8.1:
     resolution: {integrity: sha512-4CXDYRBGqN+57wVJkuXBYmpAVUSg3L6JAQa/DFqm238G73E1wuyc/JhGQJzN7vUf/CMphYau2zXbfWzDR5aTEw==}
 
-  dompurify@3.4.8:
-    resolution: {integrity: sha512-yb1cEmaOum7wFvOCSQxyfgVlv5D47Rc30iZWoMpbDIWTnJ6grDDQyu2KFJzB2k7u0pMuJcQ1zphH//fFnw2tjQ==}
+  dompurify@3.4.9:
+    resolution: {integrity: sha512-4dPSRMRDqHvs0V4YDFCsaIZo4if5u0xM+llyxiM2fwuZFdKArUBAF3VtI2+n8NKg9P870WMdYk0UhqQNoWXbfQ==}
 
   es-module-lexer@1.7.0:
     resolution: {integrity: sha512-jEQoCwk8hyb2AZziIOLhDqpm5+2ww5uIE6lkO/6jcOCusfk6LhMHpXXfBLXTZ7Ydyt0j4VoUQv6uGNYbdW+kBA==}
@@ -1359,7 +1359,7 @@ snapshots:
 
   devalue@5.8.1: {}
 
-  dompurify@3.4.8:
+  dompurify@3.4.9:
     optionalDependencies:
       '@types/trusted-types': 2.0.7
 
