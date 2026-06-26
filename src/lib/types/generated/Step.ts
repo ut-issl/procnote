@@ -4,11 +4,8 @@ import type { StepContent } from "./StepContent";
 /**
  * A single step in the procedure (corresponds to a `## ` heading).
  */
-export type Step = {
-  /**
-   * Stable element ID, assigned at execution start. `None` in raw templates.
-   */
-  id?: string;
-  heading: string;
-  content: Array<StepContent>;
-};
+export type Step = { 
+/**
+ * Stable element ID, assigned at execution start. `None` in raw templates.
+ */
+id?: string, heading: string, content: Array<StepContent>, };

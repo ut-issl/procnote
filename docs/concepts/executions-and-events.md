@@ -61,47 +61,88 @@ Each event carries:
 | `ExecutionRenamed` | Execution given a human-readable name                |
 | `EventReverted`    | Marks a previous event as reverted                   |
 
-## Step State Machine
+## State Machine
 
-Every step has a **status** that changes in response to events. The diagram below shows all valid transitions, including those caused by reverting events.
+The current execution state is the combination of one **execution lifecycle** and one **step lifecycle per step**. Events are applied by replaying the log in order; `LogMeta` and `EventReverted` are replay metadata rather than direct state transitions.
+
+### Execution Lifecycle
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Pending: StepAdded
+    direction LR
 
-    Pending --> Active: StepStarted
-    Pending --> Skipped: StepSkipped
+    [*] --> Pending
 
-    Active --> Completed: StepCompleted
-    Active --> Skipped: StepSkipped
-    Active --> Pending: Revert StepStarted
+    Pending --> Active: ExecutionStarted
 
-    Completed --> Active: Revert StepCompleted
+    Active --> FinishedPass: ExecutionCompleted(Pass)
+    Active --> FinishedFail: ExecutionCompleted(Fail)
+    Active --> FinishedAborted: ExecutionCompleted(Aborted)
+    Active --> FinishedAborted: ExecutionAborted
 
-    Skipped --> Pending: Revert StepSkipped<br/>(was Pending)
-    Skipped --> Active: Revert StepSkipped<br/>(was Active)
+    FinishedPass: Finished(Pass)
+    FinishedFail: Finished(Fail)
+    FinishedAborted: Finished(Aborted)
+
+    Active --> Active: StepAdded
+    Active --> Active: StepStarted / StepCompleted / StepSkipped
+    Active --> Active: CheckboxToggled / InputRecorded / AttachmentAdded
+    Active --> Active: NoteAdded
+    Active --> Active: ExecutionRenamed
+
+    FinishedPass --> FinishedPass: ExecutionRenamed
+    FinishedFail --> FinishedFail: ExecutionRenamed
+    FinishedAborted --> FinishedAborted: ExecutionRenamed
 ```
 
-**Forward transitions** (triggered by operator actions):
+Lifecycle rules:
 
-| From    | Event           | To        |
-| ------- | --------------- | --------- |
-| Pending | `StepStarted`   | Active    |
-| Pending | `StepSkipped`   | Skipped   |
-| Active  | `StepCompleted` | Completed |
-| Active  | `StepSkipped`   | Skipped   |
+| Event                | Valid when             | Effect                                                     |
+| -------------------- | ---------------------- | ---------------------------------------------------------- |
+| `ExecutionStarted`   | execution is `Pending` | execution becomes `Active`; procedure metadata is captured |
+| `ExecutionCompleted` | execution is `Active`  | execution becomes `Finished(status)`                       |
+| `ExecutionAborted`   | execution is `Active`  | execution becomes `Finished(Aborted)`                      |
+| `ExecutionRenamed`   | execution has started  | name is updated; allowed after finish                      |
+| step and data events | execution is `Active`  | step collection, step status, or captured data is updated  |
 
-**Revert transitions** (triggered by reverting a previous event):
+### Step Lifecycle
 
-| From      | Reverted Event  | To                                                |
-| --------- | --------------- | ------------------------------------------------- |
-| Active    | `StepStarted`   | Pending                                           |
-| Completed | `StepCompleted` | Active                                            |
-| Skipped   | `StepSkipped`   | Pending (if step was never started)               |
-| Skipped   | `StepSkipped`   | Active (if step was started before being skipped) |
+Every step has an independent status. The diagram below describes the lifecycle of a single step while its parent execution is active.
+
+```mermaid
+stateDiagram-v2
+    direction LR
+
+    [*] --> NotPresent
+    NotPresent --> Pending: StepAdded
+
+    Pending --> Active: StepStarted
+    Active --> Completed: StepCompleted
+
+    Pending --> Skipped: StepSkipped
+    Active --> Skipped: StepSkipped
+
+    Pending --> Pending: data events
+    Active --> Active: data events
+    Completed --> Completed: data events
+    Skipped --> Skipped: data events
+```
+
+Here, **data events** means `CheckboxToggled`, `InputRecorded`, `AttachmentAdded`, and step-scoped `NoteAdded`. The current implementation requires the execution to be active and the step to exist, but it does not require the step itself to be active.
+
+Step lifecycle rules:
+
+| Event           | Valid when                                           | Effect                                                          |
+| --------------- | ---------------------------------------------------- | --------------------------------------------------------------- |
+| `StepAdded`     | execution is `Active`, `step_id` is unique           | creates a `Pending` step and inserts it into step order         |
+| `StepStarted`   | execution is `Active`, step is `Pending`             | step becomes `Active`                                           |
+| `StepCompleted` | execution is `Active`, step is `Active`              | step becomes `Completed`                                        |
+| `StepSkipped`   | execution is `Active`, step is `Pending` or `Active` | step becomes `Skipped`                                          |
+| data events     | execution is `Active`, step exists                   | captured data or notes are updated without changing step status |
 
 !!! info "Revert validation"
-Not every revert is allowed. For example, reverting a `StepStarted` event is rejected if a subsequent `StepCompleted` event depends on it. Procnote performs a **trial replay** to verify that the resulting state is valid before committing the revert.
+
+    Reverting an event is not modeled as a direct reverse transition. Procnote appends an `EventReverted` marker, then rebuilds state while skipping the reverted event. Before appending the marker, it performs a **trial replay** to verify that the resulting state is valid.
 
 ## State Reconstruction
 

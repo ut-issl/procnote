@@ -5,29 +5,4 @@ import type { StepContent } from "./StepContent";
 /**
  * Action payload from the frontend for recording events.
  */
-export type ExecutionAction =
-  | { action: "start_step"; step_id: string }
-  | { action: "complete_step"; step_id: string }
-  | { action: "skip_step"; step_id: string; reason: string }
-  | { action: "toggle_checkbox"; step_id: string; checkbox_id: string; checked: boolean }
-  | { action: "record_input"; step_id: string; input_id: string; value: string; unit?: string }
-  | { action: "add_note"; text: string; step_id?: string }
-  | {
-      action: "add_step";
-      step_id: string;
-      heading: string;
-      content: Array<StepContent>;
-      after_step_id?: string;
-    }
-  | {
-      action: "add_attachment";
-      step_id: string;
-      input_id: string;
-      filename: string;
-      path: string;
-      content_type: string;
-    }
-  | { action: "complete"; status: CompletionStatus }
-  | { action: "abort"; reason: string }
-  | { action: "rename_execution"; name: string }
-  | { action: "revert_event"; event_index: number; reason: string };
+export type ExecutionAction = { "action": "start_step", step_id: string, } | { "action": "complete_step", step_id: string, } | { "action": "skip_step", step_id: string, reason: string, } | { "action": "toggle_checkbox", step_id: string, checkbox_id: string, checked: boolean, } | { "action": "record_input", step_id: string, input_id: string, value: string, unit?: string, } | { "action": "add_note", text: string, step_id?: string, } | { "action": "add_step", step_id: string, heading: string, content: Array<StepContent>, after_step_id?: string, } | { "action": "add_attachment", step_id: string, input_id: string, filename: string, path: string, content_type: string, } | { "action": "complete", status: CompletionStatus, } | { "action": "abort", reason: string, } | { "action": "rename_execution", name: string, } | { "action": "revert_event", event_index: number, reason: string, };

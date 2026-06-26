@@ -2,17 +2,12 @@
 import type { NoteState } from "./NoteState";
 import type { StepContentSummary } from "./StepContentSummary";
 
-export type StepSummary = {
-  id: string;
-  heading: string;
-  status: string;
-  /**
-   * ISO 8601 timestamp of the most recent status change (started/completed/skipped).
-   */
-  status_at?: string;
-  /**
-   * Ordered content items preserving template source order.
-   */
-  content: Array<StepContentSummary>;
-  notes: Array<NoteState>;
-};
+export type StepSummary = { id: string, heading: string, status: string, 
+/**
+ * ISO 8601 timestamp of the most recent status change (started/completed/skipped).
+ */
+status_at?: string, 
+/**
+ * Ordered content items preserving template source order.
+ */
+content: Array<StepContentSummary>, notes: Array<NoteState>, };

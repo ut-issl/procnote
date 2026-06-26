@@ -5,25 +5,16 @@ import type { StepSummary } from "./StepSummary";
 /**
  * Serializable execution state summary for the frontend.
  */
-export type ExecutionSummary = {
-  execution_id: string;
-  name?: string;
-  procedure_id: string;
-  procedure_title: string;
-  procedure_version: string;
-  status: string;
-  /**
-   * ISO 8601 timestamp of when the execution was started.
-   */
-  started_at?: string;
-  /**
-   * ISO 8601 timestamp of when the execution was finished (completed/aborted).
-   */
-  finished_at?: string;
-  steps: Array<StepSummary>;
-  event_history: Array<EventHistoryEntry>;
-  /**
-   * Absolute path to the execution directory on disk.
-   */
-  execution_dir: string;
-};
+export type ExecutionSummary = { execution_id: string, name?: string, procedure_id: string, procedure_title: string, procedure_version: string, status: string, 
+/**
+ * ISO 8601 timestamp of when the execution was started.
+ */
+started_at?: string, 
+/**
+ * ISO 8601 timestamp of when the execution was finished (completed/aborted).
+ */
+finished_at?: string, steps: Array<StepSummary>, event_history: Array<EventHistoryEntry>, 
+/**
+ * Absolute path to the execution directory on disk.
+ */
+execution_dir: string, };
