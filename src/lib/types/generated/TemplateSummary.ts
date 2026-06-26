@@ -3,4 +3,4 @@
 /**
  * Summary of a template for listing.
  */
-export type TemplateSummary = { id: string, title: string, version: string, path: string, };
+export type TemplateSummary = { id: string; title: string; version: string; path: string };

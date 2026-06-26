@@ -3,16 +3,22 @@
 /**
  * A single entry in the event history, exposed to the frontend.
  */
-export type EventHistoryEntry = { index: number, event_type: string, 
-/**
- * ISO 8601 timestamp string.
- */
-at: string, description: string, revertible: boolean, reverted: boolean, 
-/**
- * Step ID for step-scoped events, if applicable.
- */
-step_id?: string, 
-/**
- * Element ID (`checkbox_id` or `input_id`) for element-scoped events, if applicable.
- */
-element_id?: string, };
+export type EventHistoryEntry = {
+  index: number;
+  event_type: string;
+  /**
+   * ISO 8601 timestamp string.
+   */
+  at: string;
+  description: string;
+  revertible: boolean;
+  reverted: boolean;
+  /**
+   * Step ID for step-scoped events, if applicable.
+   */
+  step_id?: string;
+  /**
+   * Element ID (`checkbox_id` or `input_id`) for element-scoped events, if applicable.
+   */
+  element_id?: string;
+};

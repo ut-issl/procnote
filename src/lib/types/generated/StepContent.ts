@@ -4,8 +4,15 @@ import type { InputDefinition } from "./InputDefinition";
 /**
  * Content items within a step.
  */
-export type StepContent = { "type": "Prose", text: string, } | { "type": "Checkbox", 
-/**
- * Stable element ID, assigned at execution start. `None` in raw templates.
- */
-id?: string, text: string, checked: boolean, } | { "type": "InputBlock", inputs: Array<InputDefinition>, };
+export type StepContent =
+  | { type: "Prose"; text: string }
+  | {
+      type: "Checkbox";
+      /**
+       * Stable element ID, assigned at execution start. `None` in raw templates.
+       */
+      id?: string;
+      text: string;
+      checked: boolean;
+    }
+  | { type: "InputBlock"; inputs: Array<InputDefinition> };
