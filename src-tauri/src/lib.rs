@@ -1,3 +1,4 @@
+mod action;
 mod commands;
 mod persistence;
 mod state;

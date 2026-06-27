@@ -1,11 +1,13 @@
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use tauri::State;
 use ts_rs::TS;
 
+use crate::action::ExecutionAction;
 use crate::persistence::event_log::EventLog;
+use crate::persistence::execution_store::ExecutionStore;
 use crate::state::AppState;
 use procnote_core::event::reverted_event_indices;
 use procnote_core::event::types::{CompletionStatus, Event, ExecutionId, Revertibility};
@@ -377,24 +379,6 @@ fn event_at(event: &Event) -> String {
     }
 }
 
-/// Compute the SHA-256 hash of a file, returning a lowercase hex string.
-fn compute_sha256(path: &str) -> std::io::Result<String> {
-    use sha2::{Digest, Sha256};
-    let bytes = std::fs::read(path)?;
-    let hash = Sha256::digest(&bytes);
-    Ok(hex_encode(hash.as_ref()))
-}
-
-fn hex_encode(bytes: &[u8]) -> String {
-    bytes
-        .iter()
-        .fold(String::with_capacity(bytes.len() * 2), |mut output, b| {
-            std::fmt::Write::write_fmt(&mut output, format_args!("{b:02x}"))
-                .expect("writing to a String should never fail");
-            output
-        })
-}
-
 /// Format the execution directory name as `{YYYYMMDD}T{HHMMSS}-{uuid_8}`.
 fn execution_dir_name(at: &DateTime<Utc>, execution_id: ExecutionId) -> String {
     format!(
@@ -505,68 +489,11 @@ pub fn start_execution(template_path: String) -> Result<ExecutionSummary, String
     Ok(summarize(&exec_state, &all_events, &exec_dir))
 }
 
-/// Action payload from the frontend for recording events.
-#[derive(Debug, Deserialize, TS)]
-#[ts(export)]
-#[serde(tag = "action", rename_all = "snake_case")]
-pub enum ExecutionAction {
-    SkipStep {
-        step_id: String,
-        reason: String,
-    },
-    ToggleCheckbox {
-        step_id: String,
-        checkbox_id: String,
-        checked: bool,
-    },
-    RecordInput {
-        step_id: String,
-        input_id: String,
-        value: String,
-        #[ts(optional)]
-        unit: Option<String>,
-    },
-    AddNote {
-        text: String,
-        #[ts(optional)]
-        step_id: Option<String>,
-    },
-    AddStep {
-        step_id: String,
-        heading: String,
-        #[serde(default)]
-        content: Vec<StepContent>,
-        #[ts(optional)]
-        after_step_id: Option<String>,
-    },
-    AddAttachment {
-        step_id: String,
-        input_id: String,
-        filename: String,
-        path: String,
-        content_type: String,
-    },
-    Complete {
-        status: CompletionStatus,
-    },
-    Abort {
-        reason: String,
-    },
-    RenameExecution {
-        name: String,
-    },
-    RevertEvent {
-        event_index: usize,
-        reason: String,
-    },
-}
-
 /// Record an action on an active execution.
 #[tauri::command]
 #[expect(
     clippy::needless_pass_by_value,
-    clippy::too_many_lines,
-    reason = "Tauri command handler with exhaustive action dispatch"
+    reason = "Tauri command handlers require owned parameters"
 )]
 pub fn record_action(
     state: State<'_, AppState>,
@@ -574,122 +501,13 @@ pub fn record_action(
     action: ExecutionAction,
 ) -> Result<ExecutionSummary, String> {
     log::debug!("record_action: execution={execution_id}, action={action:?}");
-    let exec_dir = find_execution_dir(&state.procedures_dir, execution_id)
-        .ok_or_else(|| format!("Execution not found: {execution_id}"))?;
-    let log_path = exec_dir.join("events.jsonl");
-    if !log_path.exists() {
-        return Err(format!("Execution not found: {execution_id}"));
-    }
-    let event_log = EventLog::new(log_path.clone());
-
-    event_log
-        .with_exclusive_lock(|| {
-            let mut events = EventLog::new(log_path.clone())
-                .read()
-                .map_err(|e| e.to_string())?;
-            let mut exec_state = ExecutionState::from_events(&events).map_err(|e| e.to_string())?;
-
-            // Revert is a special case: it rebuilds state from events.
-            if let ExecutionAction::RevertEvent {
-                event_index,
-                reason,
-            } = action
-            {
-                let revert_marker = ExecutionState::revert_event(&events, event_index, &reason)
-                    .map_err(|e| e.to_string())?;
-
-                // Persist the revert marker.
-                EventLog::new(log_path.clone())
-                    .append_durable(&revert_marker)
-                    .map_err(|e| e.to_string())?;
-                events.push(revert_marker);
-
-                // Rebuild state from the full event log.
-                let exec_state = ExecutionState::from_events(&events).map_err(|e| e.to_string())?;
-
-                return Ok(summarize(&exec_state, &events, &exec_dir));
-            }
-
-            let event: Event = match action {
-                ExecutionAction::SkipStep { step_id, reason } => exec_state
-                    .skip_step(&step_id, &reason)
-                    .map_err(|e| e.to_string())?,
-                ExecutionAction::ToggleCheckbox {
-                    step_id,
-                    checkbox_id,
-                    checked,
-                } => exec_state
-                    .toggle_checkbox(&step_id, &checkbox_id, checked)
-                    .map_err(|e| e.to_string())?,
-                ExecutionAction::RecordInput {
-                    step_id,
-                    input_id,
-                    value,
-                    unit,
-                } => exec_state
-                    .record_input(&step_id, &input_id, &value, unit.as_deref())
-                    .map_err(|e| e.to_string())?,
-                ExecutionAction::AddNote { text, step_id } => exec_state
-                    .add_note(&text, step_id.as_deref())
-                    .map_err(|e| e.to_string())?,
-                ExecutionAction::AddStep {
-                    step_id,
-                    heading,
-                    content,
-                    after_step_id,
-                } => exec_state
-                    .add_step(&step_id, &heading, content, after_step_id.as_deref())
-                    .map_err(|e| e.to_string())?,
-                ExecutionAction::AddAttachment {
-                    step_id,
-                    input_id,
-                    filename,
-                    path,
-                    content_type,
-                } => {
-                    let sha256 = compute_sha256(&path).map_err(|e| e.to_string())?;
-
-                    // Copy file into <exec_dir>/attachments/<hash7>-<filename>.
-                    let short_hash = &sha256[..7];
-                    let stored_name = format!("{short_hash}-{filename}");
-                    let attachments_dir = exec_dir.join("attachments");
-                    std::fs::create_dir_all(&attachments_dir).map_err(|e| e.to_string())?;
-                    let dest = attachments_dir.join(&stored_name);
-                    std::fs::copy(&path, &dest).map_err(|e| e.to_string())?;
-                    let relative_path = format!("attachments/{stored_name}");
-
-                    exec_state
-                        .add_attachment(
-                            &step_id,
-                            &input_id,
-                            &filename,
-                            &relative_path,
-                            &content_type,
-                            &sha256,
-                        )
-                        .map_err(|e| e.to_string())?
-                }
-                ExecutionAction::Complete { status } => {
-                    exec_state.complete(status).map_err(|e| e.to_string())?
-                }
-                ExecutionAction::Abort { reason } => {
-                    exec_state.abort(&reason).map_err(|e| e.to_string())?
-                }
-                ExecutionAction::RenameExecution { name } => {
-                    exec_state.rename(&name).map_err(|e| e.to_string())?
-                }
-                ExecutionAction::RevertEvent { .. } => unreachable!("handled above"),
-            };
-
-            // Persist event.
-            EventLog::new(log_path.clone())
-                .append_durable(&event)
-                .map_err(|e| e.to_string())?;
-            events.push(event);
-
-            Ok(summarize(&exec_state, &events, &exec_dir))
-        })
-        .map_err(|e| e.to_string())?
+    let recorded =
+        ExecutionStore::new(state.procedures_dir.clone()).record_action(execution_id, action)?;
+    Ok(summarize(
+        &recorded.state,
+        &recorded.events,
+        &recorded.execution_dir,
+    ))
 }
 
 /// Get the current state of an execution.
