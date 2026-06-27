@@ -75,7 +75,7 @@ pub struct RecordedInput {
 }
 
 /// The full state of a procedure execution, reconstructable from events.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ExecutionState {
     pub execution_id: Option<ExecutionId>,
     pub procedure_id: Option<String>,
@@ -375,18 +375,42 @@ impl ExecutionState {
         Ok(events)
     }
 
-    /// Rename the execution.
+    /// Build and validate a rename event without mutating this state.
     ///
     /// Unlike most actions, this works on both active and finished executions
     /// (it's metadata, not a state transition).
-    pub fn rename(&mut self, name: &str) -> Result<Event, ExecutionError> {
-        let event = Event::ExecutionRenamed {
+    pub fn rename_event(&self, name: &str) -> Result<Event, ExecutionError> {
+        self.validated_candidate(Event::ExecutionRenamed {
             at: Utc::now(),
             execution_id: self.require_execution_id()?,
             name: name.to_string(),
-        };
+        })
+    }
+
+    /// Rename the execution.
+    pub fn rename(&mut self, name: &str) -> Result<Event, ExecutionError> {
+        let event = self.rename_event(name)?;
         self.apply(&event)?;
         Ok(event)
+    }
+
+    /// Build and validate a new step event without mutating this state.
+    pub fn add_step_event(
+        &self,
+        step_id: &str,
+        heading: &str,
+        content: Vec<StepContent>,
+        after_step_id: Option<&str>,
+    ) -> Result<Event, ExecutionError> {
+        self.require_active()?;
+        self.validated_candidate(Event::StepAdded {
+            at: Utc::now(),
+            execution_id: self.require_execution_id()?,
+            step_id: step_id.to_string(),
+            heading: heading.to_string(),
+            content,
+            after_step_id: after_step_id.map(std::string::ToString::to_string),
+        })
     }
 
     /// Add a new step during execution.
@@ -397,30 +421,44 @@ impl ExecutionState {
         content: Vec<StepContent>,
         after_step_id: Option<&str>,
     ) -> Result<Event, ExecutionError> {
-        self.require_active()?;
-        let event = Event::StepAdded {
-            at: Utc::now(),
-            execution_id: self.require_execution_id()?,
-            step_id: step_id.to_string(),
-            heading: heading.to_string(),
-            content,
-            after_step_id: after_step_id.map(std::string::ToString::to_string),
-        };
+        let event = self.add_step_event(step_id, heading, content, after_step_id)?;
         self.apply(&event)?;
         Ok(event)
     }
 
-    /// Skip a step.
-    pub fn skip_step(&mut self, step_id: &str, reason: &str) -> Result<Event, ExecutionError> {
+    /// Build and validate a step-skip event without mutating this state.
+    pub fn skip_step_event(&self, step_id: &str, reason: &str) -> Result<Event, ExecutionError> {
         self.require_active()?;
-        let event = Event::StepSkipped {
+        self.validated_candidate(Event::StepSkipped {
             at: Utc::now(),
             execution_id: self.require_execution_id()?,
             step_id: step_id.to_string(),
             reason: reason.to_string(),
-        };
+        })
+    }
+
+    /// Skip a step.
+    pub fn skip_step(&mut self, step_id: &str, reason: &str) -> Result<Event, ExecutionError> {
+        let event = self.skip_step_event(step_id, reason)?;
         self.apply(&event)?;
         Ok(event)
+    }
+
+    /// Build and validate a checkbox-toggle event without mutating this state.
+    pub fn toggle_checkbox_event(
+        &self,
+        step_id: &str,
+        checkbox_id: &str,
+        checked: bool,
+    ) -> Result<Event, ExecutionError> {
+        self.require_active()?;
+        self.validated_candidate(Event::CheckboxToggled {
+            at: Utc::now(),
+            execution_id: self.require_execution_id()?,
+            step_id: step_id.to_string(),
+            checkbox_id: checkbox_id.to_string(),
+            checked,
+        })
     }
 
     /// Toggle a checkbox in a step.
@@ -430,16 +468,28 @@ impl ExecutionState {
         checkbox_id: &str,
         checked: bool,
     ) -> Result<Event, ExecutionError> {
+        let event = self.toggle_checkbox_event(step_id, checkbox_id, checked)?;
+        self.apply(&event)?;
+        Ok(event)
+    }
+
+    /// Build and validate an input-recorded event without mutating this state.
+    pub fn record_input_event(
+        &self,
+        step_id: &str,
+        input_id: &str,
+        value: &str,
+        unit: Option<&str>,
+    ) -> Result<Event, ExecutionError> {
         self.require_active()?;
-        let event = Event::CheckboxToggled {
+        self.validated_candidate(Event::InputRecorded {
             at: Utc::now(),
             execution_id: self.require_execution_id()?,
             step_id: step_id.to_string(),
-            checkbox_id: checkbox_id.to_string(),
-            checked,
-        };
-        self.apply(&event)?;
-        Ok(event)
+            input_id: input_id.to_string(),
+            value: value.to_string(),
+            unit: unit.map(std::string::ToString::to_string),
+        })
     }
 
     /// Record an input value.
@@ -450,30 +500,54 @@ impl ExecutionState {
         value: &str,
         unit: Option<&str>,
     ) -> Result<Event, ExecutionError> {
-        self.require_active()?;
-        let event = Event::InputRecorded {
-            at: Utc::now(),
-            execution_id: self.require_execution_id()?,
-            step_id: step_id.to_string(),
-            input_id: input_id.to_string(),
-            value: value.to_string(),
-            unit: unit.map(std::string::ToString::to_string),
-        };
+        let event = self.record_input_event(step_id, input_id, value, unit)?;
         self.apply(&event)?;
         Ok(event)
     }
 
-    /// Add a note.
-    pub fn add_note(&mut self, text: &str, step_id: Option<&str>) -> Result<Event, ExecutionError> {
+    /// Build and validate a note-added event without mutating this state.
+    pub fn add_note_event(
+        &self,
+        text: &str,
+        step_id: Option<&str>,
+    ) -> Result<Event, ExecutionError> {
         self.require_active()?;
-        let event = Event::NoteAdded {
+        self.validated_candidate(Event::NoteAdded {
             at: Utc::now(),
             execution_id: self.require_execution_id()?,
             text: text.to_string(),
             step_id: step_id.map(std::string::ToString::to_string),
-        };
+        })
+    }
+
+    /// Add a note.
+    pub fn add_note(&mut self, text: &str, step_id: Option<&str>) -> Result<Event, ExecutionError> {
+        let event = self.add_note_event(text, step_id)?;
         self.apply(&event)?;
         Ok(event)
+    }
+
+    /// Build and validate an attachment-added event without mutating this state.
+    pub fn add_attachment_event(
+        &self,
+        step_id: &str,
+        input_id: &str,
+        filename: &str,
+        path: &str,
+        content_type: &str,
+        sha256: &str,
+    ) -> Result<Event, ExecutionError> {
+        self.require_active()?;
+        self.validated_candidate(Event::AttachmentAdded {
+            at: Utc::now(),
+            execution_id: self.require_execution_id()?,
+            step_id: step_id.to_string(),
+            input_id: input_id.to_string(),
+            filename: filename.to_string(),
+            path: path.to_string(),
+            content_type: content_type.to_string(),
+            sha256: sha256.to_string(),
+        })
     }
 
     /// Add an attachment.
@@ -486,41 +560,42 @@ impl ExecutionState {
         content_type: &str,
         sha256: &str,
     ) -> Result<Event, ExecutionError> {
-        self.require_active()?;
-        let event = Event::AttachmentAdded {
-            at: Utc::now(),
-            execution_id: self.require_execution_id()?,
-            step_id: step_id.to_string(),
-            input_id: input_id.to_string(),
-            filename: filename.to_string(),
-            path: path.to_string(),
-            content_type: content_type.to_string(),
-            sha256: sha256.to_string(),
-        };
+        let event =
+            self.add_attachment_event(step_id, input_id, filename, path, content_type, sha256)?;
         self.apply(&event)?;
         Ok(event)
+    }
+
+    /// Build and validate an execution-completed event without mutating this state.
+    pub fn complete_event(&self, status: CompletionStatus) -> Result<Event, ExecutionError> {
+        self.require_active()?;
+        self.validated_candidate(Event::ExecutionCompleted {
+            at: Utc::now(),
+            execution_id: self.require_execution_id()?,
+            status,
+        })
     }
 
     /// Complete the execution.
     pub fn complete(&mut self, status: CompletionStatus) -> Result<Event, ExecutionError> {
-        self.require_active()?;
-        let event = Event::ExecutionCompleted {
-            at: Utc::now(),
-            execution_id: self.require_execution_id()?,
-            status,
-        };
+        let event = self.complete_event(status)?;
         self.apply(&event)?;
         Ok(event)
     }
 
-    /// Abort the execution.
-    pub fn abort(&mut self, reason: &str) -> Result<Event, ExecutionError> {
+    /// Build and validate an execution-aborted event without mutating this state.
+    pub fn abort_event(&self, reason: &str) -> Result<Event, ExecutionError> {
         self.require_active()?;
-        let event = Event::ExecutionAborted {
+        self.validated_candidate(Event::ExecutionAborted {
             at: Utc::now(),
             execution_id: self.require_execution_id()?,
             reason: reason.to_string(),
-        };
+        })
+    }
+
+    /// Abort the execution.
+    pub fn abort(&mut self, reason: &str) -> Result<Event, ExecutionError> {
+        let event = self.abort_event(reason)?;
         self.apply(&event)?;
         Ok(event)
     }
@@ -600,6 +675,12 @@ impl ExecutionState {
 
     fn require_execution_id(&self) -> Result<ExecutionId, ExecutionError> {
         self.execution_id.ok_or(ExecutionError::NotStarted)
+    }
+
+    fn validated_candidate(&self, event: Event) -> Result<Event, ExecutionError> {
+        let mut trial = self.clone();
+        trial.apply(&event)?;
+        Ok(event)
     }
 
     fn get_step_mut(&mut self, step_id: &str) -> Result<&mut StepState, ExecutionError> {

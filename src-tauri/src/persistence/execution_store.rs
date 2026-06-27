@@ -137,10 +137,11 @@ impl ExecutionStore {
                         })
                     }
                     action => {
-                        let event = build_event_for_action(&mut state, &execution_dir, action)?;
+                        let event = build_event_for_action(&state, &execution_dir, action)?;
                         EventLog::new(log_path.clone())
                             .append_durable(&event)
                             .map_err(|e| e.to_string())?;
+                        state.apply(&event).map_err(|e| e.to_string())?;
                         events.push(event);
                         Ok(RecordedExecution {
                             state,
@@ -155,20 +156,20 @@ impl ExecutionStore {
 }
 
 fn build_event_for_action(
-    state: &mut ExecutionState,
+    state: &ExecutionState,
     execution_dir: &Path,
     action: ExecutionAction,
 ) -> Result<Event, String> {
     match action {
         ExecutionAction::SkipStep { step_id, reason } => state
-            .skip_step(&step_id, &reason)
+            .skip_step_event(&step_id, &reason)
             .map_err(|e| e.to_string()),
         ExecutionAction::ToggleCheckbox {
             step_id,
             checkbox_id,
             checked,
         } => state
-            .toggle_checkbox(&step_id, &checkbox_id, checked)
+            .toggle_checkbox_event(&step_id, &checkbox_id, checked)
             .map_err(|e| e.to_string()),
         ExecutionAction::RecordInput {
             step_id,
@@ -176,10 +177,10 @@ fn build_event_for_action(
             value,
             unit,
         } => state
-            .record_input(&step_id, &input_id, &value, unit.as_deref())
+            .record_input_event(&step_id, &input_id, &value, unit.as_deref())
             .map_err(|e| e.to_string()),
         ExecutionAction::AddNote { text, step_id } => state
-            .add_note(&text, step_id.as_deref())
+            .add_note_event(&text, step_id.as_deref())
             .map_err(|e| e.to_string()),
         ExecutionAction::AddStep {
             step_id,
@@ -187,7 +188,7 @@ fn build_event_for_action(
             content,
             after_step_id,
         } => state
-            .add_step(&step_id, &heading, content, after_step_id.as_deref())
+            .add_step_event(&step_id, &heading, content, after_step_id.as_deref())
             .map_err(|e| e.to_string()),
         ExecutionAction::AddAttachment {
             step_id,
@@ -200,7 +201,7 @@ fn build_event_for_action(
                 .copy_verify_sync(Path::new(&path), &filename)?;
 
             state
-                .add_attachment(
+                .add_attachment_event(
                     &step_id,
                     &input_id,
                     &stored_attachment.filename,
@@ -210,9 +211,13 @@ fn build_event_for_action(
                 )
                 .map_err(|e| e.to_string())
         }
-        ExecutionAction::Complete { status } => state.complete(status).map_err(|e| e.to_string()),
-        ExecutionAction::Abort { reason } => state.abort(&reason).map_err(|e| e.to_string()),
-        ExecutionAction::RenameExecution { name } => state.rename(&name).map_err(|e| e.to_string()),
+        ExecutionAction::Complete { status } => {
+            state.complete_event(status).map_err(|e| e.to_string())
+        }
+        ExecutionAction::Abort { reason } => state.abort_event(&reason).map_err(|e| e.to_string()),
+        ExecutionAction::RenameExecution { name } => {
+            state.rename_event(&name).map_err(|e| e.to_string())
+        }
         ExecutionAction::RevertEvent { .. } => {
             unreachable!("handled before build_event_for_action")
         }
