@@ -1,11 +1,14 @@
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use chrono::{DateTime, Utc};
+use procnote_core::event::SUPPORTED_VERSION;
 use procnote_core::event::types::{Event, ExecutionId};
 use procnote_core::execution::ExecutionState;
 use sha2::{Digest, Sha256};
 
 use crate::action::ExecutionAction;
-use crate::persistence::event_log::EventLog;
+use crate::persistence::event_log::{EventLog, sync_dir};
 
 pub struct ExecutionStore {
     procedures_dir: PathBuf,
@@ -21,6 +24,71 @@ impl ExecutionStore {
     #[must_use]
     pub const fn new(procedures_dir: PathBuf) -> Self {
         Self { procedures_dir }
+    }
+
+    /// Create an execution directory and publish it atomically after its core
+    /// files have been durably written.
+    #[expect(
+        clippy::unused_self,
+        reason = "ExecutionStore groups filesystem creation operations"
+    )]
+    pub fn create_execution(
+        &self,
+        template_path: &Path,
+        state: ExecutionState,
+        initial_events: Vec<Event>,
+        started_at: DateTime<Utc>,
+        execution_id: ExecutionId,
+        tool_version: String,
+    ) -> Result<RecordedExecution, String> {
+        let procedure_dir = template_path
+            .parent()
+            .ok_or("template_path has no parent directory")?;
+        let executions_dir = procedure_dir.join(".executions");
+        std::fs::create_dir_all(&executions_dir).map_err(|e| e.to_string())?;
+        sync_dir(&executions_dir).map_err(|e| e.to_string())?;
+
+        let final_dir = executions_dir.join(execution_dir_name(&started_at, execution_id));
+        if final_dir.exists() {
+            return Err(format!(
+                "Execution directory already exists: {}",
+                final_dir.display()
+            ));
+        }
+        let temp_dir = executions_dir.join(format!(
+            ".{}.tmp-{}",
+            final_dir
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("execution"),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir(&temp_dir).map_err(|e| e.to_string())?;
+        sync_dir(&executions_dir).map_err(|e| e.to_string())?;
+
+        let template_snapshot = temp_dir.join("template.md");
+        copy_file_durable(template_path, &template_snapshot).map_err(|e| e.to_string())?;
+
+        let log_meta = Event::LogMeta {
+            at: Utc::now(),
+            version: SUPPORTED_VERSION,
+            tool_version,
+        };
+        let mut events = vec![log_meta];
+        events.extend(initial_events);
+        EventLog::new(temp_dir.join("events.jsonl"))
+            .create_with_events_durable(&events)
+            .map_err(|e| e.to_string())?;
+
+        sync_dir(&temp_dir).map_err(|e| e.to_string())?;
+        std::fs::rename(&temp_dir, &final_dir).map_err(|e| e.to_string())?;
+        sync_dir(&executions_dir).map_err(|e| e.to_string())?;
+
+        Ok(RecordedExecution {
+            state,
+            events,
+            execution_dir: final_dir,
+        })
     }
 
     /// Record an action as a single log transaction.
@@ -180,6 +248,27 @@ fn find_execution_dir(procedures_dir: &Path, execution_id: ExecutionId) -> Optio
         }
     }
     None
+}
+
+fn copy_file_durable(source: &Path, destination: &Path) -> std::io::Result<()> {
+    let bytes = std::fs::read(source)?;
+    let mut file = std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(destination)?;
+    file.write_all(&bytes)?;
+    file.flush()?;
+    file.sync_all()?;
+    destination.parent().map_or(Ok(()), sync_dir)
+}
+
+/// Format the execution directory name as `{YYYYMMDD}T{HHMMSS}-{uuid_8}`.
+fn execution_dir_name(at: &DateTime<Utc>, execution_id: ExecutionId) -> String {
+    format!(
+        "{}-{}",
+        at.format("%Y%m%dT%H%M%S"),
+        &execution_id.to_string()[..8]
+    )
 }
 
 /// Compute the SHA-256 hash of a file, returning a lowercase hex string.

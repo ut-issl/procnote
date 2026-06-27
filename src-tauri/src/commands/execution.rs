@@ -1,6 +1,5 @@
 use std::path::{Path, PathBuf};
 
-use chrono::{DateTime, Utc};
 use serde::Serialize;
 use tauri::State;
 use ts_rs::TS;
@@ -379,15 +378,6 @@ fn event_at(event: &Event) -> String {
     }
 }
 
-/// Format the execution directory name as `{YYYYMMDD}T{HHMMSS}-{uuid_8}`.
-fn execution_dir_name(at: &DateTime<Utc>, execution_id: ExecutionId) -> String {
-    format!(
-        "{}-{}",
-        at.format("%Y%m%dT%H%M%S"),
-        &execution_id.to_string()[..8]
-    )
-}
-
 /// Find the execution directory by scanning all procedure subdirectories.
 fn find_execution_dir(procedures_dir: &Path, execution_id: ExecutionId) -> Option<PathBuf> {
     let suffix = format!("-{}", &execution_id.to_string()[..8]);
@@ -435,7 +425,10 @@ fn load_execution_from_disk(
     clippy::needless_pass_by_value,
     reason = "Tauri command handlers require owned parameters"
 )]
-pub fn start_execution(template_path: String) -> Result<ExecutionSummary, String> {
+pub fn start_execution(
+    state: State<'_, AppState>,
+    template_path: String,
+) -> Result<ExecutionSummary, String> {
     let source = std::fs::read_to_string(&template_path).map_err(|e| e.to_string())?;
     let template = parse_template(&source).map_err(|e| e.to_string())?;
 
@@ -455,38 +448,20 @@ pub fn start_execution(template_path: String) -> Result<ExecutionSummary, String
         })
         .expect("start() must produce an ExecutionStarted event");
 
-    // Create execution directory under the procedure's .executions/ subdirectory.
-    let procedure_dir = Path::new(&template_path)
-        .parent()
-        .ok_or("template_path has no parent directory")?;
-    let exec_dir = procedure_dir
-        .join(".executions")
-        .join(execution_dir_name(&started_at, execution_id));
-    std::fs::create_dir_all(&exec_dir).map_err(|e| e.to_string())?;
+    let recorded = ExecutionStore::new(state.procedures_dir.clone()).create_execution(
+        Path::new(&template_path),
+        exec_state,
+        events,
+        started_at,
+        execution_id,
+        env!("CARGO_PKG_VERSION").to_string(),
+    )?;
 
-    // Copy template snapshot.
-    let template_snapshot = exec_dir.join("template.md");
-    std::fs::copy(&template_path, &template_snapshot).map_err(|e| e.to_string())?;
-
-    // Write events to log, starting with a log metadata line.
-    let log_path = exec_dir.join("events.jsonl");
-    let log_meta = Event::LogMeta {
-        at: Utc::now(),
-        version: 1,
-        tool_version: env!("CARGO_PKG_VERSION").to_string(),
-    };
-    let event_log = EventLog::new(log_path);
-    event_log
-        .append_durable(&log_meta)
-        .map_err(|e| e.to_string())?;
-    for event in &events {
-        event_log.append_durable(event).map_err(|e| e.to_string())?;
-    }
-
-    // Build full event list for summarize.
-    let mut all_events = vec![log_meta];
-    all_events.extend(events);
-    Ok(summarize(&exec_state, &all_events, &exec_dir))
+    Ok(summarize(
+        &recorded.state,
+        &recorded.events,
+        &recorded.execution_dir,
+    ))
 }
 
 /// Record an action on an active execution.

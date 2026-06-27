@@ -76,17 +76,35 @@ impl EventLog {
             .append(true)
             .open(&self.path)?;
 
-        for event in events {
-            let json = serde_json::to_string(event)?;
-            writeln!(file, "{json}")?;
-        }
-
+        write_events(&mut file, events)?;
         file.flush()?;
         file.sync_all()?;
 
         if !existed {
             sync_parent_dir(&self.path)?;
         }
+
+        Ok(())
+    }
+
+    /// Create a new event log with the provided events and sync it durably.
+    ///
+    /// This is intended for initial execution creation, where appending to a
+    /// pre-existing log would indicate a storage bug.
+    pub fn create_with_events_durable(&self, events: &[Event]) -> Result<(), EventLogError> {
+        if let Some(parent) = self.path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let mut file = std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&self.path)?;
+
+        write_events(&mut file, events)?;
+        file.flush()?;
+        file.sync_all()?;
+        sync_parent_dir(&self.path)?;
 
         Ok(())
     }
@@ -100,11 +118,20 @@ impl EventLog {
     }
 }
 
-fn sync_parent_dir(path: &Path) -> Result<(), std::io::Error> {
-    match path.parent() {
-        Some(parent) => std::fs::File::open(parent)?.sync_all(),
-        None => Ok(()),
+fn write_events(file: &mut std::fs::File, events: &[Event]) -> Result<(), EventLogError> {
+    for event in events {
+        let json = serde_json::to_string(event)?;
+        writeln!(file, "{json}")?;
     }
+    Ok(())
+}
+
+fn sync_parent_dir(path: &Path) -> Result<(), std::io::Error> {
+    path.parent().map_or(Ok(()), sync_dir)
+}
+
+pub(super) fn sync_dir(path: &Path) -> Result<(), std::io::Error> {
+    std::fs::File::open(path)?.sync_all()
 }
 
 #[cfg(test)]
