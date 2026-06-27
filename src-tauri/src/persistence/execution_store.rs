@@ -5,9 +5,9 @@ use chrono::{DateTime, Utc};
 use procnote_core::event::SUPPORTED_VERSION;
 use procnote_core::event::types::{Event, ExecutionId};
 use procnote_core::execution::ExecutionState;
-use sha2::{Digest, Sha256};
 
 use crate::action::ExecutionAction;
+use crate::persistence::attachment_store::AttachmentStore;
 use crate::persistence::event_log::{EventLog, sync_dir};
 
 pub struct ExecutionStore {
@@ -196,25 +196,17 @@ fn build_event_for_action(
             path,
             content_type,
         } => {
-            let sha256 = compute_sha256(Path::new(&path)).map_err(|e| e.to_string())?;
-
-            // Copy file into <exec_dir>/attachments/<hash7>-<filename>.
-            let short_hash = &sha256[..7];
-            let stored_name = format!("{short_hash}-{filename}");
-            let attachments_dir = execution_dir.join("attachments");
-            std::fs::create_dir_all(&attachments_dir).map_err(|e| e.to_string())?;
-            let dest = attachments_dir.join(&stored_name);
-            std::fs::copy(&path, &dest).map_err(|e| e.to_string())?;
-            let relative_path = format!("attachments/{stored_name}");
+            let stored_attachment = AttachmentStore::new(execution_dir.to_path_buf())
+                .copy_verify_sync(Path::new(&path), &filename)?;
 
             state
                 .add_attachment(
                     &step_id,
                     &input_id,
-                    &filename,
-                    &relative_path,
+                    &stored_attachment.filename,
+                    &stored_attachment.relative_path,
                     &content_type,
-                    &sha256,
+                    &stored_attachment.sha256,
                 )
                 .map_err(|e| e.to_string())
         }
@@ -269,21 +261,4 @@ fn execution_dir_name(at: &DateTime<Utc>, execution_id: ExecutionId) -> String {
         at.format("%Y%m%dT%H%M%S"),
         &execution_id.to_string()[..8]
     )
-}
-
-/// Compute the SHA-256 hash of a file, returning a lowercase hex string.
-fn compute_sha256(path: &Path) -> std::io::Result<String> {
-    let bytes = std::fs::read(path)?;
-    let hash = Sha256::digest(&bytes);
-    Ok(hex_encode(hash.as_ref()))
-}
-
-fn hex_encode(bytes: &[u8]) -> String {
-    bytes
-        .iter()
-        .fold(String::with_capacity(bytes.len() * 2), |mut output, b| {
-            std::fmt::Write::write_fmt(&mut output, format_args!("{b:02x}"))
-                .expect("writing to a String should never fail");
-            output
-        })
 }
