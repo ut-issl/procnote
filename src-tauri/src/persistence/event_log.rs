@@ -1,0 +1,118 @@
+use std::io::Write;
+use std::path::{Path, PathBuf};
+
+use procnote_core::event::types::Event;
+use procnote_core::event::{EventLogError, read_log};
+
+/// Filesystem-backed append-only JSONL event log.
+///
+/// This type is the Tauri shell's persistence boundary for `events.jsonl`.
+/// Low-level durability concerns such as flushing, syncing, and parent
+/// directory syncing should live here rather than in command handlers.
+#[derive(Debug, Clone)]
+pub struct EventLog {
+    path: PathBuf,
+}
+
+impl EventLog {
+    #[must_use]
+    pub const fn new(path: PathBuf) -> Self {
+        Self { path }
+    }
+
+    pub fn read(&self) -> Result<Vec<Event>, EventLogError> {
+        read_log(&self.path)
+    }
+
+    /// Append a single event and force it to durable storage before returning.
+    ///
+    /// A successful return means Procnote has asked the OS to persist both the
+    /// file contents and, for newly-created logs, the parent directory entry.
+    pub fn append_durable(&self, event: &Event) -> Result<(), EventLogError> {
+        self.append_batch_durable(std::slice::from_ref(event))
+    }
+
+    /// Append a batch of events and force them to durable storage before returning.
+    ///
+    /// Events are written as complete JSONL lines in order. Readers already
+    /// tolerate a truncated final line after a crash; syncing here reduces the
+    /// window where a reported-successful append can still be lost.
+    pub fn append_batch_durable(&self, events: &[Event]) -> Result<(), EventLogError> {
+        if let Some(parent) = self.path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let existed = self.path.exists();
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)?;
+
+        for event in events {
+            let json = serde_json::to_string(event)?;
+            writeln!(file, "{json}")?;
+        }
+
+        file.flush()?;
+        file.sync_all()?;
+
+        if !existed {
+            sync_parent_dir(&self.path)?;
+        }
+
+        Ok(())
+    }
+}
+
+fn sync_parent_dir(path: &Path) -> Result<(), std::io::Error> {
+    match path.parent() {
+        Some(parent) => std::fs::File::open(parent)?.sync_all(),
+        None => Ok(()),
+    }
+}
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used, reason = "unwrap is acceptable in tests")]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+    use procnote_core::event::SUPPORTED_VERSION;
+
+    fn log_meta() -> Event {
+        Event::LogMeta {
+            at: Utc::now(),
+            version: SUPPORTED_VERSION,
+            tool_version: "test".to_string(),
+        }
+    }
+
+    #[test]
+    fn durable_append_creates_parent_dirs_and_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested").join("events.jsonl");
+        let log = EventLog::new(path);
+
+        log.append_durable(&log_meta()).unwrap();
+
+        let events = log.read().unwrap();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0], Event::LogMeta { .. }));
+    }
+
+    #[test]
+    fn durable_batch_appends_events_in_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = EventLog::new(dir.path().join("events.jsonl"));
+        let first = log_meta();
+        let second = Event::ExecutionRenamed {
+            at: Utc::now(),
+            execution_id: uuid::Uuid::new_v4(),
+            name: "new-name".to_string(),
+        };
+
+        log.append_batch_durable(&[first.clone(), second.clone()])
+            .unwrap();
+
+        assert_eq!(log.read().unwrap(), vec![first, second]);
+    }
+}

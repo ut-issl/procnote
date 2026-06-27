@@ -1,4 +1,5 @@
 mod commands;
+mod persistence;
 mod state;
 
 use std::path::{Path, PathBuf};

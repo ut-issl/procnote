@@ -5,9 +5,10 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 use ts_rs::TS;
 
+use crate::persistence::event_log::EventLog;
 use crate::state::AppState;
+use procnote_core::event::reverted_event_indices;
 use procnote_core::event::types::{CompletionStatus, Event, ExecutionId, Revertibility};
-use procnote_core::event::{append_event, read_log, reverted_event_indices};
 use procnote_core::execution::{ExecutionState, StepStatus};
 use procnote_core::template::parse_template;
 use procnote_core::template::types::{InputDefinition, StepContent};
@@ -437,7 +438,9 @@ fn load_execution_from_disk(
     if !log_path.exists() {
         return Err(format!("Execution not found: {execution_id}"));
     }
-    let events = read_log(&log_path).map_err(|e| e.to_string())?;
+    let events = EventLog::new(log_path.clone())
+        .read()
+        .map_err(|e| e.to_string())?;
     let state = ExecutionState::from_events(&events).map_err(|e| e.to_string())?;
     Ok((state, events, log_path))
 }
@@ -488,9 +491,12 @@ pub fn start_execution(template_path: String) -> Result<ExecutionSummary, String
         version: 1,
         tool_version: env!("CARGO_PKG_VERSION").to_string(),
     };
-    append_event(&log_path, &log_meta).map_err(|e| e.to_string())?;
+    let event_log = EventLog::new(log_path);
+    event_log
+        .append_durable(&log_meta)
+        .map_err(|e| e.to_string())?;
     for event in &events {
-        append_event(&log_path, event).map_err(|e| e.to_string())?;
+        event_log.append_durable(event).map_err(|e| e.to_string())?;
     }
 
     // Build full event list for summarize.
@@ -581,7 +587,9 @@ pub fn record_action(
             .map_err(|e| e.to_string())?;
 
         // Persist the revert marker.
-        append_event(&log_path, &revert_marker).map_err(|e| e.to_string())?;
+        EventLog::new(log_path.clone())
+            .append_durable(&revert_marker)
+            .map_err(|e| e.to_string())?;
         events.push(revert_marker);
 
         // Rebuild state from the full event log.
@@ -662,7 +670,9 @@ pub fn record_action(
     };
 
     // Persist event.
-    append_event(&log_path, &event).map_err(|e| e.to_string())?;
+    EventLog::new(log_path.clone())
+        .append_durable(&event)
+        .map_err(|e| e.to_string())?;
     events.push(event);
 
     Ok(summarize(&exec_state, &events, exec_dir))
@@ -715,7 +725,7 @@ pub fn list_executions(state: State<'_, AppState>) -> Result<Vec<ExecutionSummar
             if !log_path.exists() {
                 continue;
             }
-            let events = match read_log(&log_path) {
+            let events = match EventLog::new(log_path.clone()).read() {
                 Ok(events) => events,
                 Err(e) => {
                     log::warn!("Failed to read events from {}: {e}", log_path.display());
