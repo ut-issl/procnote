@@ -565,6 +565,7 @@ pub enum ExecutionAction {
 #[tauri::command]
 #[expect(
     clippy::needless_pass_by_value,
+    clippy::too_many_lines,
     reason = "Tauri command handler with exhaustive action dispatch"
 )]
 pub fn record_action(
@@ -573,109 +574,122 @@ pub fn record_action(
     action: ExecutionAction,
 ) -> Result<ExecutionSummary, String> {
     log::debug!("record_action: execution={execution_id}, action={action:?}");
-    let (mut exec_state, mut events, log_path) =
-        load_execution_from_disk(&state.procedures_dir, execution_id)?;
-    let exec_dir = log_path.parent().expect("log_path must have a parent");
-
-    // Revert is a special case: it rebuilds state from events.
-    if let ExecutionAction::RevertEvent {
-        event_index,
-        reason,
-    } = action
-    {
-        let revert_marker = ExecutionState::revert_event(&events, event_index, &reason)
-            .map_err(|e| e.to_string())?;
-
-        // Persist the revert marker.
-        EventLog::new(log_path.clone())
-            .append_durable(&revert_marker)
-            .map_err(|e| e.to_string())?;
-        events.push(revert_marker);
-
-        // Rebuild state from the full event log.
-        let exec_state = ExecutionState::from_events(&events).map_err(|e| e.to_string())?;
-
-        return Ok(summarize(&exec_state, &events, exec_dir));
+    let exec_dir = find_execution_dir(&state.procedures_dir, execution_id)
+        .ok_or_else(|| format!("Execution not found: {execution_id}"))?;
+    let log_path = exec_dir.join("events.jsonl");
+    if !log_path.exists() {
+        return Err(format!("Execution not found: {execution_id}"));
     }
+    let event_log = EventLog::new(log_path.clone());
 
-    let event: Event = match action {
-        ExecutionAction::SkipStep { step_id, reason } => exec_state
-            .skip_step(&step_id, &reason)
-            .map_err(|e| e.to_string())?,
-        ExecutionAction::ToggleCheckbox {
-            step_id,
-            checkbox_id,
-            checked,
-        } => exec_state
-            .toggle_checkbox(&step_id, &checkbox_id, checked)
-            .map_err(|e| e.to_string())?,
-        ExecutionAction::RecordInput {
-            step_id,
-            input_id,
-            value,
-            unit,
-        } => exec_state
-            .record_input(&step_id, &input_id, &value, unit.as_deref())
-            .map_err(|e| e.to_string())?,
-        ExecutionAction::AddNote { text, step_id } => exec_state
-            .add_note(&text, step_id.as_deref())
-            .map_err(|e| e.to_string())?,
-        ExecutionAction::AddStep {
-            step_id,
-            heading,
-            content,
-            after_step_id,
-        } => exec_state
-            .add_step(&step_id, &heading, content, after_step_id.as_deref())
-            .map_err(|e| e.to_string())?,
-        ExecutionAction::AddAttachment {
-            step_id,
-            input_id,
-            filename,
-            path,
-            content_type,
-        } => {
-            let sha256 = compute_sha256(&path).map_err(|e| e.to_string())?;
+    event_log
+        .with_exclusive_lock(|| {
+            let mut events = EventLog::new(log_path.clone())
+                .read()
+                .map_err(|e| e.to_string())?;
+            let mut exec_state = ExecutionState::from_events(&events).map_err(|e| e.to_string())?;
 
-            // Copy file into <exec_dir>/attachments/<hash7>-<filename>.
-            let short_hash = &sha256[..7];
-            let stored_name = format!("{short_hash}-{filename}");
-            let attachments_dir = exec_dir.join("attachments");
-            std::fs::create_dir_all(&attachments_dir).map_err(|e| e.to_string())?;
-            let dest = attachments_dir.join(&stored_name);
-            std::fs::copy(&path, &dest).map_err(|e| e.to_string())?;
-            let relative_path = format!("attachments/{stored_name}");
+            // Revert is a special case: it rebuilds state from events.
+            if let ExecutionAction::RevertEvent {
+                event_index,
+                reason,
+            } = action
+            {
+                let revert_marker = ExecutionState::revert_event(&events, event_index, &reason)
+                    .map_err(|e| e.to_string())?;
 
-            exec_state
-                .add_attachment(
-                    &step_id,
-                    &input_id,
-                    &filename,
-                    &relative_path,
-                    &content_type,
-                    &sha256,
-                )
-                .map_err(|e| e.to_string())?
-        }
-        ExecutionAction::Complete { status } => {
-            exec_state.complete(status).map_err(|e| e.to_string())?
-        }
-        ExecutionAction::Abort { reason } => {
-            exec_state.abort(&reason).map_err(|e| e.to_string())?
-        }
-        ExecutionAction::RenameExecution { name } => {
-            exec_state.rename(&name).map_err(|e| e.to_string())?
-        }
-        ExecutionAction::RevertEvent { .. } => unreachable!("handled above"),
-    };
+                // Persist the revert marker.
+                EventLog::new(log_path.clone())
+                    .append_durable(&revert_marker)
+                    .map_err(|e| e.to_string())?;
+                events.push(revert_marker);
 
-    // Persist event.
-    EventLog::new(log_path.clone())
-        .append_durable(&event)
-        .map_err(|e| e.to_string())?;
-    events.push(event);
+                // Rebuild state from the full event log.
+                let exec_state = ExecutionState::from_events(&events).map_err(|e| e.to_string())?;
 
-    Ok(summarize(&exec_state, &events, exec_dir))
+                return Ok(summarize(&exec_state, &events, &exec_dir));
+            }
+
+            let event: Event = match action {
+                ExecutionAction::SkipStep { step_id, reason } => exec_state
+                    .skip_step(&step_id, &reason)
+                    .map_err(|e| e.to_string())?,
+                ExecutionAction::ToggleCheckbox {
+                    step_id,
+                    checkbox_id,
+                    checked,
+                } => exec_state
+                    .toggle_checkbox(&step_id, &checkbox_id, checked)
+                    .map_err(|e| e.to_string())?,
+                ExecutionAction::RecordInput {
+                    step_id,
+                    input_id,
+                    value,
+                    unit,
+                } => exec_state
+                    .record_input(&step_id, &input_id, &value, unit.as_deref())
+                    .map_err(|e| e.to_string())?,
+                ExecutionAction::AddNote { text, step_id } => exec_state
+                    .add_note(&text, step_id.as_deref())
+                    .map_err(|e| e.to_string())?,
+                ExecutionAction::AddStep {
+                    step_id,
+                    heading,
+                    content,
+                    after_step_id,
+                } => exec_state
+                    .add_step(&step_id, &heading, content, after_step_id.as_deref())
+                    .map_err(|e| e.to_string())?,
+                ExecutionAction::AddAttachment {
+                    step_id,
+                    input_id,
+                    filename,
+                    path,
+                    content_type,
+                } => {
+                    let sha256 = compute_sha256(&path).map_err(|e| e.to_string())?;
+
+                    // Copy file into <exec_dir>/attachments/<hash7>-<filename>.
+                    let short_hash = &sha256[..7];
+                    let stored_name = format!("{short_hash}-{filename}");
+                    let attachments_dir = exec_dir.join("attachments");
+                    std::fs::create_dir_all(&attachments_dir).map_err(|e| e.to_string())?;
+                    let dest = attachments_dir.join(&stored_name);
+                    std::fs::copy(&path, &dest).map_err(|e| e.to_string())?;
+                    let relative_path = format!("attachments/{stored_name}");
+
+                    exec_state
+                        .add_attachment(
+                            &step_id,
+                            &input_id,
+                            &filename,
+                            &relative_path,
+                            &content_type,
+                            &sha256,
+                        )
+                        .map_err(|e| e.to_string())?
+                }
+                ExecutionAction::Complete { status } => {
+                    exec_state.complete(status).map_err(|e| e.to_string())?
+                }
+                ExecutionAction::Abort { reason } => {
+                    exec_state.abort(&reason).map_err(|e| e.to_string())?
+                }
+                ExecutionAction::RenameExecution { name } => {
+                    exec_state.rename(&name).map_err(|e| e.to_string())?
+                }
+                ExecutionAction::RevertEvent { .. } => unreachable!("handled above"),
+            };
+
+            // Persist event.
+            EventLog::new(log_path.clone())
+                .append_durable(&event)
+                .map_err(|e| e.to_string())?;
+            events.push(event);
+
+            Ok(summarize(&exec_state, &events, &exec_dir))
+        })
+        .map_err(|e| e.to_string())?
 }
 
 /// Get the current state of an execution.

@@ -1,6 +1,7 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use fs2::FileExt;
 use procnote_core::event::types::Event;
 use procnote_core::event::{EventLogError, read_log};
 
@@ -22,6 +23,33 @@ impl EventLog {
 
     pub fn read(&self) -> Result<Vec<Event>, EventLogError> {
         read_log(&self.path)
+    }
+
+    /// Run a closure while holding an exclusive advisory lock for this event log.
+    ///
+    /// The lock file lives next to `events.jsonl`. Callers should keep the full
+    /// read/replay/validate/append sequence inside this critical section.
+    pub fn with_exclusive_lock<T>(&self, f: impl FnOnce() -> T) -> Result<T, EventLogError> {
+        if let Some(parent) = self.path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let lock_path = self.lock_path();
+        let lock_existed = lock_path.exists();
+        let lock_file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&lock_path)?;
+        if !lock_existed {
+            sync_parent_dir(&lock_path)?;
+        }
+
+        lock_file.lock_exclusive()?;
+        let result = f();
+        lock_file.unlock()?;
+        Ok(result)
     }
 
     /// Append a single event and force it to durable storage before returning.
@@ -61,6 +89,14 @@ impl EventLog {
         }
 
         Ok(())
+    }
+
+    fn lock_path(&self) -> PathBuf {
+        let filename = self.path.file_name().map_or_else(
+            || "events.jsonl.lock".to_string(),
+            |name| format!("{}.lock", name.to_string_lossy()),
+        );
+        self.path.with_file_name(filename)
     }
 }
 

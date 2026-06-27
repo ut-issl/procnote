@@ -21,6 +21,7 @@ name = "procnote_tauri_lib"
 [dependencies]
 chrono.workspace = true
 clap.workspace = true
+fs2 = "0.4.3"
 log.workspace = true
 procnote-core = { path = "../crates/procnote-core" }
 serde.workspace = true
