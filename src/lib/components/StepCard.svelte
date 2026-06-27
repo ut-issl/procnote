@@ -74,25 +74,16 @@
         onaction: (action: ExecutionAction) => void;
     } = $props();
 
-    let isActive = $derived(stepSummary.status === "active");
-    let isCompleted = $derived(stepSummary.status === "completed");
+    let isPresent = $derived(stepSummary.status === "present");
     let isSkipped = $derived(stepSummary.status === "skipped");
-    let isPending = $derived(stepSummary.status === "pending");
-    let isInteractable = $derived(isActive && executionActive);
+    let isInteractable = $derived(isPresent && executionActive);
 
     let showSkipDialog = $state(false);
     let skipReason = $state("");
 
-    // Find the most recent revertible step-status event (complete/skip/start).
+    // Find the most recent revertible skip event for this step.
     let revertibleStatusEvent = $derived(
-        revertibleEvents
-            .filter(
-                (e) =>
-                    e.event_type === "step_completed" ||
-                    e.event_type === "step_skipped" ||
-                    e.event_type === "step_started",
-            )
-            .at(-1),
+        revertibleEvents.filter((e) => e.event_type === "step_skipped").at(-1),
     );
 
     // Build a map of element_id -> most recent revertible input/attachment event.
@@ -114,17 +105,6 @@
     let revertibleNoteEvents = $derived(
         revertibleEvents.filter((e) => e.event_type === "note_added"),
     );
-
-    function startStep() {
-        onaction({ action: "start_step", step_id: stepSummary.id });
-    }
-
-    function completeStep() {
-        onaction({
-            action: "complete_step",
-            step_id: stepSummary.id,
-        });
-    }
 
     function confirmSkip() {
         if (!skipReason.trim()) return;
@@ -178,10 +158,7 @@
 
 <div
     class="step-card"
-    class:active={isActive}
-    class:completed={isCompleted}
     class:skipped={isSkipped}
-    class:pending={isPending}
 >
     <div class="step-header">
         <div class="step-status-indicator"></div>
@@ -189,7 +166,9 @@
         {#if stepSummary.status_at}
             <span class="timestamp">{formatTimestamp(stepSummary.status_at)}</span>
         {/if}
-        <span class="step-status-badge">{stepSummary.status}</span>
+        {#if isSkipped}
+            <span class="step-status-badge">skipped</span>
+        {/if}
     </div>
 
     {#each stepSummary.content as block}
@@ -258,24 +237,13 @@
 
     {#if executionActive}
         <div class="step-actions">
-            {#if isPending}
-                <button class="btn btn-primary" onclick={startStep}
-                    >Start Step</button
-                >
-                <button
-                    class="btn btn-muted"
-                    onclick={() => (showSkipDialog = true)}>Skip</button
-                >
-            {:else if isActive}
-                <button class="btn btn-primary" onclick={completeStep}
-                    >Complete Step</button
-                >
+            {#if isPresent}
                 <button
                     class="btn btn-muted"
                     onclick={() => (showSkipDialog = true)}>Skip</button
                 >
             {/if}
-            {#if revertibleStatusEvent && (isCompleted || isSkipped || isActive)}
+            {#if revertibleStatusEvent && isSkipped}
                 <button
                     class="btn btn-undo"
                     onclick={() =>
@@ -285,7 +253,7 @@
                             reason: "Reverted by operator",
                         })}
                 >
-                    Undo {isCompleted ? "Complete" : isSkipped ? "Skip" : "Start"}
+                    Undo Skip
                 </button>
             {/if}
         </div>
@@ -333,28 +301,10 @@
         transition: border-color 0.15s;
     }
 
-    .step-card.active {
-        border-color: #1a1a2e;
-        box-shadow: 0 0 0 1px #1a1a2e;
-    }
-
-    .step-card.completed {
-        border-color: #c8e6c9;
-        background: #fafff9;
-    }
-
     .step-card.skipped {
         border-color: #ffe0b2;
         background: #fffdf5;
         opacity: 0.8;
-    }
-
-    .step-card.pending .step-header {
-        opacity: 0.5;
-    }
-
-    .step-card.pending .step-description {
-        opacity: 0.5;
     }
 
     .step-header {
@@ -370,15 +320,6 @@
         border-radius: 50%;
         background: #ccc;
         flex-shrink: 0;
-    }
-
-    .active .step-status-indicator {
-        background: #1a1a2e;
-        box-shadow: 0 0 0 3px rgba(26, 26, 46, 0.2);
-    }
-
-    .completed .step-status-indicator {
-        background: #2e7d32;
     }
 
     .skipped .step-status-indicator {
@@ -449,14 +390,6 @@
         color: #888;
     }
 
-    .active .step-status-badge {
-        color: #1a1a2e;
-    }
-
-    .completed .step-status-badge {
-        color: #2e7d32;
-    }
-
     .skipped .step-status-badge {
         color: #e65100;
     }
@@ -484,15 +417,6 @@
         font-weight: 600;
         cursor: pointer;
         border: 1px solid transparent;
-    }
-
-    .btn-primary {
-        background: #1a1a2e;
-        color: #fff;
-    }
-
-    .btn-primary:hover {
-        background: #16213e;
     }
 
     .btn-muted {

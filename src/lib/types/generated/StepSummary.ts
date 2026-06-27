@@ -7,7 +7,7 @@ export type StepSummary = {
   heading: string;
   status: string;
   /**
-   * ISO 8601 timestamp of the most recent status change (started/completed/skipped).
+   * ISO 8601 timestamp of when the step was skipped, if applicable.
    */
   status_at?: string;
   /**

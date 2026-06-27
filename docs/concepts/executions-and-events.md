@@ -20,7 +20,7 @@ The event log is a JSONL file where each line is a JSON object representing one 
 
 Each event carries:
 
-- A `type` discriminator (e.g., `StepStarted`, `CheckboxToggled`)
+- A `type` discriminator (e.g., `StepSkipped`, `CheckboxToggled`)
 - An `at` timestamp (ISO 8601)
 - An `execution_id`
 - Event-specific payload fields
@@ -37,12 +37,10 @@ Each event carries:
 
 ### Step Events
 
-| Event           | Description                                         |
-| --------------- | --------------------------------------------------- |
-| `StepAdded`     | A new step was added (from template or dynamically) |
-| `StepStarted`   | Operator began working on a step                    |
-| `StepCompleted` | Step finished successfully                          |
-| `StepSkipped`   | Step skipped with a reason                          |
+| Event         | Description                                             |
+| ------------- | ------------------------------------------------------- |
+| `StepAdded`   | A new step was added (from template or dynamically)     |
+| `StepSkipped` | Step intentionally skipped with a reason, if applicable |
 
 ### Data Capture Events
 
@@ -63,7 +61,7 @@ Each event carries:
 
 ## State Machine
 
-The current execution state is the combination of one **execution lifecycle** and one **step lifecycle per step**. Events are applied by replaying the log in order; `LogMeta` and `EventReverted` are replay metadata rather than direct state transitions.
+The current execution state is the combination of one **execution lifecycle** and step presence/skip state for each UI step. Events are applied by replaying the log in order; `LogMeta` and `EventReverted` are replay metadata rather than direct state transitions.
 
 ### Execution Lifecycle
 
@@ -84,8 +82,7 @@ stateDiagram-v2
     FinishedFail: Finished(Fail)
     FinishedAborted: Finished(Aborted)
 
-    Active --> Active: StepAdded
-    Active --> Active: StepStarted / StepCompleted / StepSkipped
+    Active --> Active: StepAdded / StepSkipped
     Active --> Active: CheckboxToggled / InputRecorded / AttachmentAdded
     Active --> Active: NoteAdded
     Active --> Active: ExecutionRenamed
@@ -103,42 +100,33 @@ Lifecycle rules:
 | `ExecutionCompleted` | execution is `Active`  | execution becomes `Finished(status)`                       |
 | `ExecutionAborted`   | execution is `Active`  | execution becomes `Finished(Aborted)`                      |
 | `ExecutionRenamed`   | execution has started  | name is updated; allowed after finish                      |
-| step and data events | execution is `Active`  | step collection, step status, or captured data is updated  |
+| step and data events | execution is `Active`  | step collection, skip status, or captured data is updated  |
 
-### Step Lifecycle
+### Step State
 
-Every step has an independent status. The diagram below describes the lifecycle of a single step while its parent execution is active.
+Steps are primarily UI/grouping units for procedure content and captured data. Procnote does not model “starting” or “completing” each step; the current/selected step is UI state, not event-sourced domain state.
 
 ```mermaid
 stateDiagram-v2
     direction LR
 
     [*] --> NotPresent
-    NotPresent --> Pending: StepAdded
+    NotPresent --> Present: StepAdded
 
-    Pending --> Active: StepStarted
-    Active --> Completed: StepCompleted
-
-    Pending --> Skipped: StepSkipped
-    Active --> Skipped: StepSkipped
-
-    Pending --> Pending: data events
-    Active --> Active: data events
-    Completed --> Completed: data events
+    Present --> Present: data events
+    Present --> Skipped: StepSkipped
     Skipped --> Skipped: data events
 ```
 
-Here, **data events** means `CheckboxToggled`, `InputRecorded`, `AttachmentAdded`, and step-scoped `NoteAdded`. The current implementation requires the execution to be active and the step to exist, but it does not require the step itself to be active.
+Here, **data events** means `CheckboxToggled`, `InputRecorded`, `AttachmentAdded`, and step-scoped `NoteAdded`. The implementation requires the execution to be active and the step to exist.
 
-Step lifecycle rules:
+Step state rules:
 
-| Event           | Valid when                                           | Effect                                                          |
-| --------------- | ---------------------------------------------------- | --------------------------------------------------------------- |
-| `StepAdded`     | execution is `Active`, `step_id` is unique           | creates a `Pending` step and inserts it into step order         |
-| `StepStarted`   | execution is `Active`, step is `Pending`             | step becomes `Active`                                           |
-| `StepCompleted` | execution is `Active`, step is `Active`              | step becomes `Completed`                                        |
-| `StepSkipped`   | execution is `Active`, step is `Pending` or `Active` | step becomes `Skipped`                                          |
-| data events     | execution is `Active`, step exists                   | captured data or notes are updated without changing step status |
+| Event         | Valid when                                 | Effect                                                          |
+| ------------- | ------------------------------------------ | --------------------------------------------------------------- |
+| `StepAdded`   | execution is `Active`, `step_id` is unique | creates a `Present` step and inserts it into step order         |
+| `StepSkipped` | execution is `Active`, step is `Present`   | step becomes `Skipped`                                          |
+| data events   | execution is `Active`, step exists         | captured data or notes are updated without changing step status |
 
 !!! info "Revert validation"
 
@@ -157,11 +145,11 @@ This means the app can crash at any point and recover perfectly by re-reading th
 
 Events are classified into three categories by revertibility:
 
-| Category           | Events                                                                              | Can revert? |
-| ------------------ | ----------------------------------------------------------------------------------- | ----------- |
-| **Revertible**     | Checkboxes, inputs, notes, step completion/skip, execution completion/abort, rename | Yes         |
-| **Not revertible** | ExecutionStarted, StepAdded, LogMeta                                                | No          |
-| **Revert marker**  | EventReverted (cannot itself be reverted)                                           | No          |
+| Category           | Events                                                                   | Can revert? |
+| ------------------ | ------------------------------------------------------------------------ | ----------- |
+| **Revertible**     | Checkboxes, inputs, notes, step skip, execution completion/abort, rename | Yes         |
+| **Not revertible** | ExecutionStarted, StepAdded, LogMeta                                     | No          |
+| **Revert marker**  | EventReverted (cannot itself be reverted)                                | No          |
 
 When an event is reverted:
 

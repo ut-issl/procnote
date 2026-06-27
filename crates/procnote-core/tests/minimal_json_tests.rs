@@ -51,20 +51,6 @@ fn minimal_step_added_no_optional_fields() {
 }
 
 #[test]
-fn minimal_step_started() {
-    round_trip(
-        r#"{"type":"step_started","at":"2025-01-01T00:00:00Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","step_id":"s1"}"#,
-    );
-}
-
-#[test]
-fn minimal_step_completed() {
-    round_trip(
-        r#"{"type":"step_completed","at":"2025-01-01T00:00:00Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","step_id":"s1"}"#,
-    );
-}
-
-#[test]
 fn minimal_step_skipped() {
     round_trip(
         r#"{"type":"step_skipped","at":"2025-01-01T00:00:00Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","step_id":"s1","reason":"N/A"}"#,
@@ -127,7 +113,7 @@ fn extra_fields_on_known_event_are_ignored() {
     // Verify that extra/unknown fields on a known event type don't cause errors.
     // This is important for forward compatibility: new fields added to existing
     // events must not break old code.
-    let json = r#"{"type":"step_started","at":"2025-01-01T00:00:00Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","step_id":"s1","new_future_field":"hello","another_one":42}"#;
+    let json = r#"{"type":"step_skipped","at":"2025-01-01T00:00:00Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","step_id":"s1","reason":"N/A","new_future_field":"hello","another_one":42}"#;
     let event: Event = serde_json::from_str(json).unwrap();
-    assert!(matches!(event, Event::StepStarted { .. }));
+    assert!(matches!(event, Event::StepSkipped { .. }));
 }

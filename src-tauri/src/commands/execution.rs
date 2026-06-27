@@ -62,7 +62,7 @@ pub struct StepSummary {
     pub id: String,
     pub heading: String,
     pub status: String,
-    /// ISO 8601 timestamp of the most recent status change (started/completed/skipped).
+    /// ISO 8601 timestamp of when the step was skipped, if applicable.
     #[ts(optional)]
     pub status_at: Option<String>,
     /// Ordered content items preserving template source order.
@@ -140,9 +140,7 @@ fn status_string(status: &procnote_core::execution::ExecutionStatus) -> String {
 
 fn step_status_string(status: &StepStatus) -> String {
     match status {
-        StepStatus::Pending => "pending".to_string(),
-        StepStatus::Active => "active".to_string(),
-        StepStatus::Completed => "completed".to_string(),
+        StepStatus::Present => "present".to_string(),
         StepStatus::Skipped => "skipped".to_string(),
     }
 }
@@ -160,7 +158,7 @@ fn summarize(state: &ExecutionState, events: &[Event], execution_dir: &Path) -> 
     // Store as RFC3339 strings to avoid depending on chrono in this crate.
     let mut started_at: Option<String> = None;
     let mut finished_at: Option<String> = None;
-    // step_id -> most recent status-change timestamp
+    // step_id -> most recent skip timestamp
     let mut step_status_at: HashMap<&str, String> = HashMap::new();
     // checkbox_id -> most recent toggle timestamp
     let mut checkbox_at: HashMap<&str, String> = HashMap::new();
@@ -184,9 +182,7 @@ fn summarize(state: &ExecutionState, events: &[Event], execution_dir: &Path) -> 
             Event::ExecutionCompleted { at, .. } | Event::ExecutionAborted { at, .. } => {
                 finished_at = Some(at.to_rfc3339());
             }
-            Event::StepStarted { at, step_id, .. }
-            | Event::StepCompleted { at, step_id, .. }
-            | Event::StepSkipped { at, step_id, .. } => {
+            Event::StepSkipped { at, step_id, .. } => {
                 step_status_at.insert(step_id, at.to_rfc3339());
             }
             Event::CheckboxToggled {
@@ -328,9 +324,7 @@ fn build_event_history(
 /// Extract optional `step_id` and `element_id` from an event.
 fn event_step_and_label(event: &Event) -> (Option<String>, Option<String>) {
     match event {
-        Event::StepStarted { step_id, .. }
-        | Event::StepCompleted { step_id, .. }
-        | Event::StepSkipped { step_id, .. } => (Some(step_id.clone()), None),
+        Event::StepSkipped { step_id, .. } => (Some(step_id.clone()), None),
         Event::CheckboxToggled {
             step_id,
             checkbox_id,
@@ -353,8 +347,6 @@ fn event_type_string(event: &Event) -> String {
         Event::ExecutionCompleted { .. } => "execution_completed",
         Event::ExecutionAborted { .. } => "execution_aborted",
         Event::StepAdded { .. } => "step_added",
-        Event::StepStarted { .. } => "step_started",
-        Event::StepCompleted { .. } => "step_completed",
         Event::StepSkipped { .. } => "step_skipped",
         Event::CheckboxToggled { .. } => "checkbox_toggled",
         Event::InputRecorded { .. } => "input_recorded",
@@ -373,8 +365,6 @@ fn event_at(event: &Event) -> String {
         | Event::ExecutionCompleted { at, .. }
         | Event::ExecutionAborted { at, .. }
         | Event::StepAdded { at, .. }
-        | Event::StepStarted { at, .. }
-        | Event::StepCompleted { at, .. }
         | Event::StepSkipped { at, .. }
         | Event::CheckboxToggled { at, .. }
         | Event::InputRecorded { at, .. }
@@ -514,12 +504,6 @@ pub fn start_execution(template_path: String) -> Result<ExecutionSummary, String
 #[ts(export)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum ExecutionAction {
-    StartStep {
-        step_id: String,
-    },
-    CompleteStep {
-        step_id: String,
-    },
     SkipStep {
         step_id: String,
         reason: String,
@@ -607,12 +591,6 @@ pub fn record_action(
     }
 
     let event: Event = match action {
-        ExecutionAction::StartStep { step_id } => {
-            exec_state.start_step(&step_id).map_err(|e| e.to_string())?
-        }
-        ExecutionAction::CompleteStep { step_id } => exec_state
-            .complete_step(&step_id)
-            .map_err(|e| e.to_string())?,
         ExecutionAction::SkipStep { step_id, reason } => exec_state
             .skip_step(&step_id, &reason)
             .map_err(|e| e.to_string())?,

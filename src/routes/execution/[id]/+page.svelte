@@ -29,8 +29,8 @@
     let isActive = $derived(summary?.status === "active");
     let isFinished = $derived(executionStore.isFinished);
 
-    let completedSteps = $derived(
-        summary?.steps.filter((s) => s.status === "completed").length ?? 0,
+    let skippedSteps = $derived(
+        summary?.steps.filter((s) => s.status === "skipped").length ?? 0,
     );
     let totalSteps = $derived(summary?.steps.length ?? 0);
 
@@ -197,8 +197,7 @@
                 >
                     {summary.status}
                 </span>
-                <span class="progress">{completedSteps}/{totalSteps} steps</span
-                >
+                <span class="progress">{totalSteps} steps</span>
             </div>
         </div>
 
@@ -246,7 +245,7 @@
                     {#if finishEvent}
                         at {formatTimestamp(finishEvent.at)}
                     {/if}
-                    &mdash; {completedSteps}/{totalSteps} steps completed
+                    &mdash; {totalSteps} steps, {skippedSteps} skipped
                 </span>
                 {#if revertibleFinishEvent}
                     <button
