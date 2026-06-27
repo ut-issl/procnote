@@ -2,12 +2,8 @@
 {"type":"execution_started","at":"2025-06-01T10:00:01Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","procedure_id":"TVT-001","procedure_title":"Thermal Vacuum Test","procedure_version":"1.0"}
 {"type":"step_added","at":"2025-06-01T10:00:01Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","step_id":"step-0","heading":"Power on DUT","content":[{"type":"Checkbox","id":"step-0/cb-0","text":"LED is green","checked":false}]}
 {"type":"step_added","at":"2025-06-01T10:00:01Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","step_id":"step-1","heading":"Record reading","content":[{"type":"InputBlock","inputs":[{"id":"step-1/temp","label":"Temperature","type":"measurement","unit":"°C","options":[]}]}]}
-{"type":"step_started","at":"2025-06-01T10:01:00Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","step_id":"step-0"}
 {"type":"checkbox_toggled","at":"2025-06-01T10:02:00Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","step_id":"step-0","checkbox_id":"step-0/cb-0","checked":true}
-{"type":"step_completed","at":"2025-06-01T10:03:00Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","step_id":"step-0"}
-{"type":"step_started","at":"2025-06-01T10:04:00Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","step_id":"step-1"}
 {"type":"input_recorded","at":"2025-06-01T10:05:00Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","step_id":"step-1","input_id":"step-1/temp","value":"999","unit":"°C"}
-{"type":"event_reverted","at":"2025-06-01T10:06:00Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","reverted_event_index":8,"reason":"wrong reading"}
+{"type":"event_reverted","at":"2025-06-01T10:06:00Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","reverted_event_index":5,"reason":"wrong reading"}
 {"type":"input_recorded","at":"2025-06-01T10:07:00Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","step_id":"step-1","input_id":"step-1/temp","value":"-39.5","unit":"°C"}
-{"type":"step_completed","at":"2025-06-01T10:08:00Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","step_id":"step-1"}
 {"type":"execution_completed","at":"2025-06-01T10:09:00Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","status":"pass"}

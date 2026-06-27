@@ -60,16 +60,6 @@ pub enum Event {
         #[serde(skip_serializing_if = "Option::is_none")]
         after_step_id: Option<String>,
     },
-    StepStarted {
-        at: DateTime<Utc>,
-        execution_id: ExecutionId,
-        step_id: String,
-    },
-    StepCompleted {
-        at: DateTime<Utc>,
-        execution_id: ExecutionId,
-        step_id: String,
-    },
     StepSkipped {
         at: DateTime<Utc>,
         execution_id: ExecutionId,
@@ -188,8 +178,6 @@ impl Event {
             // Everything else (except revert markers) — revertible
             Self::ExecutionCompleted { .. }
             | Self::ExecutionAborted { .. }
-            | Self::StepStarted { .. }
-            | Self::StepCompleted { .. }
             | Self::StepSkipped { .. }
             | Self::CheckboxToggled { .. }
             | Self::InputRecorded { .. }
@@ -219,12 +207,6 @@ impl Event {
                 format!("Aborted execution: {reason}")
             }
             Self::StepAdded { heading, .. } => format!("Added step: {heading}"),
-            Self::StepStarted { step_id, .. } => {
-                format!("Started step: {step_id}")
-            }
-            Self::StepCompleted { step_id, .. } => {
-                format!("Completed step: {step_id}")
-            }
             Self::StepSkipped {
                 step_id, reason, ..
             } => {

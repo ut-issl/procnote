@@ -6,8 +6,6 @@ import type { StepContent } from "./StepContent";
  * Action payload from the frontend for recording events.
  */
 export type ExecutionAction =
-  | { action: "start_step"; step_id: string }
-  | { action: "complete_step"; step_id: string }
   | { action: "skip_step"; step_id: string; reason: string }
   | { action: "toggle_checkbox"; step_id: string; checkbox_id: string; checked: boolean }
   | { action: "record_input"; step_id: string; input_id: string; value: string; unit?: string }

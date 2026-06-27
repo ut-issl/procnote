@@ -141,22 +141,12 @@ mod tests {
                 procedure_title: "Thermal Vacuum Test".to_string(),
                 procedure_version: "1.0".to_string(),
             },
-            Event::StepStarted {
-                at: now,
-                execution_id: id,
-                step_id: "step-0".to_string(),
-            },
             Event::CheckboxToggled {
                 at: now,
                 execution_id: id,
                 step_id: "step-0".to_string(),
                 checkbox_id: "step-0/cb-0".to_string(),
                 checked: true,
-            },
-            Event::StepCompleted {
-                at: now,
-                execution_id: id,
-                step_id: "step-0".to_string(),
             },
             Event::ExecutionCompleted {
                 at: now,
@@ -381,16 +371,6 @@ mod tests {
                     text: "Added during execution".to_string(),
                 }],
                 after_step_id: Some("step-0".to_string()),
-            },
-            Event::StepStarted {
-                at: now,
-                execution_id: id,
-                step_id: "step-0".to_string(),
-            },
-            Event::StepCompleted {
-                at: now,
-                execution_id: id,
-                step_id: "step-0".to_string(),
             },
             Event::StepSkipped {
                 at: now,

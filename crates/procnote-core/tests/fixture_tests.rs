@@ -27,9 +27,9 @@ fn v1_basic_execution_parses_to_finished_pass() {
         ExecutionStatus::Finished(procnote_core::event::types::CompletionStatus::Pass)
     ));
     assert_eq!(state.step_order.len(), 3);
-    assert_eq!(state.steps["step-0"].status, StepStatus::Completed);
-    assert_eq!(state.steps["step-1"].status, StepStatus::Completed);
-    assert_eq!(state.steps["step-2"].status, StepStatus::Completed);
+    assert_eq!(state.steps["step-0"].status, StepStatus::Present);
+    assert_eq!(state.steps["step-1"].status, StepStatus::Present);
+    assert_eq!(state.steps["step-2"].status, StepStatus::Present);
     // Verify input was recorded
     assert_eq!(state.steps["step-1"].inputs["step-1/temp"].value, "-39.5");
 }
@@ -58,8 +58,8 @@ fn v1_all_event_types_parses_successfully() {
     ));
     assert_eq!(state.name.as_deref(), Some("Morning run"));
     assert_eq!(state.step_order.len(), 2);
-    // step-1 was skipped then reverted, so it ended up completed
-    assert_eq!(state.steps["step-1"].status, StepStatus::Completed);
+    // step-1 was skipped then reverted, so it ended up present
+    assert_eq!(state.steps["step-1"].status, StepStatus::Present);
     // Global note was recorded
     assert_eq!(state.global_notes.len(), 1);
     assert_eq!(state.global_notes[0], "Global observation");
