@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -44,6 +42,11 @@ pub enum Event {
         execution_id: ExecutionId,
         reason: String,
     },
+    ExecutionReopened {
+        at: DateTime<Utc>,
+        execution_id: ExecutionId,
+        reason: String,
+    },
 
     // -- Step --
     StepAdded {
@@ -61,6 +64,12 @@ pub enum Event {
         after_step_id: Option<String>,
     },
     StepSkipped {
+        at: DateTime<Utc>,
+        execution_id: ExecutionId,
+        step_id: String,
+        reason: String,
+    },
+    StepUnskipped {
         at: DateTime<Utc>,
         execution_id: ExecutionId,
         step_id: String,
@@ -84,12 +93,26 @@ pub enum Event {
         #[serde(skip_serializing_if = "Option::is_none")]
         unit: Option<String>,
     },
+    InputCleared {
+        at: DateTime<Utc>,
+        execution_id: ExecutionId,
+        step_id: String,
+        input_id: String,
+        reason: String,
+    },
     NoteAdded {
         at: DateTime<Utc>,
         execution_id: ExecutionId,
+        note_id: String,
         text: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         step_id: Option<String>,
+    },
+    NoteRemoved {
+        at: DateTime<Utc>,
+        execution_id: ExecutionId,
+        note_id: String,
+        reason: String,
     },
 
     // -- Attachment --
@@ -103,6 +126,13 @@ pub enum Event {
         content_type: String,
         sha256: String,
     },
+    AttachmentRemoved {
+        at: DateTime<Utc>,
+        execution_id: ExecutionId,
+        step_id: String,
+        input_id: String,
+        reason: String,
+    },
 
     // -- Name --
     ExecutionRenamed {
@@ -111,85 +141,19 @@ pub enum Event {
         name: String,
     },
 
-    // -- Revert --
-    /// Marks a previously recorded event as reverted.
-    /// State is rebuilt by replaying all events, skipping reverted ones.
-    EventReverted {
-        at: DateTime<Utc>,
-        execution_id: ExecutionId,
-        /// Zero-based index of the event in the log to revert.
-        reverted_event_index: usize,
-        /// Human-readable reason for the revert (audit trail).
-        reason: String,
-    },
-
     // -- Log metadata --
     /// First-line metadata about the event log format.
     /// Enables future migration code to detect schema version before replay.
     LogMeta {
         at: DateTime<Utc>,
-        /// Schema version of the event log (currently 1).
+        /// Schema version of the event log (currently 2).
         version: u32,
         /// Version of the procnote tool that created this log.
         tool_version: String,
     },
 }
 
-/// Collect the indices of events that have been marked as reverted
-/// by an `EventReverted` marker somewhere in the log.
-#[must_use]
-pub fn reverted_event_indices(events: &[Event]) -> HashSet<usize> {
-    events
-        .iter()
-        .filter_map(|event| match event {
-            Event::EventReverted {
-                reverted_event_index,
-                ..
-            } => Some(*reverted_event_index),
-            _ => None,
-        })
-        .collect()
-}
-
-/// Whether an event can be reverted.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Revertibility {
-    /// This event can be reverted by the user.
-    Revertible,
-    /// This event cannot be reverted (structural/lifecycle).
-    NotRevertible,
-    /// This event is itself a revert marker and cannot be reverted.
-    RevertMarker,
-}
-
 impl Event {
-    /// Classify whether this event can be reverted.
-    ///
-    /// This match is exhaustive — adding a new `Event` variant without
-    /// updating this method will cause a compile error.
-    #[must_use]
-    pub const fn revertibility(&self) -> Revertibility {
-        match self {
-            // Lifecycle/structural/metadata — not revertible
-            Self::ExecutionStarted { .. } | Self::StepAdded { .. } | Self::LogMeta { .. } => {
-                Revertibility::NotRevertible
-            }
-
-            // Everything else (except revert markers) — revertible
-            Self::ExecutionCompleted { .. }
-            | Self::ExecutionAborted { .. }
-            | Self::StepSkipped { .. }
-            | Self::CheckboxToggled { .. }
-            | Self::InputRecorded { .. }
-            | Self::NoteAdded { .. }
-            | Self::AttachmentAdded { .. }
-            | Self::ExecutionRenamed { .. } => Revertibility::Revertible,
-
-            // Revert marker — not revertible
-            Self::EventReverted { .. } => Revertibility::RevertMarker,
-        }
-    }
-
     /// Human-readable description of this event for UI display.
     ///
     /// This match is exhaustive — adding a new `Event` variant without
@@ -206,11 +170,19 @@ impl Event {
             Self::ExecutionAborted { reason, .. } => {
                 format!("Aborted execution: {reason}")
             }
+            Self::ExecutionReopened { reason, .. } => {
+                format!("Reopened execution: {reason}")
+            }
             Self::StepAdded { heading, .. } => format!("Added step: {heading}"),
             Self::StepSkipped {
                 step_id, reason, ..
             } => {
                 format!("Skipped step: {step_id} ({reason})")
+            }
+            Self::StepUnskipped {
+                step_id, reason, ..
+            } => {
+                format!("Unskipped step: {step_id} ({reason})")
             }
             Self::CheckboxToggled {
                 checkbox_id,
@@ -225,6 +197,11 @@ impl Event {
             } => {
                 format!("Recorded {input_id} = {value}")
             }
+            Self::InputCleared {
+                input_id, reason, ..
+            } => {
+                format!("Cleared input {input_id}: {reason}")
+            }
             Self::NoteAdded { text, step_id, .. } => {
                 let scope = step_id
                     .as_ref()
@@ -238,20 +215,23 @@ impl Event {
                 };
                 format!("Added note{scope}: {truncated}")
             }
+            Self::NoteRemoved {
+                note_id, reason, ..
+            } => {
+                format!("Removed note {note_id}: {reason}")
+            }
             Self::AttachmentAdded {
                 input_id, filename, ..
             } => {
                 format!("Recorded {input_id} = {filename}")
             }
+            Self::AttachmentRemoved {
+                input_id, reason, ..
+            } => {
+                format!("Removed attachment {input_id}: {reason}")
+            }
             Self::ExecutionRenamed { name, .. } => {
                 format!("Renamed execution to: {name}")
-            }
-            Self::EventReverted {
-                reverted_event_index,
-                reason,
-                ..
-            } => {
-                format!("Reverted event #{reverted_event_index}: {reason}")
             }
             Self::LogMeta {
                 version,

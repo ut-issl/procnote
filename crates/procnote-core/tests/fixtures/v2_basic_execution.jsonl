@@ -1,4 +1,4 @@
-{"type":"log_meta","at":"2025-06-01T10:00:00Z","version":1,"tool_version":"0.1.0"}
+{"type":"log_meta","at":"2025-06-01T10:00:00Z","version":2,"tool_version":"0.1.0"}
 {"type":"execution_started","at":"2025-06-01T10:00:01Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","procedure_id":"TVT-001","procedure_title":"Thermal Vacuum Test","procedure_version":"1.0"}
 {"type":"step_added","at":"2025-06-01T10:00:01Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","step_id":"step-0","heading":"Power on DUT","content":[{"type":"Prose","text":"Connect power supply and verify LED."},{"type":"Checkbox","id":"step-0/cb-0","text":"LED is green","checked":false}]}
 {"type":"step_added","at":"2025-06-01T10:00:01Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","step_id":"step-1","heading":"Run thermal cycle","content":[{"type":"Prose","text":"Set chamber to -40C, wait 30 min."},{"type":"InputBlock","inputs":[{"id":"step-1/temp","label":"Chamber temp","type":"measurement","unit":"°C","options":[],"expected":null}]}]}

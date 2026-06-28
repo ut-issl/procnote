@@ -116,40 +116,17 @@ impl ExecutionStore {
                     .map_err(|e| e.to_string())?;
                 let mut state = ExecutionState::from_events(&events).map_err(|e| e.to_string())?;
 
-                match action {
-                    ExecutionAction::RevertEvent {
-                        event_index,
-                        reason,
-                    } => {
-                        let revert_marker =
-                            ExecutionState::revert_event(&events, event_index, &reason)
-                                .map_err(|e| e.to_string())?;
-                        EventLog::new(log_path.clone())
-                            .append_durable(&revert_marker)
-                            .map_err(|e| e.to_string())?;
-                        events.push(revert_marker);
-                        let state =
-                            ExecutionState::from_events(&events).map_err(|e| e.to_string())?;
-                        Ok(RecordedExecution {
-                            state,
-                            events,
-                            execution_dir,
-                        })
-                    }
-                    action => {
-                        let event = build_event_for_action(&state, &execution_dir, action)?;
-                        EventLog::new(log_path.clone())
-                            .append_durable(&event)
-                            .map_err(|e| e.to_string())?;
-                        state.apply(&event).map_err(|e| e.to_string())?;
-                        events.push(event);
-                        Ok(RecordedExecution {
-                            state,
-                            events,
-                            execution_dir,
-                        })
-                    }
-                }
+                let event = build_event_for_action(&state, &execution_dir, action)?;
+                EventLog::new(log_path.clone())
+                    .append_durable(&event)
+                    .map_err(|e| e.to_string())?;
+                state.apply(&event).map_err(|e| e.to_string())?;
+                events.push(event);
+                Ok(RecordedExecution {
+                    state,
+                    events,
+                    execution_dir,
+                })
             })
             .map_err(|e| e.to_string())?
     }
@@ -163,6 +140,9 @@ fn build_event_for_action(
     match action {
         ExecutionAction::SkipStep { step_id, reason } => state
             .skip_step_event(&step_id, &reason)
+            .map_err(|e| e.to_string()),
+        ExecutionAction::UnskipStep { step_id, reason } => state
+            .unskip_step_event(&step_id, &reason)
             .map_err(|e| e.to_string()),
         ExecutionAction::ToggleCheckbox {
             step_id,
@@ -179,8 +159,18 @@ fn build_event_for_action(
         } => state
             .record_input_event(&step_id, &input_id, &value, unit.as_deref())
             .map_err(|e| e.to_string()),
+        ExecutionAction::ClearInput {
+            step_id,
+            input_id,
+            reason,
+        } => state
+            .clear_input_event(&step_id, &input_id, &reason)
+            .map_err(|e| e.to_string()),
         ExecutionAction::AddNote { text, step_id } => state
             .add_note_event(&text, step_id.as_deref())
+            .map_err(|e| e.to_string()),
+        ExecutionAction::RemoveNote { note_id, reason } => state
+            .remove_note_event(&note_id, &reason)
             .map_err(|e| e.to_string()),
         ExecutionAction::AddStep {
             step_id,
@@ -211,6 +201,13 @@ fn build_event_for_action(
                 )
                 .map_err(|e| e.to_string())
         }
+        ExecutionAction::RemoveAttachment {
+            step_id,
+            input_id,
+            reason,
+        } => state
+            .remove_attachment_event(&step_id, &input_id, &reason)
+            .map_err(|e| e.to_string()),
         ExecutionAction::Complete { status } => {
             state.complete_event(status).map_err(|e| e.to_string())
         }
@@ -218,8 +215,8 @@ fn build_event_for_action(
         ExecutionAction::RenameExecution { name } => {
             state.rename_event(&name).map_err(|e| e.to_string())
         }
-        ExecutionAction::RevertEvent { .. } => {
-            unreachable!("handled before build_event_for_action")
+        ExecutionAction::ReopenExecution { reason } => {
+            state.reopen_event(&reason).map_err(|e| e.to_string())
         }
     }
 }

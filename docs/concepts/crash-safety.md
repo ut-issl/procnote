@@ -26,13 +26,13 @@ When an execution starts, the procedure template is copied into the execution di
 
 Every operator action -- toggling a checkbox, entering a measurement, completing a step -- is recorded as an event with a timestamp. The event log is a complete, ordered record of everything that happened during the execution.
 
-### Revert Audit Trail
+### Reversal Audit Trail
 
-When an action is reverted, the original event is not deleted. Instead, an `EventReverted` marker is appended with the target event index and a reason. This means you can always answer:
+When an action is reversed, the original event is not deleted. Instead, a typed reversing event is appended with a reason, such as `InputCleared`, `StepUnskipped`, or `ExecutionReopened`. This means you can always answer:
 
-- What was the original value?
-- When was it changed?
-- Why was it reverted?
+- What was the original action?
+- What action changed it later?
+- Why was it changed?
 
 ### File Integrity
 

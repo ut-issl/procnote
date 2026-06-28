@@ -4,7 +4,7 @@ use std::path::Path;
 use super::types::Event;
 
 /// The current supported schema version for event logs.
-pub const SUPPORTED_VERSION: u32 = 1;
+pub const SUPPORTED_VERSION: u32 = 2;
 
 /// Errors that can occur during event log operations.
 #[derive(Debug, thiserror::Error)]
@@ -16,7 +16,7 @@ pub enum EventLogError {
     #[error("event log is missing the required LogMeta first line")]
     MissingLogMeta,
     #[error(
-        "unsupported event log version {found} (this version of procnote supports up to version {supported})"
+        "unsupported event log version {found} (this version of procnote supports version {supported})"
     )]
     UnsupportedVersion { found: u32, supported: u32 },
     #[error(
@@ -68,7 +68,7 @@ pub fn read_log(path: &Path) -> Result<Vec<Event>, EventLogError> {
 
     match &first_event {
         Event::LogMeta { version, .. } => {
-            if *version > SUPPORTED_VERSION {
+            if *version != SUPPORTED_VERSION {
                 return Err(EventLogError::UnsupportedVersion {
                     found: *version,
                     supported: SUPPORTED_VERSION,
@@ -125,7 +125,7 @@ mod tests {
     fn log_meta() -> Event {
         Event::LogMeta {
             at: Utc::now(),
-            version: 1,
+            version: SUPPORTED_VERSION,
             tool_version: "0.1.0".to_string(),
         }
     }
@@ -340,6 +340,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "round-trip fixture intentionally enumerates all event variants"
+    )]
     fn test_all_event_types_serialize() {
         let id = sample_execution_id();
         let now = Utc::now();
@@ -362,6 +366,11 @@ mod tests {
                 execution_id: id,
                 reason: "Power failure".to_string(),
             },
+            Event::ExecutionReopened {
+                at: now,
+                execution_id: id,
+                reason: "Need more work".to_string(),
+            },
             Event::StepAdded {
                 at: now,
                 execution_id: id,
@@ -378,6 +387,12 @@ mod tests {
                 step_id: "step-1".to_string(),
                 reason: "Not applicable".to_string(),
             },
+            Event::StepUnskipped {
+                at: now,
+                execution_id: id,
+                step_id: "step-1".to_string(),
+                reason: "Actually needed".to_string(),
+            },
             Event::CheckboxToggled {
                 at: now,
                 execution_id: id,
@@ -393,11 +408,25 @@ mod tests {
                 value: "120".to_string(),
                 unit: Some("mA".to_string()),
             },
+            Event::InputCleared {
+                at: now,
+                execution_id: id,
+                step_id: "step-0".to_string(),
+                input_id: "current-draw".to_string(),
+                reason: "Wrong value".to_string(),
+            },
             Event::NoteAdded {
                 at: now,
                 execution_id: id,
+                note_id: "note-1".to_string(),
                 text: "Observation noted".to_string(),
                 step_id: Some("step-0".to_string()),
+            },
+            Event::NoteRemoved {
+                at: now,
+                execution_id: id,
+                note_id: "note-1".to_string(),
+                reason: "Typo".to_string(),
             },
             Event::AttachmentAdded {
                 at: now,
@@ -409,20 +438,21 @@ mod tests {
                 content_type: "image/jpeg".to_string(),
                 sha256: "abc123".to_string(),
             },
+            Event::AttachmentRemoved {
+                at: now,
+                execution_id: id,
+                step_id: "step-0".to_string(),
+                input_id: "log-file".to_string(),
+                reason: "Wrong file".to_string(),
+            },
             Event::ExecutionRenamed {
                 at: now,
                 execution_id: id,
                 name: "New Name".to_string(),
             },
-            Event::EventReverted {
-                at: now,
-                execution_id: id,
-                reverted_event_index: 3,
-                reason: "mistake".to_string(),
-            },
             Event::LogMeta {
                 at: now,
-                version: 1,
+                version: SUPPORTED_VERSION,
                 tool_version: "0.1.0".to_string(),
             },
         ];

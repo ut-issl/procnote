@@ -45,19 +45,21 @@ When all steps are done:
 - Click **Complete** and choose **Pass** or **Fail** to finish the execution.
 - Click **Abort** to stop early with a reason.
 
-## Reverting Actions
+## Reversing Actions
 
-Procnote supports reverting previous actions. In the event history panel:
+Procnote supports reversing operator actions through normal UI actions:
 
-1. Find the event you want to undo.
-2. Click the **Revert** button.
-3. Provide a reason for the revert.
+- Clear a recorded input before recording a new value.
+- Remove an attachment or note.
+- Unskip a skipped step.
+- Reopen a completed or aborted execution.
+- Toggle a checkbox back to its previous value.
 
-The original event is not deleted. Instead, an `EventReverted` marker is appended to the log, preserving the full audit trail. The execution state is rebuilt by replaying only non-reverted events.
+The original event is not deleted. A typed reversing event such as `InputCleared`, `StepUnskipped`, or `ExecutionReopened` is appended to the log, preserving the full audit trail. Execution state is rebuilt by replaying every event in order.
 
-!!! info "Not all events are revertible"
+!!! info "Not all actions are reversible"
 
-    Structural events like `ExecutionStarted` and `StepAdded` cannot be reverted. Data capture events (checkboxes, inputs, notes) and completion events can be reverted.
+    Structural events like `ExecutionStarted` and `StepAdded` are not reversed by normal operator actions.
 
 ## Reviewing Past Executions
 
