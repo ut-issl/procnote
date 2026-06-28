@@ -1,6 +1,7 @@
 <script lang="ts">
     import type { NoteState } from "$lib/types";
     import { formatTimestamp } from "$lib/utils/format";
+    import { isNonComposingEnter } from "$lib/utils/keyboard";
     import TrashIcon from "./TrashIcon.svelte";
 
     let {
@@ -49,7 +50,7 @@
                 bind:value={noteText}
                 placeholder="Add a note..."
                 onkeydown={(e) => {
-                    if (e.key === "Enter") submit();
+                    if (isNonComposingEnter(e)) submit();
                 }}
             />
             <button
