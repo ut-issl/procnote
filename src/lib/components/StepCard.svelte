@@ -39,7 +39,7 @@
 
     import "highlight.js/styles/atom-one-light.css";
 
-    import type { ExecutionAction, StepSummary, EventHistoryEntry } from "$lib/types";
+    import type { ExecutionAction, StepSummary } from "$lib/types";
     import { formatTimestamp } from "$lib/utils/format";
     import AttachmentField from "./AttachmentField.svelte";
     import CheckboxItem from "./CheckboxItem.svelte";
@@ -65,12 +65,10 @@
     let {
         stepSummary,
         executionActive = false,
-        revertibleEvents = [],
         onaction,
     }: {
         stepSummary: StepSummary;
         executionActive?: boolean;
-        revertibleEvents?: EventHistoryEntry[];
         onaction: (action: ExecutionAction) => void;
     } = $props();
 
@@ -80,31 +78,6 @@
 
     let showSkipDialog = $state(false);
     let skipReason = $state("");
-
-    // Find the most recent revertible skip event for this step.
-    let revertibleStatusEvent = $derived(
-        revertibleEvents.filter((e) => e.event_type === "step_skipped").at(-1),
-    );
-
-    // Build a map of element_id -> most recent revertible input/attachment event.
-    let revertibleInputEvents = $derived.by(() => {
-        const map = new Map<string, EventHistoryEntry>();
-        for (const e of revertibleEvents) {
-            if (
-                (e.event_type === "input_recorded" || e.event_type === "attachment_added") &&
-                e.element_id
-            ) {
-                map.set(e.element_id, e);
-            }
-        }
-        return map;
-    });
-
-    // Revertible note_added events for this step, in order.
-    // Notes in StepSummary are ordered by insertion, matching the event order.
-    let revertibleNoteEvents = $derived(
-        revertibleEvents.filter((e) => e.event_type === "note_added"),
-    );
 
     function confirmSkip() {
         if (!skipReason.trim()) return;
@@ -147,11 +120,45 @@
         });
     }
 
+    function clearInput(inputId: string) {
+        onaction({
+            action: "clear_input",
+            step_id: stepSummary.id,
+            input_id: inputId,
+            reason: "Cleared by operator",
+        });
+    }
+
+    function removeAttachment(inputId: string) {
+        onaction({
+            action: "remove_attachment",
+            step_id: stepSummary.id,
+            input_id: inputId,
+            reason: "Removed by operator",
+        });
+    }
+
     function addNote(text: string) {
         onaction({
             action: "add_note",
             text,
             step_id: stepSummary.id,
+        });
+    }
+
+    function removeNote(noteId: string) {
+        onaction({
+            action: "remove_note",
+            note_id: noteId,
+            reason: "Removed by operator",
+        });
+    }
+
+    function unskipStep() {
+        onaction({
+            action: "unskip_step",
+            step_id: stepSummary.id,
+            reason: "Unskipped by operator",
         });
     }
 </script>
@@ -183,14 +190,11 @@
         {:else if block.type === "InputBlock"}
             <div class="step-section">
                 {#each block.inputs as input}
-                    {@const inputEvent = revertibleInputEvents.get(input.definition.id)}
-                    {@const revertHandler = inputEvent && executionActive
+                    {@const revertHandler = input.recorded && executionActive
                         ? () =>
-                              onaction({
-                                  action: "revert_event",
-                                  event_index: inputEvent.index,
-                                  reason: "Reverted by operator",
-                              })
+                              input.definition.type === "attachment"
+                                  ? removeAttachment(input.definition.id)
+                                  : clearInput(input.definition.id)
                         : undefined}
                     {#if input.definition.type === "attachment"}
                         <AttachmentField
@@ -220,16 +224,10 @@
             notes={stepSummary.notes}
             disabled={!isInteractable}
             onadd={addNote}
-            onrevert={executionActive && revertibleNoteEvents.length > 0
+            onrevert={executionActive
                 ? (noteIndex) => {
-                      const event = revertibleNoteEvents[noteIndex];
-                      if (event) {
-                          onaction({
-                              action: "revert_event",
-                              event_index: event.index,
-                              reason: "Reverted by operator",
-                          });
-                      }
+                      const note = stepSummary.notes[noteIndex];
+                      if (note) removeNote(note.id);
                   }
                 : undefined}
         />
@@ -243,15 +241,10 @@
                     onclick={() => (showSkipDialog = true)}>Skip</button
                 >
             {/if}
-            {#if revertibleStatusEvent && isSkipped}
+            {#if isSkipped}
                 <button
                     class="btn btn-undo"
-                    onclick={() =>
-                        onaction({
-                            action: "revert_event",
-                            event_index: revertibleStatusEvent.index,
-                            reason: "Reverted by operator",
-                        })}
+                    onclick={unskipStep}
                 >
                     Undo Skip
                 </button>

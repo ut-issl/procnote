@@ -13,6 +13,10 @@ pub enum ExecutionAction {
         step_id: String,
         reason: String,
     },
+    UnskipStep {
+        step_id: String,
+        reason: String,
+    },
     ToggleCheckbox {
         step_id: String,
         checkbox_id: String,
@@ -25,10 +29,19 @@ pub enum ExecutionAction {
         #[ts(optional)]
         unit: Option<String>,
     },
+    ClearInput {
+        step_id: String,
+        input_id: String,
+        reason: String,
+    },
     AddNote {
         text: String,
         #[ts(optional)]
         step_id: Option<String>,
+    },
+    RemoveNote {
+        note_id: String,
+        reason: String,
     },
     AddStep {
         step_id: String,
@@ -45,6 +58,11 @@ pub enum ExecutionAction {
         path: String,
         content_type: String,
     },
+    RemoveAttachment {
+        step_id: String,
+        input_id: String,
+        reason: String,
+    },
     Complete {
         status: CompletionStatus,
     },
@@ -54,8 +72,7 @@ pub enum ExecutionAction {
     RenameExecution {
         name: String,
     },
-    RevertEvent {
-        event_index: usize,
+    ReopenExecution {
         reason: String,
     },
 }

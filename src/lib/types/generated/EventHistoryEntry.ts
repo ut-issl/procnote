@@ -11,8 +11,6 @@ export type EventHistoryEntry = {
    */
   at: string;
   description: string;
-  revertible: boolean;
-  reverted: boolean;
   /**
    * Step ID for step-scoped events, if applicable.
    */

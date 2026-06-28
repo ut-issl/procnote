@@ -18,8 +18,8 @@ fn fixture_path(name: &str) -> std::path::PathBuf {
 }
 
 #[test]
-fn v1_basic_execution_parses_to_finished_pass() {
-    let events = read_log(&fixture_path("v1_basic_execution.jsonl")).unwrap();
+fn v2_basic_execution_parses_to_finished_pass() {
+    let events = read_log(&fixture_path("v2_basic_execution.jsonl")).unwrap();
     let state = ExecutionState::from_events(&events).unwrap();
 
     assert!(matches!(
@@ -35,21 +35,21 @@ fn v1_basic_execution_parses_to_finished_pass() {
 }
 
 #[test]
-fn v1_with_reverts_applies_revert_correctly() {
-    let events = read_log(&fixture_path("v1_with_reverts.jsonl")).unwrap();
+fn v2_with_reversal_actions_applies_correction() {
+    let events = read_log(&fixture_path("v2_with_reversal_actions.jsonl")).unwrap();
     let state = ExecutionState::from_events(&events).unwrap();
 
     assert!(matches!(
         state.status,
         ExecutionStatus::Finished(procnote_core::event::types::CompletionStatus::Pass)
     ));
-    // The reverted input (999) should not appear; the corrected value (-39.5) should.
+    // The cleared input (999) should not appear; the corrected value (-39.5) should.
     assert_eq!(state.steps["step-1"].inputs["step-1/temp"].value, "-39.5");
 }
 
 #[test]
-fn v1_all_event_types_parses_successfully() {
-    let events = read_log(&fixture_path("v1_all_event_types.jsonl")).unwrap();
+fn v2_all_event_types_parses_successfully() {
+    let events = read_log(&fixture_path("v2_all_event_types.jsonl")).unwrap();
     let state = ExecutionState::from_events(&events).unwrap();
 
     assert!(matches!(
@@ -58,11 +58,11 @@ fn v1_all_event_types_parses_successfully() {
     ));
     assert_eq!(state.name.as_deref(), Some("Morning run"));
     assert_eq!(state.step_order.len(), 2);
-    // step-1 was skipped then reverted, so it ended up present
+    // step-1 was skipped then unskipped, so it ended up present
     assert_eq!(state.steps["step-1"].status, StepStatus::Present);
     // Global note was recorded
     assert_eq!(state.global_notes.len(), 1);
-    assert_eq!(state.global_notes[0], "Global observation");
+    assert_eq!(state.global_notes[0].text, "Global observation");
     // Step note was recorded
     assert_eq!(state.steps["step-0"].notes.len(), 1);
 }

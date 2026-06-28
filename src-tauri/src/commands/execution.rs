@@ -8,8 +8,7 @@ use crate::action::ExecutionAction;
 use crate::persistence::event_log::EventLog;
 use crate::persistence::execution_store::ExecutionStore;
 use crate::state::AppState;
-use procnote_core::event::reverted_event_indices;
-use procnote_core::event::types::{CompletionStatus, Event, ExecutionId, Revertibility};
+use procnote_core::event::types::{CompletionStatus, Event, ExecutionId};
 use procnote_core::execution::{ExecutionState, StepStatus};
 use procnote_core::template::parse_template;
 use procnote_core::template::types::{InputDefinition, StepContent};
@@ -46,8 +45,6 @@ pub struct EventHistoryEntry {
     /// ISO 8601 timestamp string.
     pub at: String,
     pub description: String,
-    pub revertible: bool,
-    pub reverted: bool,
     /// Step ID for step-scoped events, if applicable.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -122,6 +119,7 @@ pub struct InputState {
 #[derive(Debug, Serialize, TS)]
 #[ts(export)]
 pub struct NoteState {
+    pub id: String,
     pub text: String,
     /// ISO 8601 timestamp of when the note was added.
     #[ts(optional)]
@@ -154,9 +152,7 @@ fn step_status_string(status: &StepStatus) -> String {
 fn summarize(state: &ExecutionState, events: &[Event], execution_dir: &Path) -> ExecutionSummary {
     use std::collections::HashMap;
 
-    let reverted_indices = reverted_event_indices(events);
-
-    // Build timestamp lookup maps from non-reverted events.
+    // Build timestamp lookup maps.
     // Store as RFC3339 strings to avoid depending on chrono in this crate.
     let mut started_at: Option<String> = None;
     let mut finished_at: Option<String> = None;
@@ -168,15 +164,10 @@ fn summarize(state: &ExecutionState, events: &[Event], execution_dir: &Path) -> 
     let mut input_at: HashMap<&str, String> = HashMap::new();
     // input_id -> full SHA256 hash for attachments
     let mut attachment_sha256: HashMap<&str, String> = HashMap::new();
-    // (step_id, note_index_in_step) -> add timestamp
-    // We count notes per step to match the index in StepState.notes.
-    let mut note_at: HashMap<(&str, usize), String> = HashMap::new();
-    let mut note_counts: HashMap<&str, usize> = HashMap::new();
+    // note_id -> add timestamp
+    let mut note_at: HashMap<&str, String> = HashMap::new();
 
-    for (index, event) in events.iter().enumerate() {
-        if reverted_indices.contains(&index) {
-            continue;
-        }
+    for event in events {
         match event {
             Event::ExecutionStarted { at, .. } => {
                 started_at = Some(at.to_rfc3339());
@@ -184,8 +175,14 @@ fn summarize(state: &ExecutionState, events: &[Event], execution_dir: &Path) -> 
             Event::ExecutionCompleted { at, .. } | Event::ExecutionAborted { at, .. } => {
                 finished_at = Some(at.to_rfc3339());
             }
+            Event::ExecutionReopened { .. } => {
+                finished_at = None;
+            }
             Event::StepSkipped { at, step_id, .. } => {
                 step_status_at.insert(step_id, at.to_rfc3339());
+            }
+            Event::StepUnskipped { step_id, .. } => {
+                step_status_at.remove(step_id.as_str());
             }
             Event::CheckboxToggled {
                 at, checkbox_id, ..
@@ -194,6 +191,9 @@ fn summarize(state: &ExecutionState, events: &[Event], execution_dir: &Path) -> 
             }
             Event::InputRecorded { at, input_id, .. } => {
                 input_at.insert(input_id, at.to_rfc3339());
+            }
+            Event::InputCleared { input_id, .. } => {
+                input_at.remove(input_id.as_str());
             }
             Event::AttachmentAdded {
                 at,
@@ -204,14 +204,15 @@ fn summarize(state: &ExecutionState, events: &[Event], execution_dir: &Path) -> 
                 input_at.insert(input_id, at.to_rfc3339());
                 attachment_sha256.insert(input_id, sha256.clone());
             }
-            Event::NoteAdded {
-                at,
-                step_id: Some(id),
-                ..
-            } => {
-                let count = note_counts.entry(id).or_insert(0);
-                note_at.insert((id, *count), at.to_rfc3339());
-                *count += 1;
+            Event::AttachmentRemoved { input_id, .. } => {
+                input_at.remove(input_id.as_str());
+                attachment_sha256.remove(input_id.as_str());
+            }
+            Event::NoteAdded { at, note_id, .. } => {
+                note_at.insert(note_id, at.to_rfc3339());
+            }
+            Event::NoteRemoved { note_id, .. } => {
+                note_at.remove(note_id.as_str());
             }
             _ => {}
         }
@@ -263,10 +264,10 @@ fn summarize(state: &ExecutionState, events: &[Event], execution_dir: &Path) -> 
                 let notes = step
                     .notes
                     .iter()
-                    .enumerate()
-                    .map(|(i, text)| NoteState {
-                        text: text.clone(),
-                        at: note_at.get(&(step_id.as_str(), i)).cloned(),
+                    .map(|note| NoteState {
+                        id: note.id.clone(),
+                        text: note.text.clone(),
+                        at: note_at.get(note.id.as_str()).cloned(),
                     })
                     .collect();
                 StepSummary {
@@ -281,7 +282,7 @@ fn summarize(state: &ExecutionState, events: &[Event], execution_dir: &Path) -> 
         })
         .collect();
 
-    let event_history = build_event_history(events, &reverted_indices);
+    let event_history = build_event_history(events);
 
     ExecutionSummary {
         execution_id: state.execution_id.unwrap_or_default(),
@@ -298,24 +299,17 @@ fn summarize(state: &ExecutionState, events: &[Event], execution_dir: &Path) -> 
     }
 }
 
-fn build_event_history(
-    events: &[Event],
-    reverted_indices: &std::collections::HashSet<usize>,
-) -> Vec<EventHistoryEntry> {
+fn build_event_history(events: &[Event]) -> Vec<EventHistoryEntry> {
     events
         .iter()
         .enumerate()
         .map(|(index, event)| {
-            let revertible = event.revertibility() == Revertibility::Revertible
-                && !reverted_indices.contains(&index);
             let (step_id, element_id) = event_step_and_label(event);
             EventHistoryEntry {
                 index,
                 event_type: event_type_string(event),
                 at: event_at(event),
                 description: event.description(),
-                revertible,
-                reverted: reverted_indices.contains(&index),
                 step_id,
                 element_id,
             }
@@ -326,7 +320,9 @@ fn build_event_history(
 /// Extract optional `step_id` and `element_id` from an event.
 fn event_step_and_label(event: &Event) -> (Option<String>, Option<String>) {
     match event {
-        Event::StepSkipped { step_id, .. } => (Some(step_id.clone()), None),
+        Event::StepSkipped { step_id, .. } | Event::StepUnskipped { step_id, .. } => {
+            (Some(step_id.clone()), None)
+        }
         Event::CheckboxToggled {
             step_id,
             checkbox_id,
@@ -335,10 +331,19 @@ fn event_step_and_label(event: &Event) -> (Option<String>, Option<String>) {
         Event::InputRecorded {
             step_id, input_id, ..
         }
+        | Event::InputCleared {
+            step_id, input_id, ..
+        }
         | Event::AttachmentAdded {
             step_id, input_id, ..
+        }
+        | Event::AttachmentRemoved {
+            step_id, input_id, ..
         } => (Some(step_id.clone()), Some(input_id.clone())),
-        Event::NoteAdded { step_id, .. } => (step_id.clone(), None),
+        Event::NoteAdded {
+            step_id, note_id, ..
+        } => (step_id.clone(), Some(note_id.clone())),
+        Event::NoteRemoved { note_id, .. } => (None, Some(note_id.clone())),
         _ => (None, None),
     }
 }
@@ -348,14 +353,18 @@ fn event_type_string(event: &Event) -> String {
         Event::ExecutionStarted { .. } => "execution_started",
         Event::ExecutionCompleted { .. } => "execution_completed",
         Event::ExecutionAborted { .. } => "execution_aborted",
+        Event::ExecutionReopened { .. } => "execution_reopened",
         Event::StepAdded { .. } => "step_added",
         Event::StepSkipped { .. } => "step_skipped",
+        Event::StepUnskipped { .. } => "step_unskipped",
         Event::CheckboxToggled { .. } => "checkbox_toggled",
         Event::InputRecorded { .. } => "input_recorded",
+        Event::InputCleared { .. } => "input_cleared",
         Event::NoteAdded { .. } => "note_added",
+        Event::NoteRemoved { .. } => "note_removed",
         Event::AttachmentAdded { .. } => "attachment_added",
+        Event::AttachmentRemoved { .. } => "attachment_removed",
         Event::ExecutionRenamed { .. } => "execution_renamed",
-        Event::EventReverted { .. } => "event_reverted",
         Event::LogMeta { .. } => "log_meta",
     }
     .to_string()
@@ -366,14 +375,18 @@ fn event_at(event: &Event) -> String {
         Event::ExecutionStarted { at, .. }
         | Event::ExecutionCompleted { at, .. }
         | Event::ExecutionAborted { at, .. }
+        | Event::ExecutionReopened { at, .. }
         | Event::StepAdded { at, .. }
         | Event::StepSkipped { at, .. }
+        | Event::StepUnskipped { at, .. }
         | Event::CheckboxToggled { at, .. }
         | Event::InputRecorded { at, .. }
+        | Event::InputCleared { at, .. }
         | Event::NoteAdded { at, .. }
+        | Event::NoteRemoved { at, .. }
         | Event::AttachmentAdded { at, .. }
+        | Event::AttachmentRemoved { at, .. }
         | Event::ExecutionRenamed { at, .. }
-        | Event::EventReverted { at, .. }
         | Event::LogMeta { at, .. } => at.to_rfc3339(),
     }
 }

@@ -3,7 +3,7 @@
     import { onMount } from "svelte";
     import { goto } from "$app/navigation";
     import { executionStore } from "$lib/stores/execution.svelte";
-    import type { ExecutionAction, EventHistoryEntry, StepContent } from "$lib/types";
+    import type { ExecutionAction, StepContent } from "$lib/types";
     import { formatTimestamp } from "$lib/utils/format";
     import StepCard from "$lib/components/StepCard.svelte";
     import AddStepDialog from "$lib/components/AddStepDialog.svelte";
@@ -36,40 +36,16 @@
 
     let stepRefs = $derived(summary?.steps.map((s) => ({ id: s.id, heading: s.heading })) ?? []);
 
-    // Find the revertible execution-level finish event (completed or aborted).
-    let revertibleFinishEvent = $derived(
-        summary?.event_history.find(
-            (e) =>
-                e.revertible &&
-                !e.reverted &&
-                (e.event_type === "execution_completed" ||
-                    e.event_type === "execution_aborted"),
-        ),
-    );
-
-    // Find the finish event (completed or aborted) for its timestamp.
+    // Find the latest finish event (completed or aborted) for its timestamp.
     let finishEvent = $derived(
-        summary?.event_history.find(
-            (e) =>
-                !e.reverted &&
-                (e.event_type === "execution_completed" ||
-                    e.event_type === "execution_aborted"),
-        ),
+        summary?.event_history
+            .filter(
+                (e) =>
+                    e.event_type === "execution_completed" ||
+                    e.event_type === "execution_aborted",
+            )
+            .at(-1),
     );
-
-    // Build a map of step_id -> revertible events for that step.
-    let revertibleEventsByStep = $derived.by(() => {
-        const map = new Map<string, EventHistoryEntry[]>();
-        if (!summary) return map;
-
-        for (const entry of summary.event_history) {
-            if (entry.revertible && !entry.reverted && entry.step_id) {
-                if (!map.has(entry.step_id)) map.set(entry.step_id, []);
-                map.get(entry.step_id)!.push(entry);
-            }
-        }
-        return map;
-    });
 
     async function handleAction(action: ExecutionAction) {
         await executionStore.act(action);
@@ -247,19 +223,16 @@
                     {/if}
                     &mdash; {totalSteps} steps, {skippedSteps} skipped
                 </span>
-                {#if revertibleFinishEvent}
-                    <button
-                        class="btn btn-undo"
-                        onclick={() =>
-                            handleAction({
-                                action: "revert_event",
-                                event_index: revertibleFinishEvent.index,
-                                reason: "Reverted by operator",
-                            })}
-                    >
-                        Reopen Execution
-                    </button>
-                {/if}
+                <button
+                    class="btn btn-undo"
+                    onclick={() =>
+                        handleAction({
+                            action: "reopen_execution",
+                            reason: "Reopened by operator",
+                        })}
+                >
+                    Reopen Execution
+                </button>
             </div>
         {/if}
 
@@ -268,7 +241,6 @@
                 <StepCard
                     {stepSummary}
                     executionActive={isActive ?? false}
-                    revertibleEvents={revertibleEventsByStep.get(stepSummary.id) ?? []}
                     onaction={handleAction}
                 />
             {/each}

@@ -1,15 +1,16 @@
-{"type":"log_meta","at":"2025-06-01T10:00:00Z","version":1,"tool_version":"0.1.0"}
+{"type":"log_meta","at":"2025-06-01T10:00:00Z","version":2,"tool_version":"0.1.0"}
 {"type":"execution_started","at":"2025-06-01T10:00:01Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","procedure_id":"TVT-001","procedure_title":"Thermal Vacuum Test","procedure_version":"1.0"}
 {"type":"step_added","at":"2025-06-01T10:00:01Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","step_id":"step-0","heading":"First step","content":[{"type":"Prose","text":"Do the thing."},{"type":"Checkbox","id":"step-0/cb-0","text":"Verified","checked":false},{"type":"InputBlock","inputs":[{"id":"step-0/reading","label":"Reading","type":"measurement","unit":"V","options":[]}]}]}
 {"type":"step_added","at":"2025-06-01T10:00:01Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","step_id":"step-1","heading":"Second step","content":[],"after_step_id":"step-0"}
 {"type":"execution_renamed","at":"2025-06-01T10:00:30Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","name":"Morning run"}
 {"type":"checkbox_toggled","at":"2025-06-01T10:02:00Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","step_id":"step-0","checkbox_id":"step-0/cb-0","checked":true}
 {"type":"input_recorded","at":"2025-06-01T10:03:00Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","step_id":"step-0","input_id":"step-0/reading","value":"3.3","unit":"V"}
-{"type":"note_added","at":"2025-06-01T10:03:30Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","text":"Looks good","step_id":"step-0"}
-{"type":"note_added","at":"2025-06-01T10:03:31Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","text":"Global observation"}
+{"type":"note_added","at":"2025-06-01T10:03:30Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","note_id":"note-step-0","text":"Looks good","step_id":"step-0"}
+{"type":"note_added","at":"2025-06-01T10:03:31Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","note_id":"note-global-0","text":"Global observation"}
 {"type":"attachment_added","at":"2025-06-01T10:04:00Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","step_id":"step-0","input_id":"step-0/photo","filename":"scope.png","path":"attachments/abc1234-scope.png","content_type":"image/png","sha256":"abc1234567890abcdef"}
+{"type":"attachment_removed","at":"2025-06-01T10:04:30Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","step_id":"step-0","input_id":"step-0/photo","reason":"wrong file"}
 {"type":"step_skipped","at":"2025-06-01T10:07:00Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","step_id":"step-1","reason":"Not applicable today"}
-{"type":"event_reverted","at":"2025-06-01T10:08:00Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","reverted_event_index":10,"reason":"actually need this step"}
+{"type":"step_unskipped","at":"2025-06-01T10:08:00Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","step_id":"step-1","reason":"actually need this step"}
 {"type":"execution_aborted","at":"2025-06-01T10:09:00Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","reason":"Power failure"}
-{"type":"event_reverted","at":"2025-06-01T10:09:30Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","reverted_event_index":12,"reason":"resumed"}
+{"type":"execution_reopened","at":"2025-06-01T10:09:30Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","reason":"resumed"}
 {"type":"execution_completed","at":"2025-06-01T10:10:00Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","status":"pass"}

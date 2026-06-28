@@ -1,9 +1,9 @@
-{"type":"log_meta","at":"2025-06-01T10:00:00Z","version":1,"tool_version":"0.1.0"}
+{"type":"log_meta","at":"2025-06-01T10:00:00Z","version":2,"tool_version":"0.1.0"}
 {"type":"execution_started","at":"2025-06-01T10:00:01Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","procedure_id":"TVT-001","procedure_title":"Thermal Vacuum Test","procedure_version":"1.0"}
 {"type":"step_added","at":"2025-06-01T10:00:01Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","step_id":"step-0","heading":"Power on DUT","content":[{"type":"Checkbox","id":"step-0/cb-0","text":"LED is green","checked":false}]}
-{"type":"step_added","at":"2025-06-01T10:00:01Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","step_id":"step-1","heading":"Record reading","content":[{"type":"InputBlock","inputs":[{"id":"step-1/temp","label":"Temperature","type":"measurement","unit":"°C","options":[]}]}]}
+{"type":"step_added","at":"2025-06-01T10:00:01Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","step_id":"step-1","heading":"Record reading","content":[{"type":"InputBlock","inputs":[{"id":"step-1/temp","label":"Temperature","type":"measurement","unit":"°C","options":[]}] }]}
 {"type":"checkbox_toggled","at":"2025-06-01T10:02:00Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","step_id":"step-0","checkbox_id":"step-0/cb-0","checked":true}
 {"type":"input_recorded","at":"2025-06-01T10:05:00Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","step_id":"step-1","input_id":"step-1/temp","value":"999","unit":"°C"}
-{"type":"event_reverted","at":"2025-06-01T10:06:00Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","reverted_event_index":5,"reason":"wrong reading"}
+{"type":"input_cleared","at":"2025-06-01T10:06:00Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","step_id":"step-1","input_id":"step-1/temp","reason":"wrong reading"}
 {"type":"input_recorded","at":"2025-06-01T10:07:00Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","step_id":"step-1","input_id":"step-1/temp","value":"-39.5","unit":"°C"}
 {"type":"execution_completed","at":"2025-06-01T10:09:00Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","status":"pass"}

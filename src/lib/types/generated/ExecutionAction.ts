@@ -7,9 +7,12 @@ import type { StepContent } from "./StepContent";
  */
 export type ExecutionAction =
   | { action: "skip_step"; step_id: string; reason: string }
+  | { action: "unskip_step"; step_id: string; reason: string }
   | { action: "toggle_checkbox"; step_id: string; checkbox_id: string; checked: boolean }
   | { action: "record_input"; step_id: string; input_id: string; value: string; unit?: string }
+  | { action: "clear_input"; step_id: string; input_id: string; reason: string }
   | { action: "add_note"; text: string; step_id?: string }
+  | { action: "remove_note"; note_id: string; reason: string }
   | {
       action: "add_step";
       step_id: string;
@@ -25,7 +28,8 @@ export type ExecutionAction =
       path: string;
       content_type: string;
     }
+  | { action: "remove_attachment"; step_id: string; input_id: string; reason: string }
   | { action: "complete"; status: CompletionStatus }
   | { action: "abort"; reason: string }
   | { action: "rename_execution"; name: string }
-  | { action: "revert_event"; event_index: number; reason: string };
+  | { action: "reopen_execution"; reason: string };

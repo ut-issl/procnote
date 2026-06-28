@@ -43,6 +43,13 @@ fn minimal_execution_aborted() {
 }
 
 #[test]
+fn minimal_execution_reopened() {
+    round_trip(
+        r#"{"type":"execution_reopened","at":"2025-01-01T00:00:00Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","reason":"more work needed"}"#,
+    );
+}
+
+#[test]
 fn minimal_step_added_no_optional_fields() {
     // StepAdded without content (empty default) and without after_step_id.
     round_trip(
@@ -54,6 +61,13 @@ fn minimal_step_added_no_optional_fields() {
 fn minimal_step_skipped() {
     round_trip(
         r#"{"type":"step_skipped","at":"2025-01-01T00:00:00Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","step_id":"s1","reason":"N/A"}"#,
+    );
+}
+
+#[test]
+fn minimal_step_unskipped() {
+    round_trip(
+        r#"{"type":"step_unskipped","at":"2025-01-01T00:00:00Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","step_id":"s1","reason":"needed"}"#,
     );
 }
 
@@ -73,10 +87,24 @@ fn minimal_input_recorded_no_unit() {
 }
 
 #[test]
+fn minimal_input_cleared() {
+    round_trip(
+        r#"{"type":"input_cleared","at":"2025-01-01T00:00:00Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","step_id":"s1","input_id":"s1/v","reason":"wrong value"}"#,
+    );
+}
+
+#[test]
 fn minimal_note_added_no_step() {
     // NoteAdded without the optional step_id (global note).
     round_trip(
-        r#"{"type":"note_added","at":"2025-01-01T00:00:00Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","text":"observation"}"#,
+        r#"{"type":"note_added","at":"2025-01-01T00:00:00Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","note_id":"note-1","text":"observation"}"#,
+    );
+}
+
+#[test]
+fn minimal_note_removed() {
+    round_trip(
+        r#"{"type":"note_removed","at":"2025-01-01T00:00:00Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","note_id":"note-1","reason":"typo"}"#,
     );
 }
 
@@ -88,6 +116,13 @@ fn minimal_attachment_added() {
 }
 
 #[test]
+fn minimal_attachment_removed() {
+    round_trip(
+        r#"{"type":"attachment_removed","at":"2025-01-01T00:00:00Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","step_id":"s1","input_id":"s1/f","reason":"wrong file"}"#,
+    );
+}
+
+#[test]
 fn minimal_execution_renamed() {
     round_trip(
         r#"{"type":"execution_renamed","at":"2025-01-01T00:00:00Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","name":"Run A"}"#,
@@ -95,16 +130,9 @@ fn minimal_execution_renamed() {
 }
 
 #[test]
-fn minimal_event_reverted() {
-    round_trip(
-        r#"{"type":"event_reverted","at":"2025-01-01T00:00:00Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","reverted_event_index":3,"reason":"mistake"}"#,
-    );
-}
-
-#[test]
 fn minimal_log_meta() {
     round_trip(
-        r#"{"type":"log_meta","at":"2025-01-01T00:00:00Z","version":1,"tool_version":"0.1.0"}"#,
+        r#"{"type":"log_meta","at":"2025-01-01T00:00:00Z","version":2,"tool_version":"0.1.0"}"#,
     );
 }
 

@@ -19,15 +19,15 @@
 
 - `Event` enum (internally tagged `"type"` for JSON) — 13 variants covering execution lifecycle, step transitions, data capture, and revert markers.
 - `ExecutionState::apply()` is the single source of truth for state mutations.
-- `ExecutionState::from_events()` reconstructs state by replaying the event log (two passes: collect reverted indices, then apply non-reverted events).
-- `Revertibility` enum + exhaustive match enforces compile-time classification of every event variant.
-- `ExecutionState::revert_event()` performs trial replay to validate that reverting produces a valid state before committing.
+- `ExecutionState::from_events()` reconstructs state by replaying the event log in order; `LogMeta` is ignored by the state machine.
+- User-visible reversals are modeled as typed domain events (`InputCleared`, `StepUnskipped`, `ExecutionReopened`, etc.), not generic event-log reverts.
+- `ExecutionState::apply()` exhaustively handles every event variant, so new event types must define their state-machine behavior explicitly.
 - Procedure templates are Markdown files with YAML frontmatter, parsed by `template/parser.rs` using `pulldown-cmark`.
 
 ### Tauri shell (`src-tauri`)
 
 - `AppState` holds a single `procedures_dir` path. Each procedure is a subdirectory containing `template.md` and `.executions/`.
-- `summarize()` converts `ExecutionState` + raw events into `ExecutionSummary` DTO for the frontend, building timestamp maps from non-reverted events.
+- `summarize()` converts `ExecutionState` + raw events into `ExecutionSummary` DTO for the frontend, building timestamp maps from the replayed event stream.
 - Every `record_action` call re-reads and replays the full event log from disk (no in-memory cache, by design).
 - Attachments are stored as `attachments/{sha256_7}-{filename}` inside the execution directory.
 

@@ -3,9 +3,7 @@ use std::collections::HashMap;
 use chrono::Utc;
 use uuid::Uuid;
 
-use crate::event::types::{
-    CompletionStatus, Event, ExecutionId, Revertibility, reverted_event_indices,
-};
+use crate::event::types::{CompletionStatus, Event, ExecutionId};
 use crate::template::types::{ProcedureTemplate, StepContent};
 
 /// Errors that can occur during execution state transitions.
@@ -19,18 +17,28 @@ pub enum ExecutionError {
     AlreadyFinished,
     #[error("step not found: {0}")]
     StepNotFound(String),
+    #[error("execution is not finished")]
+    NotFinished,
     #[error("step already skipped: {0}")]
     StepAlreadySkipped(String),
+    #[error("step is not skipped: {0}")]
+    StepNotSkipped(String),
+    #[error("step has captured data: {0}")]
+    StepHasCapturedData(String),
     #[error("duplicate step id: {0}")]
     DuplicateStepId(String),
-    #[error("event index out of range: {0}")]
-    EventIndexOutOfRange(usize),
-    #[error("event at index {0} is not revertible")]
-    EventNotRevertible(usize),
-    #[error("event at index {0} has already been reverted")]
-    EventAlreadyReverted(usize),
-    #[error("reverting event at index {0} would produce an invalid state: {1}")]
-    RevertWouldInvalidateState(usize, String),
+    #[error("duplicate note id: {0}")]
+    DuplicateNoteId(String),
+    #[error("checkbox not found: {0}")]
+    CheckboxNotFound(String),
+    #[error("input already recorded: {0}")]
+    InputAlreadyRecorded(String),
+    #[error("input not recorded: {0}")]
+    InputNotRecorded(String),
+    #[error("attachment not found: {0}")]
+    AttachmentNotFound(String),
+    #[error("note not found: {0}")]
+    NoteNotFound(String),
 }
 
 /// Status of the overall execution.
@@ -63,7 +71,7 @@ pub struct StepState {
     pub content: Vec<StepContent>,
     /// Recorded input values keyed by label.
     pub inputs: HashMap<String, RecordedInput>,
-    pub notes: Vec<String>,
+    pub notes: Vec<RecordedNote>,
 }
 
 /// A recorded input value.
@@ -72,6 +80,13 @@ pub struct RecordedInput {
     pub label: String,
     pub value: String,
     pub unit: Option<String>,
+}
+
+/// A recorded note.
+#[derive(Debug, Clone)]
+pub struct RecordedNote {
+    pub id: String,
+    pub text: String,
 }
 
 /// The full state of a procedure execution, reconstructable from events.
@@ -87,7 +102,7 @@ pub struct ExecutionState {
     /// Ordered step headings (preserves insertion order).
     pub step_order: Vec<String>,
     pub steps: HashMap<String, StepState>,
-    pub global_notes: Vec<String>,
+    pub global_notes: Vec<RecordedNote>,
 }
 
 impl ExecutionState {
@@ -107,25 +122,17 @@ impl ExecutionState {
         }
     }
 
-    /// Reconstruct execution state by replaying a sequence of events,
-    /// respecting `EventReverted` markers.
+    /// Reconstruct execution state by replaying a sequence of events.
     ///
-    /// First collects all reverted indices, then replays only non-reverted
-    /// events. `EventReverted` and `LogMeta` events are skipped.
+    /// `LogMeta` events are replay metadata and are skipped by the state machine.
     pub fn from_events(events: &[Event]) -> Result<Self, ExecutionError> {
-        let reverted_indices = reverted_event_indices(events);
-
-        let mut state = Self::new();
-        for (index, event) in events.iter().enumerate() {
-            if reverted_indices.contains(&index) {
-                continue;
+        events.iter().try_fold(Self::new(), |mut state, event| {
+            match event {
+                Event::LogMeta { .. } => {}
+                _ => state.apply(event)?,
             }
-            if matches!(event, Event::EventReverted { .. } | Event::LogMeta { .. }) {
-                continue;
-            }
-            state.apply(event)?;
-        }
-        Ok(state)
+            Ok(state)
+        })
     }
 
     /// Apply a single event to the state (used by both replay and transitions).
@@ -160,6 +167,10 @@ impl ExecutionState {
             Event::ExecutionAborted { .. } => {
                 self.require_active()?;
                 self.status = ExecutionStatus::Finished(CompletionStatus::Aborted);
+            }
+            Event::ExecutionReopened { .. } => {
+                self.require_finished()?;
+                self.status = ExecutionStatus::Active;
             }
             Event::StepAdded {
                 step_id,
@@ -196,15 +207,22 @@ impl ExecutionState {
             }
             Event::StepSkipped { step_id, .. } => {
                 self.require_active()?;
+                let step = self.get_present_step_mut(step_id)?;
+                if step.has_captured_data() {
+                    return Err(ExecutionError::StepHasCapturedData(step_id.clone()));
+                }
+                step.status = StepStatus::Skipped;
+            }
+            Event::StepUnskipped { step_id, .. } => {
+                self.require_active()?;
                 let step = self.get_step_mut(step_id)?;
                 match step.status {
-                    StepStatus::Present => {
-                        step.status = StepStatus::Skipped;
-                    }
+                    StepStatus::Present => Err(ExecutionError::StepNotSkipped(step_id.clone())),
                     StepStatus::Skipped => {
-                        return Err(ExecutionError::StepAlreadySkipped(step_id.clone()));
+                        step.status = StepStatus::Present;
+                        Ok(())
                     }
-                }
+                }?;
             }
             Event::CheckboxToggled {
                 step_id,
@@ -213,8 +231,7 @@ impl ExecutionState {
                 ..
             } => {
                 self.require_active()?;
-                let step = self.get_step_mut(step_id)?;
-                // Find matching checkbox in content by ID and update in-place.
+                let step = self.get_present_step_mut(step_id)?;
                 let found = step.content.iter_mut().any(|item| {
                     if let StepContent::Checkbox {
                         id: Some(id),
@@ -229,12 +246,7 @@ impl ExecutionState {
                     false
                 });
                 if !found {
-                    // Checkbox not from template — add dynamically.
-                    step.content.push(StepContent::Checkbox {
-                        id: Some(checkbox_id.clone()),
-                        text: String::new(),
-                        checked: *checked,
-                    });
+                    return Err(ExecutionError::CheckboxNotFound(checkbox_id.clone()));
                 }
             }
             Event::InputRecorded {
@@ -245,7 +257,10 @@ impl ExecutionState {
                 ..
             } => {
                 self.require_active()?;
-                let step = self.get_step_mut(step_id)?;
+                let step = self.get_present_step_mut(step_id)?;
+                if step.inputs.contains_key(input_id) {
+                    return Err(ExecutionError::InputAlreadyRecorded(input_id.clone()));
+                }
                 step.inputs.insert(
                     input_id.clone(),
                     RecordedInput {
@@ -255,17 +270,43 @@ impl ExecutionState {
                     },
                 );
             }
-            Event::NoteAdded { text, step_id, .. } => {
+            Event::InputCleared {
+                step_id, input_id, ..
+            } => {
                 self.require_active()?;
+                let step = self.get_present_step_mut(step_id)?;
+                step.inputs
+                    .remove(input_id)
+                    .map(|_| ())
+                    .ok_or_else(|| ExecutionError::InputNotRecorded(input_id.clone()))?;
+            }
+            Event::NoteAdded {
+                note_id,
+                text,
+                step_id,
+                ..
+            } => {
+                self.require_active()?;
+                if self.note_exists(note_id) {
+                    return Err(ExecutionError::DuplicateNoteId(note_id.clone()));
+                }
+                let note = RecordedNote {
+                    id: note_id.clone(),
+                    text: text.clone(),
+                };
                 match step_id {
                     Some(id) => {
-                        let step = self.get_step_mut(id)?;
-                        step.notes.push(text.clone());
+                        let step = self.get_present_step_mut(id)?;
+                        step.notes.push(note);
                     }
                     None => {
-                        self.global_notes.push(text.clone());
+                        self.global_notes.push(note);
                     }
                 }
+            }
+            Event::NoteRemoved { note_id, .. } => {
+                self.require_active()?;
+                self.remove_note(note_id)?;
             }
 
             Event::AttachmentAdded {
@@ -275,7 +316,10 @@ impl ExecutionState {
                 ..
             } => {
                 self.require_active()?;
-                let step = self.get_step_mut(step_id)?;
+                let step = self.get_present_step_mut(step_id)?;
+                if step.inputs.contains_key(input_id) {
+                    return Err(ExecutionError::InputAlreadyRecorded(input_id.clone()));
+                }
                 step.inputs.insert(
                     input_id.clone(),
                     RecordedInput {
@@ -285,6 +329,16 @@ impl ExecutionState {
                     },
                 );
             }
+            Event::AttachmentRemoved {
+                step_id, input_id, ..
+            } => {
+                self.require_active()?;
+                let step = self.get_present_step_mut(step_id)?;
+                step.inputs
+                    .remove(input_id)
+                    .map(|_| ())
+                    .ok_or_else(|| ExecutionError::AttachmentNotFound(input_id.clone()))?;
+            }
 
             Event::ExecutionRenamed { name, .. } => {
                 if self.execution_id.is_none() {
@@ -293,9 +347,7 @@ impl ExecutionState {
                 self.name = Some(name.clone());
             }
 
-            // EventReverted is handled at the from_events() level by skipping
-            // reverted events. It should not be applied directly.
-            Event::EventReverted { .. } | Event::LogMeta { .. } => {}
+            Event::LogMeta { .. } => {}
         }
         Ok(())
     }
@@ -444,6 +496,24 @@ impl ExecutionState {
         Ok(event)
     }
 
+    /// Build and validate a step-unskip event without mutating this state.
+    pub fn unskip_step_event(&self, step_id: &str, reason: &str) -> Result<Event, ExecutionError> {
+        self.require_active()?;
+        self.validated_candidate(Event::StepUnskipped {
+            at: Utc::now(),
+            execution_id: self.require_execution_id()?,
+            step_id: step_id.to_string(),
+            reason: reason.to_string(),
+        })
+    }
+
+    /// Unskip a step.
+    pub fn unskip_step(&mut self, step_id: &str, reason: &str) -> Result<Event, ExecutionError> {
+        let event = self.unskip_step_event(step_id, reason)?;
+        self.apply(&event)?;
+        Ok(event)
+    }
+
     /// Build and validate a checkbox-toggle event without mutating this state.
     pub fn toggle_checkbox_event(
         &self,
@@ -505,6 +575,35 @@ impl ExecutionState {
         Ok(event)
     }
 
+    /// Build and validate an input-cleared event without mutating this state.
+    pub fn clear_input_event(
+        &self,
+        step_id: &str,
+        input_id: &str,
+        reason: &str,
+    ) -> Result<Event, ExecutionError> {
+        self.require_active()?;
+        self.validated_candidate(Event::InputCleared {
+            at: Utc::now(),
+            execution_id: self.require_execution_id()?,
+            step_id: step_id.to_string(),
+            input_id: input_id.to_string(),
+            reason: reason.to_string(),
+        })
+    }
+
+    /// Clear an input value.
+    pub fn clear_input(
+        &mut self,
+        step_id: &str,
+        input_id: &str,
+        reason: &str,
+    ) -> Result<Event, ExecutionError> {
+        let event = self.clear_input_event(step_id, input_id, reason)?;
+        self.apply(&event)?;
+        Ok(event)
+    }
+
     /// Build and validate a note-added event without mutating this state.
     pub fn add_note_event(
         &self,
@@ -515,6 +614,7 @@ impl ExecutionState {
         self.validated_candidate(Event::NoteAdded {
             at: Utc::now(),
             execution_id: self.require_execution_id()?,
+            note_id: Uuid::new_v4().to_string(),
             text: text.to_string(),
             step_id: step_id.map(std::string::ToString::to_string),
         })
@@ -523,6 +623,28 @@ impl ExecutionState {
     /// Add a note.
     pub fn add_note(&mut self, text: &str, step_id: Option<&str>) -> Result<Event, ExecutionError> {
         let event = self.add_note_event(text, step_id)?;
+        self.apply(&event)?;
+        Ok(event)
+    }
+
+    /// Build and validate a note-removed event without mutating this state.
+    pub fn remove_note_event(&self, note_id: &str, reason: &str) -> Result<Event, ExecutionError> {
+        self.require_active()?;
+        self.validated_candidate(Event::NoteRemoved {
+            at: Utc::now(),
+            execution_id: self.require_execution_id()?,
+            note_id: note_id.to_string(),
+            reason: reason.to_string(),
+        })
+    }
+
+    /// Remove a note.
+    pub fn remove_note_action(
+        &mut self,
+        note_id: &str,
+        reason: &str,
+    ) -> Result<Event, ExecutionError> {
+        let event = self.remove_note_event(note_id, reason)?;
         self.apply(&event)?;
         Ok(event)
     }
@@ -566,6 +688,35 @@ impl ExecutionState {
         Ok(event)
     }
 
+    /// Build and validate an attachment-removed event without mutating this state.
+    pub fn remove_attachment_event(
+        &self,
+        step_id: &str,
+        input_id: &str,
+        reason: &str,
+    ) -> Result<Event, ExecutionError> {
+        self.require_active()?;
+        self.validated_candidate(Event::AttachmentRemoved {
+            at: Utc::now(),
+            execution_id: self.require_execution_id()?,
+            step_id: step_id.to_string(),
+            input_id: input_id.to_string(),
+            reason: reason.to_string(),
+        })
+    }
+
+    /// Remove an attachment.
+    pub fn remove_attachment(
+        &mut self,
+        step_id: &str,
+        input_id: &str,
+        reason: &str,
+    ) -> Result<Event, ExecutionError> {
+        let event = self.remove_attachment_event(step_id, input_id, reason)?;
+        self.apply(&event)?;
+        Ok(event)
+    }
+
     /// Build and validate an execution-completed event without mutating this state.
     pub fn complete_event(&self, status: CompletionStatus) -> Result<Event, ExecutionError> {
         self.require_active()?;
@@ -600,67 +751,21 @@ impl ExecutionState {
         Ok(event)
     }
 
-    // -- Revert --
-
-    /// Produce an `EventReverted` marker for the event at the given index.
-    ///
-    /// Validates that the event is revertible, not already reverted, and that
-    /// the resulting state would be consistent (via trial replay).
-    pub fn revert_event(
-        all_events: &[Event],
-        event_index: usize,
-        reason: &str,
-    ) -> Result<Event, ExecutionError> {
-        // Validate index is in range.
-        let target_event = all_events
-            .get(event_index)
-            .ok_or(ExecutionError::EventIndexOutOfRange(event_index))?;
-
-        // Validate the event is revertible.
-        match target_event.revertibility() {
-            Revertibility::Revertible => {}
-            Revertibility::NotRevertible | Revertibility::RevertMarker => {
-                return Err(ExecutionError::EventNotRevertible(event_index));
-            }
-        }
-
-        // Check it hasn't already been reverted.
-        let already_reverted = all_events.iter().any(|event| {
-            matches!(
-                event,
-                Event::EventReverted {
-                    reverted_event_index,
-                    ..
-                } if *reverted_event_index == event_index
-            )
-        });
-        if already_reverted {
-            return Err(ExecutionError::EventAlreadyReverted(event_index));
-        }
-
-        // Extract execution_id from the first ExecutionStarted event.
-        let execution_id = all_events
-            .iter()
-            .find_map(|event| match event {
-                Event::ExecutionStarted { execution_id, .. } => Some(*execution_id),
-                _ => None,
-            })
-            .ok_or(ExecutionError::NotStarted)?;
-
-        let revert_marker = Event::EventReverted {
+    /// Build and validate an execution-reopened event without mutating this state.
+    pub fn reopen_event(&self, reason: &str) -> Result<Event, ExecutionError> {
+        self.require_finished()?;
+        self.validated_candidate(Event::ExecutionReopened {
             at: Utc::now(),
-            execution_id,
-            reverted_event_index: event_index,
+            execution_id: self.require_execution_id()?,
             reason: reason.to_string(),
-        };
+        })
+    }
 
-        // Validate by trial replay: append the marker and rebuild.
-        let mut trial_events = all_events.to_vec();
-        trial_events.push(revert_marker.clone());
-        Self::from_events(&trial_events)
-            .map_err(|e| ExecutionError::RevertWouldInvalidateState(event_index, e.to_string()))?;
-
-        Ok(revert_marker)
+    /// Reopen the execution.
+    pub fn reopen(&mut self, reason: &str) -> Result<Event, ExecutionError> {
+        let event = self.reopen_event(reason)?;
+        self.apply(&event)?;
+        Ok(event)
     }
 
     // -- Helpers --
@@ -670,6 +775,14 @@ impl ExecutionState {
             ExecutionStatus::Pending => Err(ExecutionError::NotStarted),
             ExecutionStatus::Active => Ok(()),
             ExecutionStatus::Finished(_) => Err(ExecutionError::AlreadyFinished),
+        }
+    }
+
+    const fn require_finished(&self) -> Result<(), ExecutionError> {
+        match &self.status {
+            ExecutionStatus::Pending => Err(ExecutionError::NotStarted),
+            ExecutionStatus::Active => Err(ExecutionError::NotFinished),
+            ExecutionStatus::Finished(_) => Ok(()),
         }
     }
 
@@ -687,6 +800,60 @@ impl ExecutionState {
         self.steps
             .get_mut(step_id)
             .ok_or_else(|| ExecutionError::StepNotFound(step_id.to_string()))
+    }
+
+    fn get_present_step_mut(&mut self, step_id: &str) -> Result<&mut StepState, ExecutionError> {
+        let step = self.get_step_mut(step_id)?;
+        match step.status {
+            StepStatus::Present => Ok(step),
+            StepStatus::Skipped => Err(ExecutionError::StepAlreadySkipped(step_id.to_string())),
+        }
+    }
+
+    fn note_exists(&self, note_id: &str) -> bool {
+        self.global_notes.iter().any(|note| note.id == note_id)
+            || self
+                .steps
+                .values()
+                .any(|step| step.notes.iter().any(|note| note.id == note_id))
+    }
+
+    fn remove_note(&mut self, note_id: &str) -> Result<(), ExecutionError> {
+        if let Some(index) = self
+            .global_notes
+            .iter()
+            .position(|note| note.id.as_str() == note_id)
+        {
+            self.global_notes.remove(index);
+            return Ok(());
+        }
+
+        self.steps
+            .values_mut()
+            .find_map(|step| {
+                if step.status == StepStatus::Skipped {
+                    return None;
+                }
+                step.notes
+                    .iter()
+                    .position(|note| note.id.as_str() == note_id)
+                    .map(|index| (step, index))
+            })
+            .map(|(step, index)| {
+                step.notes.remove(index);
+            })
+            .ok_or_else(|| ExecutionError::NoteNotFound(note_id.to_string()))
+    }
+}
+
+impl StepState {
+    fn has_captured_data(&self) -> bool {
+        !self.inputs.is_empty()
+            || !self.notes.is_empty()
+            || self
+                .content
+                .iter()
+                .any(|item| matches!(item, StepContent::Checkbox { checked: true, .. }))
     }
 }
 
@@ -716,7 +883,11 @@ mod tests {
                 Step {
                     id: None,
                     heading: "Preconditions".to_string(),
-                    content: vec![],
+                    content: vec![StepContent::Checkbox {
+                        id: None,
+                        text: "Ready".to_string(),
+                        checked: false,
+                    }],
                 },
                 Step {
                     id: None,
@@ -937,7 +1108,7 @@ mod tests {
         state.add_note("General observation", None).unwrap();
 
         assert_eq!(state.global_notes.len(), 1);
-        assert_eq!(state.global_notes[0], "General observation");
+        assert_eq!(state.global_notes[0].text, "General observation");
     }
 
     #[test]
@@ -953,209 +1124,158 @@ mod tests {
         );
     }
 
-    // -- Revert tests --
+    // -- Reversal action tests --
 
-    fn events_with_skipped_step() -> Vec<Event> {
+    #[test]
+    fn test_unskip_step() {
         let template = sample_template();
         let mut state = ExecutionState::new();
-        let mut events: Vec<Event> = Vec::new();
-        events.extend(state.start(&template).unwrap());
-        events.push(state.skip_step("step-0", "N/A").unwrap()); // index 5
-        events
+        state.start(&template).unwrap();
+        state.skip_step("step-1", "N/A").unwrap();
+        state.unskip_step("step-1", "actually needed").unwrap();
+
+        assert_eq!(state.steps["step-1"].status, StepStatus::Present);
     }
 
     #[test]
-    fn test_revert_step_skipped() {
-        let mut events = events_with_skipped_step();
-        let revert = ExecutionState::revert_event(&events, 5, "actually needed").unwrap();
-        events.push(revert);
+    fn test_clear_input_allows_recording_again() {
+        let template = sample_template();
+        let mut state = ExecutionState::new();
+        state.start(&template).unwrap();
+        state
+            .record_input("step-1", "voltage", "5.0", Some("V"))
+            .unwrap();
 
-        let state = ExecutionState::from_events(&events).unwrap();
-        assert_eq!(state.steps["step-0"].status, StepStatus::Present);
+        let duplicate = state.record_input("step-1", "voltage", "5.1", Some("V"));
+        assert_eq!(
+            duplicate.unwrap_err(),
+            ExecutionError::InputAlreadyRecorded("voltage".to_string())
+        );
+
+        state
+            .clear_input("step-1", "voltage", "wrong value")
+            .unwrap();
+        state
+            .record_input("step-1", "voltage", "5.1", Some("V"))
+            .unwrap();
+
+        assert_eq!(state.steps["step-1"].inputs["voltage"].value, "5.1");
     }
 
     #[test]
-    fn test_revert_input_recorded() {
+    fn test_remove_note() {
         let template = sample_template();
         let mut state = ExecutionState::new();
-        let mut events: Vec<Event> = Vec::new();
-        events.extend(state.start(&template).unwrap());
-        events.push(
-            state
-                .record_input("step-0", "voltage", "5.0", Some("V"))
-                .unwrap(),
-        ); // index 5
+        state.start(&template).unwrap();
+        let note = state.add_note("oops", Some("step-1")).unwrap();
+        let Event::NoteAdded { note_id, .. } = note else {
+            unreachable!();
+        };
 
-        let revert = ExecutionState::revert_event(&events, 5, "wrong value").unwrap();
-        events.push(revert);
+        state.remove_note_action(&note_id, "typo").unwrap();
 
-        let state = ExecutionState::from_events(&events).unwrap();
-        assert!(!state.steps["step-0"].inputs.contains_key("voltage"));
+        assert!(state.steps["step-1"].notes.is_empty());
     }
 
     #[test]
-    fn test_revert_note_added() {
+    fn test_remove_attachment() {
         let template = sample_template();
         let mut state = ExecutionState::new();
-        let mut events: Vec<Event> = Vec::new();
-        events.extend(state.start(&template).unwrap());
-        events.push(state.add_note("oops", None).unwrap()); // index 5
+        state.start(&template).unwrap();
+        state
+            .add_attachment(
+                "step-1",
+                "log-file",
+                "photo.jpg",
+                "path/photo.jpg",
+                "image/jpeg",
+                "abc123",
+            )
+            .unwrap();
 
-        let revert = ExecutionState::revert_event(&events, 5, "typo").unwrap();
-        events.push(revert);
+        state
+            .remove_attachment("step-1", "log-file", "wrong file")
+            .unwrap();
 
-        let state = ExecutionState::from_events(&events).unwrap();
-        assert!(state.global_notes.is_empty());
-    }
-
-    #[test]
-    fn test_revert_checkbox_toggled() {
-        let template = sample_template();
-        let mut state = ExecutionState::new();
-        let mut events: Vec<Event> = Vec::new();
-        events.extend(state.start(&template).unwrap());
-        events.push(
-            state
-                .toggle_checkbox("step-0", "step-0/dyn-cb-0", true)
-                .unwrap(),
-        ); // index 5
-
-        let revert = ExecutionState::revert_event(&events, 5, "undo check").unwrap();
-        events.push(revert);
-
-        let state = ExecutionState::from_events(&events).unwrap();
-        assert!(!state.steps["step-0"].content.iter().any(|item| {
-            matches!(item, StepContent::Checkbox { id: Some(id), .. } if id == "step-0/dyn-cb-0")
-        }));
-    }
-
-    #[test]
-    fn test_revert_execution_completed() {
-        let template = sample_template();
-        let mut state = ExecutionState::new();
-        let mut events: Vec<Event> = Vec::new();
-        events.extend(state.start(&template).unwrap());
-        events.push(state.complete(CompletionStatus::Pass).unwrap()); // index 5
-
-        let revert = ExecutionState::revert_event(&events, 5, "not done yet").unwrap();
-        events.push(revert);
-
-        let state = ExecutionState::from_events(&events).unwrap();
-        assert_eq!(state.status, ExecutionStatus::Active);
-    }
-
-    #[test]
-    fn test_revert_attachment_added() {
-        let template = sample_template();
-        let mut state = ExecutionState::new();
-        let mut events: Vec<Event> = Vec::new();
-        events.extend(state.start(&template).unwrap());
-        events.push(
-            state
-                .add_attachment(
-                    "step-1",
-                    "log-file",
-                    "photo.jpg",
-                    "path/photo.jpg",
-                    "image/jpeg",
-                    "abc123",
-                )
-                .unwrap(),
-        ); // index 5
-
-        let revert = ExecutionState::revert_event(&events, 5, "wrong file").unwrap();
-        events.push(revert);
-
-        let state = ExecutionState::from_events(&events).unwrap();
         assert!(!state.steps["step-1"].inputs.contains_key("log-file"));
     }
 
     #[test]
-    fn test_cannot_revert_execution_started() {
+    fn test_toggle_checkbox_back() {
         let template = sample_template();
         let mut state = ExecutionState::new();
-        let events: Vec<Event> = state.start(&template).unwrap();
+        state.start(&template).unwrap();
+        state
+            .toggle_checkbox("step-0", "step-0/cb-0", true)
+            .unwrap();
+        state
+            .toggle_checkbox("step-0", "step-0/cb-0", false)
+            .unwrap();
 
-        let result = ExecutionState::revert_event(&events, 0, "nope");
-        assert_eq!(result.unwrap_err(), ExecutionError::EventNotRevertible(0));
+        assert!(state.steps["step-0"].content.iter().any(|item| {
+            matches!(item, StepContent::Checkbox { id: Some(id), checked, .. } if id == "step-0/cb-0" && !*checked)
+        }));
     }
 
     #[test]
-    fn test_cannot_revert_step_added() {
+    fn test_reopen_execution() {
         let template = sample_template();
         let mut state = ExecutionState::new();
-        let events: Vec<Event> = state.start(&template).unwrap();
+        state.start(&template).unwrap();
+        state.complete(CompletionStatus::Pass).unwrap();
+        state.reopen("not done yet").unwrap();
 
-        let result = ExecutionState::revert_event(&events, 2, "nope");
-        assert_eq!(result.unwrap_err(), ExecutionError::EventNotRevertible(2));
+        assert_eq!(state.status, ExecutionStatus::Active);
     }
 
     #[test]
-    fn test_cannot_revert_already_reverted() {
-        let mut events = events_with_skipped_step();
-        let revert = ExecutionState::revert_event(&events, 5, "first").unwrap();
-        events.push(revert);
-
-        let result = ExecutionState::revert_event(&events, 5, "second");
-        assert_eq!(result.unwrap_err(), ExecutionError::EventAlreadyReverted(5));
-    }
-
-    #[test]
-    fn test_cannot_revert_out_of_range() {
+    fn test_cannot_record_data_on_skipped_step() {
         let template = sample_template();
         let mut state = ExecutionState::new();
-        let events: Vec<Event> = state.start(&template).unwrap();
+        state.start(&template).unwrap();
+        state.skip_step("step-1", "N/A").unwrap();
 
-        let result = ExecutionState::revert_event(&events, 999, "nope");
+        let result = state.record_input("step-1", "voltage", "5.0", Some("V"));
         assert_eq!(
             result.unwrap_err(),
-            ExecutionError::EventIndexOutOfRange(999)
+            ExecutionError::StepAlreadySkipped("step-1".to_string())
         );
     }
 
     #[test]
-    fn test_revert_serialization_roundtrip() {
-        let mut events = events_with_skipped_step();
-        let revert = ExecutionState::revert_event(&events, 5, "test reason").unwrap();
-        events.push(revert.clone());
+    fn test_cannot_skip_step_with_captured_data() {
+        let template = sample_template();
+        let mut state = ExecutionState::new();
+        state.start(&template).unwrap();
+        state
+            .record_input("step-1", "voltage", "5.0", Some("V"))
+            .unwrap();
 
-        let json = serde_json::to_string(&revert).unwrap();
-        let deserialized: Event = serde_json::from_str(&json).unwrap();
-        assert_eq!(revert, deserialized);
-
-        let jsons: Vec<String> = events
-            .iter()
-            .map(|e| serde_json::to_string(e).unwrap())
-            .collect();
-        let deserialized_events: Vec<Event> = jsons
-            .iter()
-            .map(|j| serde_json::from_str(j).unwrap())
-            .collect();
-        let state = ExecutionState::from_events(&deserialized_events).unwrap();
-        assert_eq!(state.steps["step-0"].status, StepStatus::Present);
+        let result = state.skip_step("step-1", "N/A");
+        assert_eq!(
+            result.unwrap_err(),
+            ExecutionError::StepHasCapturedData("step-1".to_string())
+        );
     }
 
     #[test]
-    fn test_from_events_with_interleaved_reverts() {
+    fn test_reversal_serialization_roundtrip() {
         let template = sample_template();
         let mut state = ExecutionState::new();
         let mut events: Vec<Event> = Vec::new();
         events.extend(state.start(&template).unwrap());
-        events.push(state.skip_step("step-0", "not needed").unwrap()); // index 5
-        events.push(
-            state
-                .record_input("step-1", "current-draw", "120", Some("mA"))
-                .unwrap(),
-        ); // index 6
+        events.push(state.skip_step("step-1", "not needed").unwrap());
+        events.push(state.unskip_step("step-1", "actually needed").unwrap());
 
-        let revert1 = ExecutionState::revert_event(&events, 5, "actually needed").unwrap();
-        events.push(revert1);
-        let revert2 = ExecutionState::revert_event(&events, 6, "wrong reading").unwrap();
-        events.push(revert2);
-
-        let rebuilt = ExecutionState::from_events(&events).unwrap();
-        assert_eq!(rebuilt.steps["step-0"].status, StepStatus::Present);
+        let jsons: Vec<String> = events
+            .iter()
+            .map(|event| serde_json::to_string(event).unwrap())
+            .collect();
+        let deserialized_events: Vec<Event> = jsons
+            .iter()
+            .map(|json| serde_json::from_str(json).unwrap())
+            .collect();
+        let rebuilt = ExecutionState::from_events(&deserialized_events).unwrap();
         assert_eq!(rebuilt.steps["step-1"].status, StepStatus::Present);
-        assert!(!rebuilt.steps["step-1"].inputs.contains_key("current-draw"));
     }
 }
