@@ -88,7 +88,8 @@ Task lists create interactive checkboxes that the operator toggles during execut
 ```
 
 !!! warning "Pure checkbox lists only"
-A list must contain **only** checkbox items (`- [ ]` or `- [x]`) to be recognized as interactive. Mixed lists (regular bullets alongside checkboxes) render as prose.
+
+    A list must contain **only** checkbox items (`- [ ]` or `- [x]`) to be recognized as interactive. Mixed lists (regular bullets alongside checkboxes) render as prose.
 
 ### Input Blocks
 

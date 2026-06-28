@@ -56,7 +56,8 @@ Procnote supports reverting previous actions. In the event history panel:
 The original event is not deleted. Instead, an `EventReverted` marker is appended to the log, preserving the full audit trail. The execution state is rebuilt by replaying only non-reverted events.
 
 !!! info "Not all events are revertible"
-Structural events like `ExecutionStarted` and `StepAdded` cannot be reverted. Data capture events (checkboxes, inputs, notes) and completion events can be reverted.
+
+    Structural events like `ExecutionStarted` and `StepAdded` cannot be reverted. Data capture events (checkboxes, inputs, notes) and completion events can be reverted.
 
 ## Reviewing Past Executions
 
