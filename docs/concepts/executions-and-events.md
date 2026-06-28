@@ -32,7 +32,7 @@ Each event carries:
 | Event                | Description                                                  |
 | -------------------- | ------------------------------------------------------------ |
 | `ExecutionStarted`   | Marks execution start; captures procedure ID, title, version |
-| `ExecutionCompleted` | Execution finished with pass or fail status                  |
+| `ExecutionCompleted` | Execution finished with pass, fail, or aborted status        |
 | `ExecutionAborted`   | Execution stopped early with a reason                        |
 
 ### Step Events
@@ -93,6 +93,10 @@ stateDiagram-v2
 ```
 
 Lifecycle rules:
+
+!!! note "Aborted completion status"
+
+    `ExecutionCompleted(Aborted)` is representable in the event model because `ExecutionCompleted` carries a general completion status. In the current UI, aborting an execution is recorded as `ExecutionAborted` so that an operator-provided reason is preserved.
 
 | Event                | Valid when             | Effect                                                     |
 | -------------------- | ---------------------- | ---------------------------------------------------------- |
