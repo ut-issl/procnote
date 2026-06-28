@@ -1,6 +1,7 @@
 <script lang="ts">
     import type { InputDefinition, InputState } from "$lib/types";
     import { formatTimestamp } from "$lib/utils/format";
+    import { isNonComposingEnter } from "$lib/utils/keyboard";
     import TrashIcon from "./TrashIcon.svelte";
 
     let {
@@ -72,7 +73,7 @@
                     ? "0.0"
                     : "Enter value"}
                 onkeydown={(e) => {
-                    if (e.key === "Enter") submit();
+                    if (isNonComposingEnter(e)) submit();
                 }}
             />
         {/if}

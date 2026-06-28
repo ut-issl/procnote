@@ -5,6 +5,7 @@
     import { executionStore } from "$lib/stores/execution.svelte";
     import type { ExecutionAction, StepContent } from "$lib/types";
     import { formatTimestamp } from "$lib/utils/format";
+    import { isNonComposingEnter } from "$lib/utils/keyboard";
     import StepCard from "$lib/components/StepCard.svelte";
     import AddStepDialog from "$lib/components/AddStepDialog.svelte";
     import Modal from "$lib/components/Modal.svelte";
@@ -137,7 +138,7 @@
                             bind:value={editNameValue}
                             onblur={saveName}
                             onkeydown={(e) => {
-                                if (e.key === "Enter") saveName();
+                                if (isNonComposingEnter(e)) saveName();
                                 if (e.key === "Escape") cancelEditName();
                             }}
                             autofocus

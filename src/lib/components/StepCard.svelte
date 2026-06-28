@@ -41,6 +41,7 @@
 
     import type { ExecutionAction, StepSummary } from "$lib/types";
     import { formatTimestamp } from "$lib/utils/format";
+    import { isNonComposingEnter } from "$lib/utils/keyboard";
     import AttachmentField from "./AttachmentField.svelte";
     import CheckboxItem from "./CheckboxItem.svelte";
     import InputField from "./InputField.svelte";
@@ -263,7 +264,7 @@
                     placeholder="Enter reason..."
                     autofocus
                     onkeydown={(e) => {
-                        if (e.key === "Enter") confirmSkip();
+                        if (isNonComposingEnter(e)) confirmSkip();
                     }}
                 />
             </label>

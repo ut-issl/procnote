@@ -1,5 +1,6 @@
 <script lang="ts">
     import type { StepContent } from "$lib/types";
+    import { isNonComposingEnter } from "$lib/utils/keyboard";
     import Modal from "./Modal.svelte";
 
     let {
@@ -48,7 +49,7 @@
             placeholder="e.g. Additional Verification"
             autofocus
             onkeydown={(e) => {
-                if (e.key === "Enter") submit();
+                if (isNonComposingEnter(e)) submit();
             }}
         />
     </label>
