@@ -34,22 +34,27 @@ Each event carries:
 | `ExecutionStarted`   | Marks execution start; captures procedure ID, title, version |
 | `ExecutionCompleted` | Execution finished with pass, fail, or aborted status        |
 | `ExecutionAborted`   | Execution stopped early with a reason                        |
+| `ExecutionReopened`  | Finished execution reopened for further work                 |
 
 ### Step Events
 
-| Event         | Description                                             |
-| ------------- | ------------------------------------------------------- |
-| `StepAdded`   | A new step was added (from template or dynamically)     |
-| `StepSkipped` | Step intentionally skipped with a reason, if applicable |
+| Event           | Description                                             |
+| --------------- | ------------------------------------------------------- |
+| `StepAdded`     | A new step was added (from template or dynamically)     |
+| `StepSkipped`   | Step intentionally skipped with a reason, if applicable |
+| `StepUnskipped` | A previously skipped step was made active again         |
 
 ### Data Capture Events
 
-| Event             | Description                                    |
-| ----------------- | ---------------------------------------------- |
-| `CheckboxToggled` | Checkbox checked or unchecked                  |
-| `InputRecorded`   | Measurement, text, or selection value recorded |
-| `AttachmentAdded` | File attached (stored with SHA-256 hash)       |
-| `NoteAdded`       | Note added to a step or to the execution       |
+| Event               | Description                                               |
+| ------------------- | --------------------------------------------------------- |
+| `CheckboxToggled`   | Checkbox checked or unchecked                             |
+| `InputRecorded`     | Measurement, text, or selection value recorded            |
+| `InputCleared`      | Previously recorded input value cleared with a reason     |
+| `AttachmentAdded`   | File attached (stored with SHA-256 hash)                  |
+| `AttachmentRemoved` | Previously attached file removed from the execution state |
+| `NoteAdded`         | Note added to a step or to the execution                  |
+| `NoteRemoved`       | Previously added note removed from the execution state    |
 
 ### Metadata & Audit Events
 
@@ -57,11 +62,10 @@ Each event carries:
 | ------------------ | ---------------------------------------------------- |
 | `LogMeta`          | First event; records schema version and tool version |
 | `ExecutionRenamed` | Execution given a human-readable name                |
-| `EventReverted`    | Marks a previous event as reverted                   |
 
 ## State Machine
 
-The current execution state is the combination of one **execution lifecycle** and step presence/skip state for each UI step. Events are applied by replaying the log in order; `LogMeta` and `EventReverted` are replay metadata rather than direct state transitions.
+The current execution state is the combination of one **execution lifecycle**, step presence/skip state for each UI step, and captured data state for each checkbox, input, attachment, and note. Events are applied by replaying the log in order; `LogMeta` is replay metadata rather than a direct state transition.
 
 ### Execution Lifecycle
 
@@ -82,10 +86,15 @@ stateDiagram-v2
     FinishedFail: Finished(Fail)
     FinishedAborted: Finished(Aborted)
 
-    Active --> Active: StepAdded / StepSkipped
-    Active --> Active: CheckboxToggled / InputRecorded / AttachmentAdded
-    Active --> Active: NoteAdded
+    Active --> Active: StepAdded / StepSkipped / StepUnskipped
+    Active --> Active: CheckboxToggled / InputRecorded / InputCleared
+    Active --> Active: AttachmentAdded / AttachmentRemoved
+    Active --> Active: NoteAdded / NoteRemoved
     Active --> Active: ExecutionRenamed
+
+    FinishedPass --> Active: ExecutionReopened
+    FinishedFail --> Active: ExecutionReopened
+    FinishedAborted --> Active: ExecutionReopened
 
     FinishedPass --> FinishedPass: ExecutionRenamed
     FinishedFail --> FinishedFail: ExecutionRenamed
@@ -98,13 +107,14 @@ Lifecycle rules:
 
     `ExecutionCompleted(Aborted)` is representable in the event model because `ExecutionCompleted` carries a general completion status. In the current UI, aborting an execution is recorded as `ExecutionAborted` so that an operator-provided reason is preserved.
 
-| Event                | Valid when             | Effect                                                     |
-| -------------------- | ---------------------- | ---------------------------------------------------------- |
-| `ExecutionStarted`   | execution is `Pending` | execution becomes `Active`; procedure metadata is captured |
-| `ExecutionCompleted` | execution is `Active`  | execution becomes `Finished(status)`                       |
-| `ExecutionAborted`   | execution is `Active`  | execution becomes `Finished(Aborted)`                      |
-| `ExecutionRenamed`   | execution has started  | name is updated; allowed after finish                      |
-| step and data events | execution is `Active`  | step collection, skip status, or captured data is updated  |
+| Event                | Valid when              | Effect                                                     |
+| -------------------- | ----------------------- | ---------------------------------------------------------- |
+| `ExecutionStarted`   | execution is `Pending`  | execution becomes `Active`; procedure metadata is captured |
+| `ExecutionCompleted` | execution is `Active`   | execution becomes `Finished(status)`                       |
+| `ExecutionAborted`   | execution is `Active`   | execution becomes `Finished(Aborted)`                      |
+| `ExecutionRenamed`   | execution has started   | name is updated; allowed after finish                      |
+| `ExecutionReopened`  | execution is `Finished` | execution becomes `Active` again                           |
+| step and data events | execution is `Active`   | step collection, skip status, or captured data is updated  |
 
 ### Step State
 
@@ -119,47 +129,108 @@ stateDiagram-v2
 
     Present --> Present: data events
     Present --> Skipped: StepSkipped
-    Skipped --> Skipped: data events
+    Skipped --> Present: StepUnskipped
 ```
 
-Here, **data events** means `CheckboxToggled`, `InputRecorded`, `AttachmentAdded`, and step-scoped `NoteAdded`. The implementation requires the execution to be active and the step to exist.
+Here, **data events** means checkbox, input, attachment, and step-scoped note events. The implementation requires the execution to be active and the step to be present, not skipped.
 
 Step state rules:
 
-| Event         | Valid when                                 | Effect                                                          |
-| ------------- | ------------------------------------------ | --------------------------------------------------------------- |
-| `StepAdded`   | execution is `Active`, `step_id` is unique | creates a `Present` step and inserts it into step order         |
-| `StepSkipped` | execution is `Active`, step is `Present`   | step becomes `Skipped`                                          |
-| data events   | execution is `Active`, step exists         | captured data or notes are updated without changing step status |
+| Event           | Valid when                                                        | Effect                                                          |
+| --------------- | ----------------------------------------------------------------- | --------------------------------------------------------------- |
+| `StepAdded`     | execution is `Active`, `step_id` is unique                        | creates a `Present` step and inserts it into step order         |
+| `StepSkipped`   | execution is `Active`, step is `Present` and has no captured data | step becomes `Skipped`                                          |
+| `StepUnskipped` | execution is `Active`, step is `Skipped`                          | step becomes `Present`                                          |
+| data events     | execution is `Active`, step is `Present`                          | captured data or notes are updated without changing step status |
 
-!!! info "Revert validation"
+### Data State
 
-    Reverting an event is not modeled as a direct reverse transition. Procnote appends an `EventReverted` marker, then rebuilds state while skipping the reverted event. Before appending the marker, it performs a **trial replay** to verify that the resulting state is valid.
+Data state is modeled per data item. Data events require the execution to be active. Step-scoped data also requires the referenced step to be present, not skipped; global notes are scoped to the execution instead.
+
+#### Checkbox State
+
+```mermaid
+stateDiagram-v2
+    direction LR
+
+    [*] --> Unchecked
+    Unchecked --> Checked: CheckboxToggled(checked=true)
+    Checked --> Unchecked: CheckboxToggled(checked=false)
+```
+
+#### Input State
+
+```mermaid
+stateDiagram-v2
+    direction LR
+
+    [*] --> Empty
+    Empty --> Recorded: InputRecorded
+    Recorded --> Empty: InputCleared
+```
+
+#### Attachment State
+
+```mermaid
+stateDiagram-v2
+    direction LR
+
+    [*] --> Empty
+    Empty --> Attached: AttachmentAdded
+    Attached --> Empty: AttachmentRemoved
+```
+
+#### Note State
+
+```mermaid
+stateDiagram-v2
+    direction LR
+
+    [*] --> NotPresent
+    NotPresent --> Present: NoteAdded
+    Present --> Removed: NoteRemoved
+```
+
+Data state rules:
+
+| Event               | Valid when                                                                      | Effect                                                 |
+| ------------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| `CheckboxToggled`   | execution is `Active`, checkbox exists in a present step                        | checkbox state becomes the event's `checked` value     |
+| `InputRecorded`     | execution is `Active`, input is `Empty` in a present step                       | input becomes `Recorded` with the captured value       |
+| `InputCleared`      | execution is `Active`, input is `Recorded` in a present step                    | input becomes `Empty`                                  |
+| `AttachmentAdded`   | execution is `Active`, attachment slot is empty in a present step               | attachment becomes `Attached`                          |
+| `AttachmentRemoved` | execution is `Active`, attachment is attached in a present step                 | attachment slot becomes `Empty`                        |
+| `NoteAdded`         | execution is `Active`, note ID is unique; target step is present if step-scoped | note becomes `Present`                                 |
+| `NoteRemoved`       | execution is `Active`, note is `Present`; target step is present if step-scoped | note becomes `Removed` and is hidden from current view |
+
+Together, the lifecycle, step, and data diagrams cover all state-affecting event types. `LogMeta` is the only event type that is purely replay metadata.
+
+!!! info "Reversal validation"
+
+    Reversing a user-visible action is modeled as another user-visible action, not as generic log editing. For example, clearing an input, unskipping a step, and reopening an execution are distinct typed events with their own validation rules.
 
 ## State Reconstruction
 
-Execution state is never stored directly. It is always **reconstructed by replaying the event log**:
-
-1. **First pass:** Collect all reverted event indices from `EventReverted` markers.
-2. **Second pass:** Apply each non-reverted event to build the current state.
+Execution state is never stored directly. It is always **reconstructed by replaying the event log** in order. Every event is applied; metadata events such as `LogMeta` are ignored by the state machine.
 
 This means the app can crash at any point and recover perfectly by re-reading the log on restart.
 
-## Reverting Events
+## Reversing Actions
 
-Events are classified into three categories by revertibility:
+Procnote does not model reversal as a generic “undo event” that points at a previous log entry. Operators do not edit the event log; they take another domain action in the UI. The event log records that action explicitly.
 
-| Category           | Events                                                                   | Can revert? |
-| ------------------ | ------------------------------------------------------------------------ | ----------- |
-| **Revertible**     | Checkboxes, inputs, notes, step skip, execution completion/abort, rename | Yes         |
-| **Not revertible** | ExecutionStarted, StepAdded, LogMeta                                     | No          |
-| **Revert marker**  | EventReverted (cannot itself be reverted)                                | No          |
+| User intent            | Event recorded      | Valid when                                   |
+| ---------------------- | ------------------- | -------------------------------------------- |
+| Clear a recorded input | `InputCleared`      | the input currently has a value              |
+| Remove an attachment   | `AttachmentRemoved` | the attachment currently exists              |
+| Remove a note          | `NoteRemoved`       | the note currently exists                    |
+| Unskip a step          | `StepUnskipped`     | the step is currently skipped                |
+| Reopen an execution    | `ExecutionReopened` | the execution is currently finished          |
+| Rename an execution    | `ExecutionRenamed`  | the execution has started                    |
+| Toggle a checkbox back | `CheckboxToggled`   | the checkbox exists in a present active step |
 
-When an event is reverted:
+This keeps replay simple: apply every event in order.
 
-1. The system validates the event is revertible and not already reverted.
-2. A trial replay is performed to ensure the resulting state is valid.
-3. An `EventReverted` marker is appended with the target event index and a reason.
-4. The original event remains in the log -- nothing is deleted.
+It also keeps reversibility type-checked. Reversible concepts have explicit event variants and explicit state-machine transitions. Adding a new event type requires deciding, in the event and state-machine code, whether it is irreversible or what typed domain action reverses its effect.
 
-This preserves a complete audit trail: you can see what was done, what was undone, and why.
+The original event remains in the log and the reversing action is appended. This preserves a complete audit trail: you can see what was done, what was later changed, and why.
