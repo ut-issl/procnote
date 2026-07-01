@@ -98,6 +98,7 @@ pub struct InputDefinitionSummary {
     pub definition: InputDefinition,
     #[ts(optional)]
     pub recorded: Option<InputState>,
+    pub attachments: Vec<AttachmentState>,
 }
 
 #[derive(Debug, Serialize, TS)]
@@ -114,6 +115,18 @@ pub struct InputState {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub sha256: Option<String>,
+}
+
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
+pub struct AttachmentState {
+    pub filename: String,
+    pub path: String,
+    pub content_type: String,
+    pub sha256: String,
+    /// ISO 8601 timestamp of when the attachment was recorded.
+    #[ts(optional)]
+    pub at: Option<String>,
 }
 
 #[derive(Debug, Serialize, TS)]
@@ -162,8 +175,8 @@ fn summarize(state: &ExecutionState, events: &[Event], execution_dir: &Path) -> 
     let mut checkbox_at: HashMap<&str, String> = HashMap::new();
     // input_id -> most recent record timestamp
     let mut input_at: HashMap<&str, String> = HashMap::new();
-    // input_id -> full SHA256 hash for attachments
-    let mut attachment_sha256: HashMap<&str, String> = HashMap::new();
+    // input_id -> attachment relative path -> add timestamp
+    let mut attachment_at: HashMap<String, HashMap<String, String>> = HashMap::new();
     // note_id -> add timestamp
     let mut note_at: HashMap<&str, String> = HashMap::new();
 
@@ -196,17 +209,32 @@ fn summarize(state: &ExecutionState, events: &[Event], execution_dir: &Path) -> 
                 input_at.remove(input_id.as_str());
             }
             Event::AttachmentAdded {
+                at, input_id, path, ..
+            } => {
+                attachment_at
+                    .entry(input_id.clone())
+                    .or_default()
+                    .insert(path.clone(), at.to_rfc3339());
+            }
+            Event::AttachmentsAdded {
                 at,
                 input_id,
-                sha256,
+                attachments,
                 ..
             } => {
-                input_at.insert(input_id, at.to_rfc3339());
-                attachment_sha256.insert(input_id, sha256.clone());
+                let entry = attachment_at.entry(input_id.clone()).or_default();
+                for attachment in attachments {
+                    entry.insert(attachment.path.clone(), at.to_rfc3339());
+                }
             }
-            Event::AttachmentRemoved { input_id, .. } => {
-                input_at.remove(input_id.as_str());
-                attachment_sha256.remove(input_id.as_str());
+            Event::AttachmentFileRemoved { input_id, path, .. } => {
+                if let Some(paths) = attachment_at.get_mut(input_id) {
+                    paths.remove(path);
+                }
+            }
+            Event::AttachmentsCleared { input_id, .. }
+            | Event::AttachmentRemoved { input_id, .. } => {
+                attachment_at.remove(input_id);
             }
             Event::NoteAdded { at, note_id, .. } => {
                 note_at.insert(note_id, at.to_rfc3339());
@@ -250,11 +278,31 @@ fn summarize(state: &ExecutionState, events: &[Event], execution_dir: &Path) -> 
                                             value: input.value.clone(),
                                             unit: input.unit.clone(),
                                             at: input_at.get(def.id.as_str()).cloned(),
-                                            sha256: attachment_sha256.get(def.id.as_str()).cloned(),
+                                            sha256: None,
                                         });
+                                    let attachments = step
+                                        .attachments
+                                        .get(&def.id)
+                                        .map(|files| {
+                                            files
+                                                .iter()
+                                                .map(|file| AttachmentState {
+                                                    filename: file.filename.clone(),
+                                                    path: file.path.clone(),
+                                                    content_type: file.content_type.clone(),
+                                                    sha256: file.sha256.clone(),
+                                                    at: attachment_at
+                                                        .get(&def.id)
+                                                        .and_then(|paths| paths.get(&file.path))
+                                                        .cloned(),
+                                                })
+                                                .collect()
+                                        })
+                                        .unwrap_or_default();
                                     InputDefinitionSummary {
                                         definition: def.clone(),
                                         recorded,
+                                        attachments,
                                     }
                                 })
                                 .collect(),
@@ -337,6 +385,15 @@ fn event_step_and_label(event: &Event) -> (Option<String>, Option<String>) {
         | Event::AttachmentAdded {
             step_id, input_id, ..
         }
+        | Event::AttachmentsAdded {
+            step_id, input_id, ..
+        }
+        | Event::AttachmentFileRemoved {
+            step_id, input_id, ..
+        }
+        | Event::AttachmentsCleared {
+            step_id, input_id, ..
+        }
         | Event::AttachmentRemoved {
             step_id, input_id, ..
         } => (Some(step_id.clone()), Some(input_id.clone())),
@@ -363,6 +420,9 @@ fn event_type_string(event: &Event) -> String {
         Event::NoteAdded { .. } => "note_added",
         Event::NoteRemoved { .. } => "note_removed",
         Event::AttachmentAdded { .. } => "attachment_added",
+        Event::AttachmentsAdded { .. } => "attachments_added",
+        Event::AttachmentFileRemoved { .. } => "attachment_file_removed",
+        Event::AttachmentsCleared { .. } => "attachments_cleared",
         Event::AttachmentRemoved { .. } => "attachment_removed",
         Event::ExecutionRenamed { .. } => "execution_renamed",
         Event::LogMeta { .. } => "log_meta",
@@ -385,6 +445,9 @@ fn event_at(event: &Event) -> String {
         | Event::NoteAdded { at, .. }
         | Event::NoteRemoved { at, .. }
         | Event::AttachmentAdded { at, .. }
+        | Event::AttachmentsAdded { at, .. }
+        | Event::AttachmentFileRemoved { at, .. }
+        | Event::AttachmentsCleared { at, .. }
         | Event::AttachmentRemoved { at, .. }
         | Event::ExecutionRenamed { at, .. }
         | Event::LogMeta { at, .. } => at.to_rfc3339(),

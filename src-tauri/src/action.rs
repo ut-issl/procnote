@@ -4,6 +4,15 @@ use ts_rs::TS;
 use procnote_core::event::types::CompletionStatus;
 use procnote_core::template::types::StepContent;
 
+/// A file selected by the frontend for attachment storage.
+#[derive(Debug, Deserialize, TS)]
+#[ts(export)]
+pub struct AttachmentSource {
+    pub filename: String,
+    pub path: String,
+    pub content_type: String,
+}
+
 /// Action payload from the frontend for recording events.
 #[derive(Debug, Deserialize, TS)]
 #[ts(export)]
@@ -57,6 +66,20 @@ pub enum ExecutionAction {
         filename: String,
         path: String,
         content_type: String,
+    },
+    AddAttachments {
+        step_id: String,
+        input_id: String,
+        files: Vec<AttachmentSource>,
+    },
+    RemoveAttachmentFile {
+        step_id: String,
+        input_id: String,
+        path: String,
+    },
+    ClearAttachments {
+        step_id: String,
+        input_id: String,
     },
     RemoveAttachment {
         step_id: String,

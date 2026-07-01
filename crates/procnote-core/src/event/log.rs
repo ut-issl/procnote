@@ -113,7 +113,7 @@ pub fn read_log(path: &Path) -> Result<Vec<Event>, EventLogError> {
 #[expect(clippy::unwrap_used, reason = "unwrap is acceptable in tests")]
 mod tests {
     use super::*;
-    use crate::event::types::{CompletionStatus, ExecutionId};
+    use crate::event::types::{AttachmentRecord, CompletionStatus, ExecutionId};
     use crate::template::types::StepContent;
     use chrono::Utc;
     use uuid::Uuid;
@@ -437,6 +437,31 @@ mod tests {
                 path: "attachments/photo.jpg".to_string(),
                 content_type: "image/jpeg".to_string(),
                 sha256: "abc123".to_string(),
+            },
+            Event::AttachmentsAdded {
+                at: now,
+                execution_id: id,
+                step_id: "step-0".to_string(),
+                input_id: "log-files".to_string(),
+                attachments: vec![AttachmentRecord {
+                    filename: "photo-2.jpg".to_string(),
+                    path: "attachments/photo-2.jpg".to_string(),
+                    content_type: "image/jpeg".to_string(),
+                    sha256: "def456".to_string(),
+                }],
+            },
+            Event::AttachmentFileRemoved {
+                at: now,
+                execution_id: id,
+                step_id: "step-0".to_string(),
+                input_id: "log-files".to_string(),
+                path: "attachments/photo-2.jpg".to_string(),
+            },
+            Event::AttachmentsCleared {
+                at: now,
+                execution_id: id,
+                step_id: "step-0".to_string(),
+                input_id: "log-files".to_string(),
             },
             Event::AttachmentRemoved {
                 at: now,

@@ -28,15 +28,15 @@ Every operator action -- toggling a checkbox, entering a measurement, completing
 
 ### Reversal Audit Trail
 
-When an action is reversed, the original event is not deleted. Instead, a typed reversing event is appended with a reason, such as `InputCleared`, `StepUnskipped`, or `ExecutionReopened`. This means you can always answer:
+When an action is reversed, the original event is not deleted. Instead, a typed reversing event is appended, such as `InputCleared`, `AttachmentFileRemoved`, `StepUnskipped`, or `ExecutionReopened`. Some higher-impact reversals capture a reason; routine attachment file deletion uses a confirmation prompt instead. This means you can always answer:
 
 - What was the original action?
 - What action changed it later?
-- Why was it changed?
+- Why was it changed, when a reason was captured?
 
 ### File Integrity
 
-Attachments are stored with a SHA-256 hash prefix in their filename (e.g., `a1b2c3d-report.pdf`), providing a built-in integrity check.
+Attachments are stored with a SHA-256 hash prefix in their filename (e.g., `a1b2c3d-report.pdf`), providing a built-in integrity check. An attachment input can contain multiple files, and each file keeps its own SHA-256 metadata.
 
 ### Git-Friendly
 

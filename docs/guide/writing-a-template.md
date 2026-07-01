@@ -139,11 +139,11 @@ Fenced code blocks with the `inputs` language tag define data-entry fields:
   expected: "PASS"
 ```
 
-**`attachment`** -- File upload. The file is stored with a SHA-256 hash prefix for integrity.
+**`attachment`** -- File upload. Operators can attach one or more files. Each file is stored with a SHA-256 hash prefix for integrity.
 
 ```yaml
-- id: log-file
-  label: "Attach log file"
+- id: log-files
+  label: "Attach log files or photos"
   type: attachment
 ```
 

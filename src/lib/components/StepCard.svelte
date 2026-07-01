@@ -39,7 +39,7 @@
 
     import "highlight.js/styles/atom-one-light.css";
 
-    import type { ExecutionAction, StepSummary } from "$lib/types";
+    import type { AttachmentSource, ExecutionAction, StepSummary } from "$lib/types";
     import { formatTimestamp } from "$lib/utils/format";
     import { isNonComposingEnter } from "$lib/utils/keyboard";
     import AttachmentField from "./AttachmentField.svelte";
@@ -110,14 +110,12 @@
         });
     }
 
-    function attachFile(inputId: string, filename: string, path: string, contentType: string) {
+    function attachFiles(inputId: string, files: AttachmentSource[]) {
         onaction({
-            action: "add_attachment",
+            action: "add_attachments",
             step_id: stepSummary.id,
             input_id: inputId,
-            filename,
-            path,
-            content_type: contentType,
+            files,
         });
     }
 
@@ -130,12 +128,20 @@
         });
     }
 
-    function removeAttachment(inputId: string) {
+    function removeAttachmentFile(inputId: string, path: string) {
         onaction({
-            action: "remove_attachment",
+            action: "remove_attachment_file",
             step_id: stepSummary.id,
             input_id: inputId,
-            reason: "Removed by operator",
+            path,
+        });
+    }
+
+    function clearAttachments(inputId: string) {
+        onaction({
+            action: "clear_attachments",
+            step_id: stepSummary.id,
+            input_id: inputId,
         });
     }
 
@@ -192,19 +198,20 @@
             <div class="step-section">
                 {#each block.inputs as input}
                     {@const revertHandler = input.recorded && executionActive
-                        ? () =>
-                              input.definition.type === "attachment"
-                                  ? removeAttachment(input.definition.id)
-                                  : clearInput(input.definition.id)
+                        ? () => clearInput(input.definition.id)
                         : undefined}
                     {#if input.definition.type === "attachment"}
                         <AttachmentField
                             definition={input.definition}
-                            recorded={input.recorded}
+                            attachments={input.attachments}
                             disabled={!isInteractable}
-                            onattach={(filename, path, contentType) =>
-                                attachFile(input.definition.id, filename, path, contentType)}
-                            onrevert={revertHandler}
+                            onattach={(files) => attachFiles(input.definition.id, files)}
+                            onremovefile={isInteractable
+                                ? (path) => removeAttachmentFile(input.definition.id, path)
+                                : undefined}
+                            onclear={isInteractable
+                                ? () => clearAttachments(input.definition.id)
+                                : undefined}
                         />
                     {:else}
                         <InputField

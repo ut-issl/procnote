@@ -116,6 +116,27 @@ fn minimal_attachment_added() {
 }
 
 #[test]
+fn minimal_attachments_added() {
+    round_trip(
+        r#"{"type":"attachments_added","at":"2025-01-01T00:00:00Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","step_id":"s1","input_id":"s1/f","attachments":[{"filename":"a.csv","path":"attachments/abc-a.csv","content_type":"text/csv","sha256":"deadbeef"}]}"#,
+    );
+}
+
+#[test]
+fn minimal_attachment_file_removed() {
+    round_trip(
+        r#"{"type":"attachment_file_removed","at":"2025-01-01T00:00:00Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","step_id":"s1","input_id":"s1/f","path":"attachments/abc-a.csv"}"#,
+    );
+}
+
+#[test]
+fn minimal_attachments_cleared() {
+    round_trip(
+        r#"{"type":"attachments_cleared","at":"2025-01-01T00:00:00Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","step_id":"s1","input_id":"s1/f"}"#,
+    );
+}
+
+#[test]
 fn minimal_attachment_removed() {
     round_trip(
         r#"{"type":"attachment_removed","at":"2025-01-01T00:00:00Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","step_id":"s1","input_id":"s1/f","reason":"wrong file"}"#,
