@@ -4,6 +4,15 @@ use uuid::Uuid;
 
 use crate::template::types::StepContent;
 
+/// Metadata for a single file stored as an attachment.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AttachmentRecord {
+    pub filename: String,
+    pub path: String,
+    pub content_type: String,
+    pub sha256: String,
+}
+
 /// Unique identifier for an execution.
 pub type ExecutionId = Uuid;
 
@@ -126,6 +135,26 @@ pub enum Event {
         content_type: String,
         sha256: String,
     },
+    AttachmentsAdded {
+        at: DateTime<Utc>,
+        execution_id: ExecutionId,
+        step_id: String,
+        input_id: String,
+        attachments: Vec<AttachmentRecord>,
+    },
+    AttachmentFileRemoved {
+        at: DateTime<Utc>,
+        execution_id: ExecutionId,
+        step_id: String,
+        input_id: String,
+        path: String,
+    },
+    AttachmentsCleared {
+        at: DateTime<Utc>,
+        execution_id: ExecutionId,
+        step_id: String,
+        input_id: String,
+    },
     AttachmentRemoved {
         at: DateTime<Utc>,
         execution_id: ExecutionId,
@@ -224,6 +253,20 @@ impl Event {
                 input_id, filename, ..
             } => {
                 format!("Recorded {input_id} = {filename}")
+            }
+            Self::AttachmentsAdded {
+                input_id,
+                attachments,
+                ..
+            } => match attachments.as_slice() {
+                [attachment] => format!("Recorded {input_id} = {}", attachment.filename),
+                _ => format!("Recorded {} attachments for {input_id}", attachments.len()),
+            },
+            Self::AttachmentFileRemoved { input_id, path, .. } => {
+                format!("Removed attachment file {path} from {input_id}")
+            }
+            Self::AttachmentsCleared { input_id, .. } => {
+                format!("Cleared attachments for {input_id}")
             }
             Self::AttachmentRemoved {
                 input_id, reason, ..

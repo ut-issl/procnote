@@ -3,10 +3,10 @@ use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 use procnote_core::event::SUPPORTED_VERSION;
-use procnote_core::event::types::{Event, ExecutionId};
+use procnote_core::event::types::{AttachmentRecord, Event, ExecutionId};
 use procnote_core::execution::ExecutionState;
 
-use crate::action::ExecutionAction;
+use crate::action::{AttachmentSource, ExecutionAction};
 use crate::persistence::attachment_store::AttachmentStore;
 use crate::persistence::event_log::{EventLog, sync_dir};
 
@@ -132,6 +132,10 @@ impl ExecutionStore {
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "central dispatch over all frontend execution actions"
+)]
 fn build_event_for_action(
     state: &ExecutionState,
     execution_dir: &Path,
@@ -201,6 +205,26 @@ fn build_event_for_action(
                 )
                 .map_err(|e| e.to_string())
         }
+        ExecutionAction::AddAttachments {
+            step_id,
+            input_id,
+            files,
+        } => {
+            let attachments = store_attachment_sources(execution_dir, files)?;
+            state
+                .add_attachments_event(&step_id, &input_id, attachments)
+                .map_err(|e| e.to_string())
+        }
+        ExecutionAction::RemoveAttachmentFile {
+            step_id,
+            input_id,
+            path,
+        } => state
+            .remove_attachment_file_event(&step_id, &input_id, &path)
+            .map_err(|e| e.to_string()),
+        ExecutionAction::ClearAttachments { step_id, input_id } => state
+            .clear_attachments_event(&step_id, &input_id)
+            .map_err(|e| e.to_string()),
         ExecutionAction::RemoveAttachment {
             step_id,
             input_id,
@@ -219,6 +243,29 @@ fn build_event_for_action(
             state.reopen_event(&reason).map_err(|e| e.to_string())
         }
     }
+}
+
+fn store_attachment_sources(
+    execution_dir: &Path,
+    sources: Vec<AttachmentSource>,
+) -> Result<Vec<AttachmentRecord>, String> {
+    if sources.is_empty() {
+        return Err("at least one attachment file is required".to_string());
+    }
+
+    let store = AttachmentStore::new(execution_dir.to_path_buf());
+    sources
+        .into_iter()
+        .map(|source| {
+            let stored = store.copy_verify_sync(Path::new(&source.path), &source.filename)?;
+            Ok(AttachmentRecord {
+                filename: stored.filename,
+                path: stored.relative_path,
+                content_type: source.content_type,
+                sha256: stored.sha256,
+            })
+        })
+        .collect()
 }
 
 /// Find the execution directory by scanning all procedure subdirectories.

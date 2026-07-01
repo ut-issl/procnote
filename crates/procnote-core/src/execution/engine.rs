@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use chrono::Utc;
 use uuid::Uuid;
 
-use crate::event::types::{CompletionStatus, Event, ExecutionId};
-use crate::template::types::{ProcedureTemplate, StepContent};
+use crate::event::types::{AttachmentRecord, CompletionStatus, Event, ExecutionId};
+use crate::template::types::{InputType, ProcedureTemplate, StepContent};
 
 /// Errors that can occur during execution state transitions.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -37,6 +37,12 @@ pub enum ExecutionError {
     InputNotRecorded(String),
     #[error("attachment not found: {0}")]
     AttachmentNotFound(String),
+    #[error("attachment already exists: {0}")]
+    AttachmentAlreadyExists(String),
+    #[error("attachment input not found: {0}")]
+    AttachmentInputNotFound(String),
+    #[error("attachment batch must not be empty")]
+    EmptyAttachmentBatch,
     #[error("note not found: {0}")]
     NoteNotFound(String),
 }
@@ -69,8 +75,10 @@ pub struct StepState {
     /// Ordered content items from the template (prose, checkboxes, input blocks).
     /// Checkbox `checked` state is mutated in-place.
     pub content: Vec<StepContent>,
-    /// Recorded input values keyed by label.
+    /// Recorded scalar input values keyed by input ID.
     pub inputs: HashMap<String, RecordedInput>,
+    /// Recorded attachments keyed by input ID.
+    pub attachments: HashMap<String, Vec<RecordedAttachment>>,
     pub notes: Vec<RecordedNote>,
 }
 
@@ -80,6 +88,26 @@ pub struct RecordedInput {
     pub label: String,
     pub value: String,
     pub unit: Option<String>,
+}
+
+/// A recorded attachment file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordedAttachment {
+    pub filename: String,
+    pub path: String,
+    pub content_type: String,
+    pub sha256: String,
+}
+
+impl From<&AttachmentRecord> for RecordedAttachment {
+    fn from(record: &AttachmentRecord) -> Self {
+        Self {
+            filename: record.filename.clone(),
+            path: record.path.clone(),
+            content_type: record.content_type.clone(),
+            sha256: record.sha256.clone(),
+        }
+    }
 }
 
 /// A recorded note.
@@ -189,6 +217,7 @@ impl ExecutionState {
                     status: StepStatus::Present,
                     content: content.clone(),
                     inputs: HashMap::new(),
+                    attachments: HashMap::new(),
                     notes: Vec::new(),
                 };
                 self.steps.insert(step_id.clone(), step_state);
@@ -313,31 +342,50 @@ impl ExecutionState {
                 step_id,
                 input_id,
                 filename,
+                path,
+                content_type,
+                sha256,
                 ..
             } => {
                 self.require_active()?;
                 let step = self.get_present_step_mut(step_id)?;
-                if step.inputs.contains_key(input_id) {
-                    return Err(ExecutionError::InputAlreadyRecorded(input_id.clone()));
-                }
-                step.inputs.insert(
-                    input_id.clone(),
-                    RecordedInput {
-                        label: input_id.clone(),
-                        value: filename.clone(),
-                        unit: None,
-                    },
-                );
+                let record = AttachmentRecord {
+                    filename: filename.clone(),
+                    path: path.clone(),
+                    content_type: content_type.clone(),
+                    sha256: sha256.clone(),
+                };
+                add_attachments_to_step(step, input_id, &[record])?;
             }
-            Event::AttachmentRemoved {
+            Event::AttachmentsAdded {
+                step_id,
+                input_id,
+                attachments,
+                ..
+            } => {
+                self.require_active()?;
+                let step = self.get_present_step_mut(step_id)?;
+                add_attachments_to_step(step, input_id, attachments)?;
+            }
+            Event::AttachmentFileRemoved {
+                step_id,
+                input_id,
+                path,
+                ..
+            } => {
+                self.require_active()?;
+                let step = self.get_present_step_mut(step_id)?;
+                remove_attachment_file_from_step(step, input_id, path)?;
+            }
+            Event::AttachmentsCleared {
+                step_id, input_id, ..
+            }
+            | Event::AttachmentRemoved {
                 step_id, input_id, ..
             } => {
                 self.require_active()?;
                 let step = self.get_present_step_mut(step_id)?;
-                step.inputs
-                    .remove(input_id)
-                    .map(|_| ())
-                    .ok_or_else(|| ExecutionError::AttachmentNotFound(input_id.clone()))?;
+                clear_attachments_from_step(step, input_id)?;
             }
 
             Event::ExecutionRenamed { name, .. } => {
@@ -688,6 +736,90 @@ impl ExecutionState {
         Ok(event)
     }
 
+    /// Build and validate a multi-attachment event without mutating this state.
+    pub fn add_attachments_event(
+        &self,
+        step_id: &str,
+        input_id: &str,
+        attachments: Vec<AttachmentRecord>,
+    ) -> Result<Event, ExecutionError> {
+        self.require_active()?;
+        self.validated_candidate(Event::AttachmentsAdded {
+            at: Utc::now(),
+            execution_id: self.require_execution_id()?,
+            step_id: step_id.to_string(),
+            input_id: input_id.to_string(),
+            attachments,
+        })
+    }
+
+    /// Add multiple attachment files during execution.
+    pub fn add_attachments(
+        &mut self,
+        step_id: &str,
+        input_id: &str,
+        attachments: Vec<AttachmentRecord>,
+    ) -> Result<Event, ExecutionError> {
+        let event = self.add_attachments_event(step_id, input_id, attachments)?;
+        self.apply(&event)?;
+        Ok(event)
+    }
+
+    /// Build and validate a single attachment-file removal event without mutating this state.
+    pub fn remove_attachment_file_event(
+        &self,
+        step_id: &str,
+        input_id: &str,
+        path: &str,
+    ) -> Result<Event, ExecutionError> {
+        self.require_active()?;
+        self.validated_candidate(Event::AttachmentFileRemoved {
+            at: Utc::now(),
+            execution_id: self.require_execution_id()?,
+            step_id: step_id.to_string(),
+            input_id: input_id.to_string(),
+            path: path.to_string(),
+        })
+    }
+
+    /// Remove a single attachment file during execution.
+    pub fn remove_attachment_file(
+        &mut self,
+        step_id: &str,
+        input_id: &str,
+        path: &str,
+    ) -> Result<Event, ExecutionError> {
+        let event = self.remove_attachment_file_event(step_id, input_id, path)?;
+        self.apply(&event)?;
+        Ok(event)
+    }
+
+    /// Build and validate an attachments-cleared event without mutating this state.
+    pub fn clear_attachments_event(
+        &self,
+        step_id: &str,
+        input_id: &str,
+    ) -> Result<Event, ExecutionError> {
+        self.require_active()?;
+        self.validated_candidate(Event::AttachmentsCleared {
+            at: Utc::now(),
+            execution_id: self.require_execution_id()?,
+            step_id: step_id.to_string(),
+            input_id: input_id.to_string(),
+        })
+    }
+
+    /// Clear all attachments for an input during execution.
+    pub fn clear_attachments(
+        &mut self,
+        step_id: &str,
+        input_id: &str,
+    ) -> Result<Event, ExecutionError> {
+        let event = self.clear_attachments_event(step_id, input_id)?;
+        self.apply(&event)?;
+        Ok(event)
+    }
+
     /// Build and validate an attachment-removed event without mutating this state.
     pub fn remove_attachment_event(
         &self,
@@ -846,9 +978,96 @@ impl ExecutionState {
     }
 }
 
+fn add_attachments_to_step(
+    step: &mut StepState,
+    input_id: &str,
+    attachments: &[AttachmentRecord],
+) -> Result<(), ExecutionError> {
+    if attachments.is_empty() {
+        return Err(ExecutionError::EmptyAttachmentBatch);
+    }
+    step.require_attachment_input(input_id)?;
+    if step.inputs.contains_key(input_id) {
+        return Err(ExecutionError::InputAlreadyRecorded(input_id.to_string()));
+    }
+    if let Some(duplicate) = duplicate_attachment_path(attachments) {
+        return Err(ExecutionError::AttachmentAlreadyExists(duplicate));
+    }
+
+    let existing = step.attachments.entry(input_id.to_string()).or_default();
+    if let Some(duplicate) = attachments
+        .iter()
+        .find(|record| existing.iter().any(|stored| stored.path == record.path))
+    {
+        return Err(ExecutionError::AttachmentAlreadyExists(
+            duplicate.path.clone(),
+        ));
+    }
+
+    existing.extend(attachments.iter().map(RecordedAttachment::from));
+    Ok(())
+}
+
+fn duplicate_attachment_path(attachments: &[AttachmentRecord]) -> Option<String> {
+    attachments.iter().enumerate().find_map(|(index, record)| {
+        attachments
+            .iter()
+            .skip(index + 1)
+            .any(|other| other.path == record.path)
+            .then(|| record.path.clone())
+    })
+}
+
+fn remove_attachment_file_from_step(
+    step: &mut StepState,
+    input_id: &str,
+    path: &str,
+) -> Result<(), ExecutionError> {
+    let files = step
+        .attachments
+        .get_mut(input_id)
+        .ok_or_else(|| ExecutionError::AttachmentNotFound(input_id.to_string()))?;
+    let index = files
+        .iter()
+        .position(|file| file.path == path)
+        .ok_or_else(|| ExecutionError::AttachmentNotFound(path.to_string()))?;
+    files.remove(index);
+    if files.is_empty() {
+        step.attachments.remove(input_id);
+    }
+    Ok(())
+}
+
+fn clear_attachments_from_step(step: &mut StepState, input_id: &str) -> Result<(), ExecutionError> {
+    match step.attachments.remove(input_id) {
+        Some(files) if !files.is_empty() => Ok(()),
+        _ => Err(ExecutionError::AttachmentNotFound(input_id.to_string())),
+    }
+}
+
 impl StepState {
+    fn require_attachment_input(&self, input_id: &str) -> Result<(), ExecutionError> {
+        match self.input_type(input_id) {
+            Some(InputType::Attachment) => Ok(()),
+            Some(_) | None => Err(ExecutionError::AttachmentInputNotFound(
+                input_id.to_string(),
+            )),
+        }
+    }
+
+    fn input_type(&self, input_id: &str) -> Option<&InputType> {
+        self.content.iter().find_map(|item| match item {
+            StepContent::InputBlock { inputs } => inputs
+                .iter()
+                .find(|definition| definition.id == input_id)
+                .map(|definition| &definition.input_type),
+            _ => None,
+        })
+    }
+
     fn has_captured_data(&self) -> bool {
         !self.inputs.is_empty()
+            || self.attachments.values().any(|files| !files.is_empty())
             || !self.notes.is_empty()
             || self
                 .content
@@ -867,7 +1086,9 @@ impl Default for ExecutionState {
 #[expect(clippy::unwrap_used, reason = "unwrap is acceptable in tests")]
 mod tests {
     use super::*;
-    use crate::template::types::{ProcedureMetadata, ProcedureTemplate, Step, StepContent};
+    use crate::template::types::{
+        InputDefinition, InputType, ProcedureMetadata, ProcedureTemplate, Step, StepContent,
+    };
 
     fn sample_template() -> ProcedureTemplate {
         ProcedureTemplate {
@@ -892,7 +1113,26 @@ mod tests {
                 Step {
                     id: None,
                     heading: "Step 1: Power On".to_string(),
-                    content: vec![],
+                    content: vec![StepContent::InputBlock {
+                        inputs: vec![
+                            InputDefinition {
+                                id: "log-file".to_string(),
+                                label: "Log file".to_string(),
+                                input_type: InputType::Attachment,
+                                unit: None,
+                                options: vec![],
+                                expected: None,
+                            },
+                            InputDefinition {
+                                id: "photos".to_string(),
+                                label: "Photos".to_string(),
+                                input_type: InputType::Attachment,
+                                unit: None,
+                                options: vec![],
+                                expected: None,
+                            },
+                        ],
+                    }],
                 },
                 Step {
                     id: None,
@@ -1095,8 +1335,10 @@ mod tests {
             )
             .unwrap();
 
-        let input = &state.steps["step-1"].inputs["log-file"];
-        assert_eq!(input.value, "photo.jpg");
+        let attachments = &state.steps["step-1"].attachments["log-file"];
+        assert_eq!(attachments.len(), 1);
+        assert_eq!(attachments[0].filename, "photo.jpg");
+        assert_eq!(attachments[0].path, "attachments/photo.jpg");
     }
 
     #[test]
@@ -1197,7 +1439,47 @@ mod tests {
             .remove_attachment("step-1", "log-file", "wrong file")
             .unwrap();
 
-        assert!(!state.steps["step-1"].inputs.contains_key("log-file"));
+        assert!(!state.steps["step-1"].attachments.contains_key("log-file"));
+    }
+
+    #[test]
+    fn test_multi_file_attachment_remove_one_and_clear_all() {
+        let template = sample_template();
+        let mut state = ExecutionState::new();
+        state.start(&template).unwrap();
+
+        state
+            .add_attachments(
+                "step-1",
+                "photos",
+                vec![
+                    AttachmentRecord {
+                        filename: "before.jpg".to_string(),
+                        path: "attachments/aaaaaaa-before.jpg".to_string(),
+                        content_type: "image/jpeg".to_string(),
+                        sha256: "aaaaaaa".to_string(),
+                    },
+                    AttachmentRecord {
+                        filename: "after.jpg".to_string(),
+                        path: "attachments/bbbbbbb-after.jpg".to_string(),
+                        content_type: "image/jpeg".to_string(),
+                        sha256: "bbbbbbb".to_string(),
+                    },
+                ],
+            )
+            .unwrap();
+
+        assert_eq!(state.steps["step-1"].attachments["photos"].len(), 2);
+
+        state
+            .remove_attachment_file("step-1", "photos", "attachments/aaaaaaa-before.jpg")
+            .unwrap();
+        let attachments = &state.steps["step-1"].attachments["photos"];
+        assert_eq!(attachments.len(), 1);
+        assert_eq!(attachments[0].filename, "after.jpg");
+
+        state.clear_attachments("step-1", "photos").unwrap();
+        assert!(!state.steps["step-1"].attachments.contains_key("photos"));
     }
 
     #[test]

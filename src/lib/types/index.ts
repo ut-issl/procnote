@@ -1,5 +1,7 @@
 // Re-export generated types from ts-rs.
 // Regenerate with: cargo test --workspace export_bindings_
+export type { AttachmentSource } from "./generated/AttachmentSource";
+export type { AttachmentState } from "./generated/AttachmentState";
 export type { CompletionStatus } from "./generated/CompletionStatus";
 export type { Equipment } from "./generated/Equipment";
 export type { EventHistoryEntry } from "./generated/EventHistoryEntry";

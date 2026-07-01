@@ -29,7 +29,17 @@ impl AttachmentStore {
         filename: &str,
     ) -> Result<StoredAttachment, String> {
         let bytes = std::fs::read(source).map_err(|e| e.to_string())?;
-        let sha256 = hex_encode(Sha256::digest(&bytes).as_ref());
+        self.write_bytes_verify_sync(filename, &bytes)
+    }
+
+    /// Store attachment bytes in the execution directory and sync them before
+    /// the caller commits the corresponding event.
+    pub fn write_bytes_verify_sync(
+        &self,
+        filename: &str,
+        bytes: &[u8],
+    ) -> Result<StoredAttachment, String> {
+        let sha256 = hex_encode(Sha256::digest(bytes).as_ref());
         let short_hash = &sha256[..7];
         let stored_name = format!("{short_hash}-{filename}");
         let attachments_dir = self.execution_dir.join("attachments");
@@ -57,7 +67,7 @@ impl AttachmentStore {
             .write(true)
             .open(&destination)
             .map_err(|e| e.to_string())?;
-        file.write_all(&bytes).map_err(|e| e.to_string())?;
+        file.write_all(bytes).map_err(|e| e.to_string())?;
         file.flush().map_err(|e| e.to_string())?;
         file.sync_all().map_err(|e| e.to_string())?;
         sync_dir(&attachments_dir).map_err(|e| e.to_string())?;

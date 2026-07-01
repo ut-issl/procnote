@@ -50,7 +50,7 @@ When all steps are done:
 Procnote supports reversing operator actions through normal UI actions:
 
 - Clear a recorded input before recording a new value.
-- Remove an attachment or note.
+- Remove an attachment file or note.
 - Unskip a skipped step.
 - Reopen a completed or aborted execution.
 - Toggle a checkbox back to its previous value.
@@ -78,7 +78,8 @@ my-workspace/
             ├── events.jsonl
             ├── template.md
             └── attachments/
-                └── a1b2c3d-report.pdf
+                ├── a1b2c3d-report.pdf
+                └── d4e5f6a-photo.jpg
 ```
 
 The `events.jsonl` file is the single source of truth. It is append-only and never modified after creation.

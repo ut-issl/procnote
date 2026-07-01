@@ -1,89 +1,167 @@
 <script lang="ts">
-    import type { InputDefinition, InputState } from "$lib/types";
+    import type { AttachmentSource, AttachmentState, InputDefinition } from "$lib/types";
     import { formatTimestamp } from "$lib/utils/format";
     import { inferContentType } from "$lib/utils/mime";
-    import { open } from "@tauri-apps/plugin-dialog";
+    import { confirm as confirmDialog, open } from "@tauri-apps/plugin-dialog";
     import TrashIcon from "./TrashIcon.svelte";
 
     let {
         definition,
-        recorded,
+        attachments = [],
         disabled = false,
         onattach,
-        onrevert,
+        onremovefile,
+        onclear,
     }: {
         definition: InputDefinition;
-        recorded?: InputState;
+        attachments?: AttachmentState[];
         disabled?: boolean;
-        onattach: (filename: string, path: string, contentType: string) => void;
-        onrevert?: () => void;
+        onattach: (files: AttachmentSource[]) => void;
+        onremovefile?: (path: string) => void;
+        onclear?: () => void;
     } = $props();
 
-    let selectedPath = $state<string | null>(null);
-    let selectedFilename = $state<string | null>(null);
+    let selectedFiles = $state<AttachmentSource[]>([]);
 
-    let isRecorded = $derived(!!recorded);
+    let isRecorded = $derived(attachments.length > 0);
+    let hasSelectedFiles = $derived(selectedFiles.length > 0);
 
-    async function pickFile() {
+    function filenameFromPath(path: string): string {
+        return path.split(/[/\\]/).pop() ?? path;
+    }
+
+    async function pickFiles() {
         const result = await open({
-            multiple: false,
+            multiple: true,
             directory: false,
             title: definition.label,
         });
-        if (result) {
-            selectedPath = result;
-            selectedFilename = result.split(/[/\\]/).pop() ?? result;
-        }
+        if (!result) return;
+
+        const paths = Array.isArray(result) ? result : [result];
+        selectedFiles = [
+            ...selectedFiles,
+            ...paths.map((path) => {
+                const filename = filenameFromPath(path);
+                return {
+                    filename,
+                    path,
+                    content_type: inferContentType(filename),
+                };
+            }),
+        ];
     }
 
-    function confirm() {
-        if (selectedPath && selectedFilename) {
-            const contentType = inferContentType(selectedFilename);
-            onattach(selectedFilename, selectedPath, contentType);
-            selectedPath = null;
-            selectedFilename = null;
-        }
+    function attachSelected() {
+        if (selectedFiles.length === 0) return;
+        onattach(selectedFiles);
+        selectedFiles = [];
     }
 
-    function clear() {
-        selectedPath = null;
-        selectedFilename = null;
+    function removeSelected(index: number) {
+        selectedFiles = selectedFiles.filter((_, i) => i !== index);
+    }
+
+    function clearSelected() {
+        selectedFiles = [];
+    }
+
+    async function confirmRemoveFile(file: AttachmentState) {
+        if (!onremovefile) return;
+        const ok = await confirmDialog(`Remove ${file.filename}?`, {
+            title: "Remove attachment",
+            kind: "warning",
+            okLabel: "Remove",
+            cancelLabel: "Cancel",
+        });
+        if (ok) onremovefile(file.path);
+    }
+
+    async function confirmClearAll() {
+        if (!onclear) return;
+        const ok = await confirmDialog(
+            `Remove all ${attachments.length} attachments from ${definition.label}?`,
+            {
+                title: "Remove all attachments",
+                kind: "warning",
+                okLabel: "Remove all",
+                cancelLabel: "Cancel",
+            },
+        );
+        if (ok) onclear();
     }
 </script>
 
 <div class="input-field" class:recorded={isRecorded}>
     <div class="input-header">
         <span class="input-label">{definition.label}</span>
-    </div>
-    <div class="input-row">
         {#if isRecorded}
-            <span class="filename">{recorded?.value}</span>
-            {#if recorded?.sha256}
-                <span class="hash">{recorded.sha256.slice(0, 7)}</span>
-            {/if}
-            <span class="recorded-badge">Recorded</span>
-            {#if recorded?.at}
-                <span class="timestamp">{formatTimestamp(recorded.at)}</span>
-            {/if}
-            {#if onrevert}
-                <button class="btn-delete" title="Delete recorded value" onclick={onrevert}>
-                    <TrashIcon />
-                </button>
-            {/if}
-        {:else if selectedFilename}
-            <span class="filename">{selectedFilename}</span>
-            <button class="btn-record" onclick={confirm} disabled={disabled}>
-                Attach
-            </button>
-            <button class="btn-clear" onclick={clear} disabled={disabled}>
-                Clear
-            </button>
-        {:else}
-            <button class="btn-choose" onclick={pickFile} disabled={disabled}>
-                Choose File
-            </button>
+            <span class="recorded-badge">{attachments.length} attached</span>
         {/if}
     </div>
+
+    {#if isRecorded}
+        <div class="attachment-list">
+            {#each attachments as file}
+                <div class="attachment-row">
+                    <span class="filename" title={file.path}>{file.filename}</span>
+                    <span class="hash">{file.sha256.slice(0, 7)}</span>
+                    {#if file.at}
+                        <span class="timestamp">{formatTimestamp(file.at)}</span>
+                    {/if}
+                    {#if onremovefile}
+                        <button
+                            class="btn-delete"
+                            title="Remove attachment"
+                            onclick={() => confirmRemoveFile(file)}
+                            disabled={disabled}
+                        >
+                            <TrashIcon />
+                        </button>
+                    {/if}
+                </div>
+            {/each}
+        </div>
+        {#if onclear && attachments.length > 1}
+            <div class="input-row row-actions">
+                <button class="btn-clear" onclick={confirmClearAll} disabled={disabled}>
+                    Remove All
+                </button>
+            </div>
+        {/if}
+    {:else if hasSelectedFiles}
+        <div class="attachment-list">
+            {#each selectedFiles as file, index}
+                <div class="attachment-row">
+                    <span class="filename" title={file.path}>{file.filename}</span>
+                    <button
+                        class="btn-clear"
+                        onclick={() => removeSelected(index)}
+                        disabled={disabled}
+                    >
+                        Remove
+                    </button>
+                </div>
+            {/each}
+        </div>
+        <div class="input-row row-actions">
+            <button class="btn-record" onclick={attachSelected} disabled={disabled}>
+                Attach {selectedFiles.length} {selectedFiles.length === 1 ? "File" : "Files"}
+            </button>
+            <button class="btn-choose" onclick={pickFiles} disabled={disabled}>
+                Add More
+            </button>
+            <button class="btn-clear" onclick={clearSelected} disabled={disabled}>
+                Clear
+            </button>
+        </div>
+    {:else}
+        <div class="input-row">
+            <button class="btn-choose" onclick={pickFiles} disabled={disabled}>
+                Choose Files
+            </button>
+        </div>
+    {/if}
 </div>
 
 <style>
@@ -104,6 +182,7 @@
         justify-content: space-between;
         align-items: baseline;
         margin-bottom: 6px;
+        gap: 8px;
     }
 
     .input-label {
@@ -112,10 +191,25 @@
         color: #555;
     }
 
-    .input-row {
+    .input-row,
+    .attachment-row {
         display: flex;
         align-items: center;
         gap: 8px;
+    }
+
+    .row-actions {
+        margin-top: 8px;
+    }
+
+    .attachment-list {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+    }
+
+    .attachment-row {
+        min-height: 28px;
     }
 
     .filename {
@@ -175,10 +269,41 @@
         white-space: nowrap;
     }
 
+    .timestamp {
+        font-size: 11px;
+        color: #888;
+        white-space: nowrap;
+    }
+
     .recorded-badge {
         font-size: 11px;
         font-weight: 600;
         color: #2e7d32;
         white-space: nowrap;
+    }
+
+    .btn-delete {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 24px;
+        height: 24px;
+        padding: 0;
+        border: none;
+        border-radius: 4px;
+        background: transparent;
+        color: #888;
+        cursor: pointer;
+        flex-shrink: 0;
+    }
+
+    .btn-delete:hover:not(:disabled) {
+        background: #ffcdd2;
+        color: #c62828;
+    }
+
+    .btn-delete:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
     }
 </style>

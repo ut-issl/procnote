@@ -171,13 +171,18 @@ stateDiagram-v2
 
 #### Attachment State
 
+Attachment inputs can contain zero or more files. A single operator action can add one file or a batch of files.
+
 ```mermaid
 stateDiagram-v2
     direction LR
 
     [*] --> Empty
-    Empty --> Attached: AttachmentAdded
-    Attached --> Empty: AttachmentRemoved
+    Empty --> HasFiles: AttachmentAdded / AttachmentsAdded
+    HasFiles --> HasFiles: AttachmentAdded / AttachmentsAdded
+    HasFiles --> HasFiles: AttachmentFileRemoved
+    HasFiles --> Empty: AttachmentFileRemoved (last file)
+    HasFiles --> Empty: AttachmentsCleared / AttachmentRemoved
 ```
 
 #### Note State
@@ -193,15 +198,18 @@ stateDiagram-v2
 
 Data state rules:
 
-| Event               | Valid when                                                                      | Effect                                                 |
-| ------------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| `CheckboxToggled`   | execution is `Active`, checkbox exists in a present step                        | checkbox state becomes the event's `checked` value     |
-| `InputRecorded`     | execution is `Active`, input is `Empty` in a present step                       | input becomes `Recorded` with the captured value       |
-| `InputCleared`      | execution is `Active`, input is `Recorded` in a present step                    | input becomes `Empty`                                  |
-| `AttachmentAdded`   | execution is `Active`, attachment slot is empty in a present step               | attachment becomes `Attached`                          |
-| `AttachmentRemoved` | execution is `Active`, attachment is attached in a present step                 | attachment slot becomes `Empty`                        |
-| `NoteAdded`         | execution is `Active`, note ID is unique; target step is present if step-scoped | note becomes `Present`                                 |
-| `NoteRemoved`       | execution is `Active`, note is `Present`; target step is present if step-scoped | note becomes `Removed` and is hidden from current view |
+| Event                   | Valid when                                                                      | Effect                                                 |
+| ----------------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| `CheckboxToggled`       | execution is `Active`, checkbox exists in a present step                        | checkbox state becomes the event's `checked` value     |
+| `InputRecorded`         | execution is `Active`, input is `Empty` in a present step                       | input becomes `Recorded` with the captured value       |
+| `InputCleared`          | execution is `Active`, input is `Recorded` in a present step                    | input becomes `Empty`                                  |
+| `AttachmentAdded`       | execution is `Active` and target step is present                                | one attachment file is added                           |
+| `AttachmentsAdded`      | execution is `Active`, target step is present, and batch is non-empty           | one or more attachment files are added                 |
+| `AttachmentFileRemoved` | execution is `Active`, target step is present, and file exists                  | one attachment file is removed                         |
+| `AttachmentsCleared`    | execution is `Active`, target step is present, and input has attachments        | all files for the attachment input are removed         |
+| `AttachmentRemoved`     | legacy event: execution is `Active` and attachment input has attachments        | all files for the attachment input are removed         |
+| `NoteAdded`             | execution is `Active`, note ID is unique; target step is present if step-scoped | note becomes `Present`                                 |
+| `NoteRemoved`           | execution is `Active`, note is `Present`; target step is present if step-scoped | note becomes `Removed` and is hidden from current view |
 
 Together, the lifecycle, step, and data diagrams cover all state-affecting event types. `LogMeta` is the only event type that is purely replay metadata.
 
@@ -219,18 +227,19 @@ This means the app can crash at any point and recover perfectly by re-reading th
 
 Procnote does not model reversal as a generic “undo event” that points at a previous log entry. Operators do not edit the event log; they take another domain action in the UI. The event log records that action explicitly.
 
-| User intent            | Event recorded      | Valid when                                   |
-| ---------------------- | ------------------- | -------------------------------------------- |
-| Clear a recorded input | `InputCleared`      | the input currently has a value              |
-| Remove an attachment   | `AttachmentRemoved` | the attachment currently exists              |
-| Remove a note          | `NoteRemoved`       | the note currently exists                    |
-| Unskip a step          | `StepUnskipped`     | the step is currently skipped                |
-| Reopen an execution    | `ExecutionReopened` | the execution is currently finished          |
-| Rename an execution    | `ExecutionRenamed`  | the execution has started                    |
-| Toggle a checkbox back | `CheckboxToggled`   | the checkbox exists in a present active step |
+| User intent                | Event recorded          | Valid when                                   |
+| -------------------------- | ----------------------- | -------------------------------------------- |
+| Clear a recorded input     | `InputCleared`          | the input currently has a value              |
+| Remove one attachment file | `AttachmentFileRemoved` | the attachment file currently exists         |
+| Clear all attachments      | `AttachmentsCleared`    | the attachment input currently has files     |
+| Remove a note              | `NoteRemoved`           | the note currently exists                    |
+| Unskip a step              | `StepUnskipped`         | the step is currently skipped                |
+| Reopen an execution        | `ExecutionReopened`     | the execution is currently finished          |
+| Rename an execution        | `ExecutionRenamed`      | the execution has started                    |
+| Toggle a checkbox back     | `CheckboxToggled`       | the checkbox exists in a present active step |
 
 This keeps replay simple: apply every event in order.
 
 It also keeps reversibility type-checked. Reversible concepts have explicit event variants and explicit state-machine transitions. Adding a new event type requires deciding, in the event and state-machine code, whether it is irreversible or what typed domain action reverses its effect.
 
-The original event remains in the log and the reversing action is appended. This preserves a complete audit trail: you can see what was done, what was later changed, and why.
+The original event remains in the log and the reversing action is appended. This preserves a complete audit trail: you can see what was done, what was later changed, and the reason where the UI captures one.

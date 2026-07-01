@@ -76,12 +76,12 @@ A list must contain **only** checkbox items to be treated as interactive. Mixed 
 
 Fenced code blocks with the `inputs` language tag define data-entry fields. Four input types are supported:
 
-| Type          | Purpose         | Key fields                             |
-| ------------- | --------------- | -------------------------------------- |
-| `measurement` | Numeric value   | `unit`, `expected.min`, `expected.max` |
-| `text`        | Free-form text  | --                                     |
-| `selection`   | Dropdown choice | `options`, `expected`                  |
-| `attachment`  | File upload     | --                                     |
+| Type          | Purpose           | Key fields                             |
+| ------------- | ----------------- | -------------------------------------- |
+| `measurement` | Numeric value     | `unit`, `expected.min`, `expected.max` |
+| `text`        | Free-form text    | --                                     |
+| `selection`   | Dropdown choice   | `options`, `expected`                  |
+| `attachment`  | One or more files | --                                     |
 
 Every input has an `id` (unique within the step) and a `label`.
 
