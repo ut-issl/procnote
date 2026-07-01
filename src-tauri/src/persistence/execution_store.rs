@@ -20,6 +20,12 @@ pub struct RecordedExecution {
     pub execution_dir: PathBuf,
 }
 
+pub struct AttachmentBytesSource {
+    pub filename: String,
+    pub content_type: String,
+    pub bytes: Vec<u8>,
+}
+
 impl ExecutionStore {
     #[must_use]
     pub const fn new(procedures_dir: PathBuf) -> Self {
@@ -117,6 +123,46 @@ impl ExecutionStore {
                 let mut state = ExecutionState::from_events(&events).map_err(|e| e.to_string())?;
 
                 let event = build_event_for_action(&state, &execution_dir, action)?;
+                EventLog::new(log_path.clone())
+                    .append_durable(&event)
+                    .map_err(|e| e.to_string())?;
+                state.apply(&event).map_err(|e| e.to_string())?;
+                events.push(event);
+                Ok(RecordedExecution {
+                    state,
+                    events,
+                    execution_dir,
+                })
+            })
+            .map_err(|e| e.to_string())?
+    }
+
+    pub fn record_attachment_bytes_batch(
+        &self,
+        execution_id: ExecutionId,
+        step_id: &str,
+        input_id: &str,
+        files: Vec<AttachmentBytesSource>,
+    ) -> Result<RecordedExecution, String> {
+        let execution_dir = find_execution_dir(&self.procedures_dir, execution_id)
+            .ok_or_else(|| format!("Execution not found: {execution_id}"))?;
+        let log_path = execution_dir.join("events.jsonl");
+        if !log_path.exists() {
+            return Err(format!("Execution not found: {execution_id}"));
+        }
+        let event_log = EventLog::new(log_path.clone());
+
+        event_log
+            .with_exclusive_lock(|| {
+                let mut events = EventLog::new(log_path.clone())
+                    .read()
+                    .map_err(|e| e.to_string())?;
+                let mut state = ExecutionState::from_events(&events).map_err(|e| e.to_string())?;
+
+                let attachments = store_attachment_bytes(&execution_dir, files)?;
+                let event = state
+                    .add_attachments_event(step_id, input_id, attachments)
+                    .map_err(|e| e.to_string())?;
                 EventLog::new(log_path.clone())
                     .append_durable(&event)
                     .map_err(|e| e.to_string())?;
@@ -258,6 +304,29 @@ fn store_attachment_sources(
         .into_iter()
         .map(|source| {
             let stored = store.copy_verify_sync(Path::new(&source.path), &source.filename)?;
+            Ok(AttachmentRecord {
+                filename: stored.filename,
+                path: stored.relative_path,
+                content_type: source.content_type,
+                sha256: stored.sha256,
+            })
+        })
+        .collect()
+}
+
+fn store_attachment_bytes(
+    execution_dir: &Path,
+    sources: Vec<AttachmentBytesSource>,
+) -> Result<Vec<AttachmentRecord>, String> {
+    if sources.is_empty() {
+        return Err("at least one attachment file is required".to_string());
+    }
+
+    let store = AttachmentStore::new(execution_dir.to_path_buf());
+    sources
+        .into_iter()
+        .map(|source| {
+            let stored = store.write_bytes_verify_sync(&source.filename, &source.bytes)?;
             Ok(AttachmentRecord {
                 filename: stored.filename,
                 path: stored.relative_path,

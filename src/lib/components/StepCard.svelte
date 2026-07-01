@@ -39,7 +39,15 @@
 
     import "highlight.js/styles/atom-one-light.css";
 
-    import type { AttachmentSource, ExecutionAction, StepSummary } from "$lib/types";
+    import * as api from "$lib/api/commands";
+    import type {
+        AttachmentDropPointSessionSummary,
+        AttachmentDropPointStatus,
+        AttachmentSource,
+        ExecutionAction,
+        ExecutionSummary,
+        StepSummary,
+    } from "$lib/types";
     import { formatTimestamp } from "$lib/utils/format";
     import { isNonComposingEnter } from "$lib/utils/keyboard";
     import AttachmentField from "./AttachmentField.svelte";
@@ -65,12 +73,18 @@
 
     let {
         stepSummary,
+        executionId,
         executionActive = false,
+        dropPointEnabled = false,
         onaction,
+        ondropimported,
     }: {
         stepSummary: StepSummary;
+        executionId: string;
         executionActive?: boolean;
+        dropPointEnabled?: boolean;
         onaction: (action: ExecutionAction) => void;
+        ondropimported?: (summary: ExecutionSummary) => void;
     } = $props();
 
     let isPresent = $derived(stepSummary.status === "present");
@@ -145,6 +159,30 @@
         });
     }
 
+    function startDropPointSession(
+        inputId: string,
+    ): Promise<AttachmentDropPointSessionSummary> {
+        return api.startAttachmentDropPointSession(executionId, stepSummary.id, inputId);
+    }
+
+    function pollDropPointSession(sessionId: string): Promise<AttachmentDropPointStatus> {
+        return api.pollAttachmentDropPointSession(sessionId);
+    }
+
+    async function importDropPointUpload(inputId: string, sessionId: string) {
+        const summary = await api.importAttachmentDropPointUpload(
+            executionId,
+            stepSummary.id,
+            inputId,
+            sessionId,
+        );
+        ondropimported?.(summary);
+    }
+
+    function cancelDropPointSession(sessionId: string): Promise<void> {
+        return api.cancelAttachmentDropPointSession(sessionId);
+    }
+
     function addNote(text: string) {
         onaction({
             action: "add_note",
@@ -205,6 +243,7 @@
                             definition={input.definition}
                             attachments={input.attachments}
                             disabled={!isInteractable}
+                            dropPointEnabled={dropPointEnabled && isInteractable}
                             onattach={(files) => attachFiles(input.definition.id, files)}
                             onremovefile={isInteractable
                                 ? (path) => removeAttachmentFile(input.definition.id, path)
@@ -212,6 +251,11 @@
                             onclear={isInteractable
                                 ? () => clearAttachments(input.definition.id)
                                 : undefined}
+                            onstartdrop={() => startDropPointSession(input.definition.id)}
+                            onpolldrop={pollDropPointSession}
+                            onimportdrop={(sessionId) =>
+                                importDropPointUpload(input.definition.id, sessionId)}
+                            oncanceldrop={cancelDropPointSession}
                         />
                     {:else}
                         <InputField

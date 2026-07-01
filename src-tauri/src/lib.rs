@@ -1,5 +1,6 @@
 mod action;
 mod commands;
+mod drop_point;
 mod persistence;
 mod state;
 
@@ -8,8 +9,14 @@ use std::path::{Path, PathBuf};
 use clap::Parser;
 use tauri::Manager;
 
+use commands::drop_point::{
+    cancel_attachment_drop_point_session, import_attachment_drop_point_upload,
+    is_drop_point_configured, poll_attachment_drop_point_session,
+    start_attachment_drop_point_session,
+};
 use commands::execution::{get_execution_state, list_executions, record_action, start_execution};
 use commands::template::{list_templates, load_template};
+use drop_point::{DropPointConfig, DropPointSessions};
 use state::AppState;
 
 /// Command-line arguments shared by both binary crates.
@@ -63,7 +70,19 @@ pub fn run(workspace: &Path) {
                 )?;
             }
 
-            app.manage(AppState { procedures_dir });
+            let drop_point_config = match DropPointConfig::from_env() {
+                Ok(config) => config,
+                Err(e) => {
+                    log::warn!("DropPoint disabled: {e}");
+                    None
+                }
+            };
+
+            app.manage(AppState {
+                procedures_dir,
+                drop_point_config,
+            });
+            app.manage(DropPointSessions::default());
 
             Ok(())
         })
@@ -74,6 +93,11 @@ pub fn run(workspace: &Path) {
             record_action,
             get_execution_state,
             list_executions,
+            is_drop_point_configured,
+            start_attachment_drop_point_session,
+            poll_attachment_drop_point_session,
+            import_attachment_drop_point_upload,
+            cancel_attachment_drop_point_session,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

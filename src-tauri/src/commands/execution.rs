@@ -162,7 +162,11 @@ fn step_status_string(status: &StepStatus) -> String {
     clippy::too_many_lines,
     reason = "large match over all event variants to build summary"
 )]
-fn summarize(state: &ExecutionState, events: &[Event], execution_dir: &Path) -> ExecutionSummary {
+pub(super) fn summarize(
+    state: &ExecutionState,
+    events: &[Event],
+    execution_dir: &Path,
+) -> ExecutionSummary {
     use std::collections::HashMap;
 
     // Build timestamp lookup maps.
@@ -478,7 +482,7 @@ fn find_execution_dir(procedures_dir: &Path, execution_id: ExecutionId) -> Optio
 }
 
 /// Load an execution from disk by replaying its event log.
-fn load_execution_from_disk(
+pub(super) fn load_execution_from_disk(
     procedures_dir: &Path,
     execution_id: ExecutionId,
 ) -> Result<(ExecutionState, Vec<Event>, PathBuf), String> {

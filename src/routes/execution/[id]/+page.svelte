@@ -3,7 +3,8 @@
     import { onMount } from "svelte";
     import { goto } from "$app/navigation";
     import { executionStore } from "$lib/stores/execution.svelte";
-    import type { ExecutionAction, StepContent } from "$lib/types";
+    import * as api from "$lib/api/commands";
+    import type { ExecutionAction, ExecutionSummary, StepContent } from "$lib/types";
     import { formatTimestamp } from "$lib/utils/format";
     import { isNonComposingEnter } from "$lib/utils/keyboard";
     import StepCard from "$lib/components/StepCard.svelte";
@@ -17,10 +18,12 @@
     let abortReason = $state("");
     let editingName = $state(false);
     let editNameValue = $state("");
+    let dropPointEnabled = $state(false);
 
     let executionId = $derived(page.params.id ?? "");
 
     onMount(async () => {
+        dropPointEnabled = await api.isDropPointConfigured();
         if (executionId) {
             await executionStore.load(executionId);
         }
@@ -50,6 +53,10 @@
 
     async function handleAction(action: ExecutionAction) {
         await executionStore.act(action);
+    }
+
+    function handleDropPointImported(nextSummary: ExecutionSummary) {
+        executionStore.setSummary(nextSummary);
     }
 
     async function addStep(
@@ -241,8 +248,11 @@
             {#each summary.steps as stepSummary}
                 <StepCard
                     {stepSummary}
+                    executionId={summary.execution_id}
                     executionActive={isActive ?? false}
+                    {dropPointEnabled}
                     onaction={handleAction}
+                    ondropimported={handleDropPointImported}
                 />
             {/each}
         </div>
