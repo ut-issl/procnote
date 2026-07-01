@@ -54,6 +54,11 @@ class ExecutionStore {
     }
   }
 
+  setSummary(summary: ExecutionSummary) {
+    this.summary = summary;
+    this.error = null;
+  }
+
   reset() {
     this.summary = null;
     this.loading = false;
