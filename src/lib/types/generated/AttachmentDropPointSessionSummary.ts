@@ -2,6 +2,7 @@
 
 export type AttachmentDropPointSessionSummary = {
   session_id: string;
+  display_name: string;
   qr_url: string;
   qr_svg: string;
   expires_at: string;

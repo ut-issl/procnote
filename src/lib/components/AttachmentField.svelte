@@ -59,7 +59,9 @@
     let remoteSession = $state<AttachmentDropPointSessionSummary | null>(null);
     let remoteStatus = $state<AttachmentDropPointStatus | null>(null);
     let remoteError = $state<string | null>(null);
+    let countdownNow = $state(Date.now());
     let pollTimer: number | null = null;
+    let countdownTimer: number | null = null;
     let remoteRunId = 0;
 
     let isRecorded = $derived(attachments.length > 0);
@@ -67,9 +69,13 @@
     let canUseDropPoint = $derived(
         dropPointEnabled && !!onstartdrop && !!onpolldrop && !!onimportdrop && !!oncanceldrop,
     );
+    let expiryCountdown = $derived(
+        remoteSession ? formatExpiryCountdown(remoteSession.expires_at, countdownNow) : null,
+    );
 
     onDestroy(() => {
         stopPolling();
+        stopExpiryCountdown();
     });
 
     $effect(() => {
@@ -176,6 +182,7 @@
     async function startRemoteUpload() {
         if (!canUseDropPoint || !onstartdrop) return;
         stopPolling();
+        stopExpiryCountdown();
         remotePhase = "creating";
         remoteSession = null;
         remoteStatus = null;
@@ -193,6 +200,7 @@
             }
             remoteSession = session;
             remotePhase = "open";
+            startExpiryCountdown();
             startPolling();
         } catch (e) {
             remotePhase = "failed";
@@ -210,6 +218,21 @@
         if (pollTimer !== null) {
             window.clearInterval(pollTimer);
             pollTimer = null;
+        }
+    }
+
+    function startExpiryCountdown() {
+        stopExpiryCountdown();
+        countdownNow = Date.now();
+        countdownTimer = window.setInterval(() => {
+            countdownNow = Date.now();
+        }, 1000);
+    }
+
+    function stopExpiryCountdown() {
+        if (countdownTimer !== null) {
+            window.clearInterval(countdownTimer);
+            countdownTimer = null;
         }
     }
 
@@ -289,11 +312,29 @@
 
     function resetRemoteUpload() {
         stopPolling();
+        stopExpiryCountdown();
         remoteRunId += 1;
         remotePhase = "idle";
         remoteSession = null;
         remoteStatus = null;
         remoteError = null;
+    }
+
+    function formatExpiryCountdown(expiresAt: string, nowMs: number): string {
+        const expiresMs = Date.parse(expiresAt);
+        if (!Number.isFinite(expiresMs)) return "countdown unavailable";
+
+        const remainingSeconds = Math.max(0, Math.ceil((expiresMs - nowMs) / 1000));
+        if (remainingSeconds === 0) return "expired";
+
+        const hours = Math.floor(remainingSeconds / 3600);
+        const minutes = Math.floor((remainingSeconds % 3600) / 60);
+        const seconds = remainingSeconds % 60;
+        const paddedSeconds = String(seconds).padStart(2, "0");
+        if (hours === 0) return `${minutes}:${paddedSeconds} remaining`;
+
+        const paddedMinutes = String(minutes).padStart(2, "0");
+        return `${hours}:${paddedMinutes}:${paddedSeconds} remaining`;
     }
 
     function remoteMessage(): string {
@@ -409,9 +450,20 @@
     <Modal oncancel={cancelRemoteUpload}>
         <h3>Upload via QR Code</h3>
         {#if remoteSession}
+            <div class="drop-name-card">
+                <span class="drop-name-label">Confirm upload page</span>
+                <p>
+                    After scanning, confirm the upload page shows <strong>{remoteSession.display_name}</strong>.
+                </p>
+            </div>
             <div class="qr-code">{@html remoteSession.qr_svg}</div>
             <p class="drop-url">{remoteSession.qr_url}</p>
-            <p class="expiry">Expires at {formatTimestamp(remoteSession.expires_at)}</p>
+            <p class="expiry">
+                Expires at {formatTimestamp(remoteSession.expires_at)}
+                {#if expiryCountdown}
+                    <span class="expiry-countdown">({expiryCountdown})</span>
+                {/if}
+            </p>
         {/if}
         <p>{remoteMessage()}</p>
         {#if remoteStatus?.encrypted_size}
@@ -602,6 +654,26 @@
         cursor: not-allowed;
     }
 
+    .drop-name-card {
+        padding: 12px;
+        border: 1px solid #b2dfdb;
+        border-radius: 6px;
+        background: #e0f2f1;
+        color: #004d40;
+    }
+
+    .drop-name-card p {
+        margin: 4px 0 0;
+        font-size: 14px;
+    }
+
+    .drop-name-label {
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+    }
+
     .qr-code {
         display: flex;
         justify-content: center;
@@ -625,6 +697,14 @@
     .expiry {
         font-size: 12px;
         color: #666;
+    }
+
+    .expiry-countdown {
+        margin-left: 6px;
+        color: #00695c;
+        font-family: monospace;
+        font-weight: 700;
+        white-space: nowrap;
     }
 
     .remote-error {
