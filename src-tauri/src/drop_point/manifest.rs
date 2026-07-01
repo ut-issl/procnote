@@ -44,8 +44,8 @@ pub enum ManifestError {
     InvalidFilename { index: usize, reason: String },
     #[error("manifest file {index} MIME type is invalid: {reason}")]
     InvalidMimeType { index: usize, reason: String },
-    #[error("manifest file {index} duplicates filename {filename}")]
-    DuplicateFilename { index: usize, filename: String },
+    #[error("manifest filename {filename} has too many duplicates")]
+    FilenameSuffixOverflow { filename: String },
     #[error("manifest size sum overflows usize")]
     SizeOverflow,
     #[error("manifest size sum {expected} does not match payload length {actual}")]
@@ -60,16 +60,13 @@ pub fn split_payload(
     validate_manifest_header(&manifest)?;
 
     let mut total = 0usize;
-    let mut seen_names = HashSet::new();
+    let mut used_names = HashSet::new();
     let mut sanitized_entries = Vec::with_capacity(manifest.files.len());
 
     for (index, file) in manifest.files.iter().enumerate() {
-        let filename = sanitize_filename(&file.name)
+        let sanitized_filename = sanitize_filename(&file.name)
             .map_err(|reason| ManifestError::InvalidFilename { index, reason })?;
-        let folded = filename.to_lowercase();
-        if !seen_names.insert(folded) {
-            return Err(ManifestError::DuplicateFilename { index, filename });
-        }
+        let filename = unique_filename(&sanitized_filename, &mut used_names)?;
         let content_type = sanitize_mime_type(&file.mime_type)
             .map_err(|reason| ManifestError::InvalidMimeType { index, reason })?;
         let size = usize::try_from(file.size).map_err(|_| ManifestError::SizeOverflow)?;
@@ -116,6 +113,38 @@ fn validate_manifest_header(manifest: &Manifest) -> Result<(), ManifestError> {
     DateTime::parse_from_rfc3339(&manifest.created_at)
         .map(|_| ())
         .map_err(|e| ManifestError::InvalidCreatedAt(e.to_string()))
+}
+
+fn unique_filename(
+    filename: &str,
+    used_names: &mut HashSet<String>,
+) -> Result<String, ManifestError> {
+    if used_names.insert(fold_filename(filename)) {
+        return Ok(filename.to_string());
+    }
+
+    let (stem, extension) = split_filename_extension(filename);
+    std::iter::successors(Some(1usize), |suffix| suffix.checked_add(1))
+        .find_map(|suffix| {
+            let candidate = format!("{stem} ({suffix}){extension}");
+            used_names
+                .insert(fold_filename(&candidate))
+                .then_some(candidate)
+        })
+        .ok_or_else(|| ManifestError::FilenameSuffixOverflow {
+            filename: filename.to_string(),
+        })
+}
+
+fn split_filename_extension(filename: &str) -> (&str, &str) {
+    match filename.rsplit_once('.') {
+        Some((stem, _extension)) if !stem.is_empty() => (stem, &filename[stem.len()..]),
+        Some(_) | None => (filename, ""),
+    }
+}
+
+fn fold_filename(filename: &str) -> String {
+    filename.to_lowercase()
 }
 
 fn sanitize_filename(name: &str) -> Result<String, String> {
@@ -210,12 +239,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rejects_duplicate_filenames_case_insensitively() {
-        let manifest = br#"{"protocol_version":2,"files":[{"name":"a.txt","type":"text/plain","size":0},{"name":"A.txt","type":"text/plain","size":0}],"created_at":"2026-06-30T12:00:00Z"}"#;
-        assert!(matches!(
-            split_payload(manifest, b""),
-            Err(ManifestError::DuplicateFilename { .. })
-        ));
+    #[expect(clippy::unwrap_used, reason = "unwrap is acceptable in tests")]
+    fn renames_duplicate_filenames_case_insensitively() {
+        let manifest = br#"{"protocol_version":2,"files":[{"name":"image.jpg","type":"text/plain","size":1},{"name":"image (1).jpg","type":"text/plain","size":1},{"name":"IMAGE.JPG","type":"text/plain","size":1}],"created_at":"2026-06-30T12:00:00Z"}"#;
+
+        let files = split_payload(manifest, b"abc").unwrap();
+
+        assert_eq!(
+            files
+                .iter()
+                .map(|file| file.filename.as_str())
+                .collect::<Vec<_>>(),
+            vec!["image.jpg", "image (1).jpg", "IMAGE (2).JPG"]
+        );
+        assert_eq!(files[0].data, b"a");
+        assert_eq!(files[1].data, b"b");
+        assert_eq!(files[2].data, b"c");
     }
 
     #[test]
