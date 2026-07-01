@@ -14,7 +14,10 @@ use commands::drop_point::{
     is_drop_point_configured, poll_attachment_drop_point_session,
     start_attachment_drop_point_session,
 };
-use commands::execution::{get_execution_state, list_executions, record_action, start_execution};
+use commands::execution::{
+    get_attachment_preview_data_url, get_execution_state, list_executions, record_action,
+    start_execution,
+};
 use commands::template::{list_templates, load_template};
 use drop_point::{DropPointConfig, DropPointSessions};
 use state::AppState;
@@ -93,6 +96,7 @@ pub fn run(workspace: &Path) {
             record_action,
             get_execution_state,
             list_executions,
+            get_attachment_preview_data_url,
             is_drop_point_configured,
             start_attachment_drop_point_session,
             poll_attachment_drop_point_session,

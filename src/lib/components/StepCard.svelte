@@ -251,6 +251,7 @@
                             onclear={isInteractable
                                 ? () => clearAttachments(input.definition.id)
                                 : undefined}
+                            onpreview={(path) => api.getAttachmentPreviewDataUrl(executionId, path)}
                             onstartdrop={() => startDropPointSession(input.definition.id)}
                             onpolldrop={pollDropPointSession}
                             onimportdrop={(sessionId) =>

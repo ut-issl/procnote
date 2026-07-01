@@ -1,5 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use serde::Serialize;
 use tauri::State;
 use ts_rs::TS;
@@ -9,7 +11,7 @@ use crate::persistence::event_log::EventLog;
 use crate::persistence::execution_store::ExecutionStore;
 use crate::state::AppState;
 use procnote_core::event::types::{CompletionStatus, Event, ExecutionId};
-use procnote_core::execution::{ExecutionState, StepStatus};
+use procnote_core::execution::{ExecutionState, RecordedAttachment, StepStatus};
 use procnote_core::template::parse_template;
 use procnote_core::template::types::{InputDefinition, StepContent};
 
@@ -497,6 +499,95 @@ pub(super) fn load_execution_from_disk(
         .map_err(|e| e.to_string())?;
     let state = ExecutionState::from_events(&events).map_err(|e| e.to_string())?;
     Ok((state, events, log_path))
+}
+
+fn find_attachment<'a>(
+    state: &'a ExecutionState,
+    attachment_path: &str,
+) -> Option<&'a RecordedAttachment> {
+    state
+        .step_order
+        .iter()
+        .filter_map(|step_id| state.steps.get(step_id))
+        .flat_map(|step| step.attachments.values())
+        .flat_map(|files| files.iter())
+        .find(|file| file.path == attachment_path)
+}
+
+fn preview_content_type(content_type: &str) -> Option<String> {
+    let media_type = content_type
+        .split_once(';')
+        .map_or(content_type, |(media_type, _)| media_type)
+        .trim()
+        .to_ascii_lowercase();
+    let (top_level, subtype) = media_type.split_once('/')?;
+    let subtype_is_safe = subtype
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '+' | '.'));
+
+    (top_level == "image" && !subtype.is_empty() && subtype_is_safe).then_some(media_type)
+}
+
+fn resolve_attachment_file_path(
+    execution_dir: &Path,
+    relative_path: &str,
+) -> Result<PathBuf, String> {
+    let relative = Path::new(relative_path);
+    if relative.is_absolute()
+        || relative
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(format!("invalid attachment path: {relative_path}"));
+    }
+
+    let attachments_dir = execution_dir
+        .join("attachments")
+        .canonicalize()
+        .map_err(|e| e.to_string())?;
+    let file_path = execution_dir
+        .join(relative)
+        .canonicalize()
+        .map_err(|e| e.to_string())?;
+
+    if !file_path.starts_with(&attachments_dir) {
+        return Err("attachment path escapes the attachments directory".to_string());
+    }
+
+    Ok(file_path)
+}
+
+fn attachment_preview_data_url(
+    execution_dir: &Path,
+    attachment: &RecordedAttachment,
+) -> Result<Option<String>, String> {
+    let Some(content_type) = preview_content_type(&attachment.content_type) else {
+        return Ok(None);
+    };
+    let file_path = resolve_attachment_file_path(execution_dir, &attachment.path)?;
+    let bytes = std::fs::read(file_path).map_err(|e| e.to_string())?;
+    let encoded = BASE64_STANDARD.encode(bytes);
+    Ok(Some(format!("data:{content_type};base64,{encoded}")))
+}
+
+/// Get a data URL that can be used as an image thumbnail for an attachment.
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri command handlers require owned parameters"
+)]
+pub fn get_attachment_preview_data_url(
+    state: State<'_, AppState>,
+    execution_id: ExecutionId,
+    path: String,
+) -> Result<Option<String>, String> {
+    let (exec_state, _, log_path) = load_execution_from_disk(&state.procedures_dir, execution_id)?;
+    let exec_dir = log_path.parent().expect("log_path must have a parent");
+    let Some(attachment) = find_attachment(&exec_state, &path) else {
+        return Err(format!("Attachment not found: {path}"));
+    };
+
+    attachment_preview_data_url(exec_dir, attachment)
 }
 
 /// Start a new execution from a template file.

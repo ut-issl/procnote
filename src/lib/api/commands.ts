@@ -35,6 +35,13 @@ export async function listExecutions(): Promise<ExecutionSummary[]> {
   return invoke("list_executions");
 }
 
+export async function getAttachmentPreviewDataUrl(
+  executionId: string,
+  path: string,
+): Promise<string | null> {
+  return invoke("get_attachment_preview_data_url", { executionId, path });
+}
+
 export async function isDropPointConfigured(): Promise<boolean> {
   return invoke("is_drop_point_configured");
 }
