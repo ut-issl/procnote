@@ -154,7 +154,6 @@ pub async fn import_attachment_drop_point_upload(
         .into_iter()
         .map(|file| AttachmentBytesSource {
             filename: file.filename,
-            content_type: file.content_type,
             bytes: file.data,
         })
         .collect();
@@ -179,11 +178,7 @@ pub async fn import_attachment_drop_point_upload(
         );
     }
 
-    Ok(summarize(
-        &recorded.state,
-        &recorded.events,
-        &recorded.execution_dir,
-    ))
+    summarize(&recorded.state, &recorded.events, &recorded.execution_dir)
 }
 
 #[tauri::command]

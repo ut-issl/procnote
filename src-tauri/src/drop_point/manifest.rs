@@ -3,6 +3,8 @@ use std::collections::HashSet;
 use chrono::DateTime;
 use serde::Deserialize;
 
+use crate::persistence::attachment_store::sanitize_attachment_filename;
+
 const PROTOCOL_VERSION: u32 = 2;
 const DEFAULT_MIME_TYPE: &str = "application/octet-stream";
 
@@ -40,8 +42,6 @@ pub enum ManifestError {
     InvalidCreatedAt(String),
     #[error("manifest must contain at least one file")]
     EmptyFiles,
-    #[error("manifest file {index} name is invalid: {reason}")]
-    InvalidFilename { index: usize, reason: String },
     #[error("manifest file {index} MIME type is invalid: {reason}")]
     InvalidMimeType { index: usize, reason: String },
     #[error("manifest filename {filename} has too many duplicates")]
@@ -64,8 +64,7 @@ pub fn split_payload(
     let mut sanitized_entries = Vec::with_capacity(manifest.files.len());
 
     for (index, file) in manifest.files.iter().enumerate() {
-        let sanitized_filename = sanitize_filename(&file.name)
-            .map_err(|reason| ManifestError::InvalidFilename { index, reason })?;
+        let sanitized_filename = sanitize_filename(&file.name);
         let filename = unique_filename(&sanitized_filename, &mut used_names)?;
         let content_type = sanitize_mime_type(&file.mime_type)
             .map_err(|reason| ManifestError::InvalidMimeType { index, reason })?;
@@ -147,58 +146,8 @@ fn fold_filename(filename: &str) -> String {
     filename.to_lowercase()
 }
 
-fn sanitize_filename(name: &str) -> Result<String, String> {
-    if name.is_empty() {
-        return Err("filename must not be empty".to_string());
-    }
-    if name.contains('/') || name.contains('\\') {
-        return Err("filename must be a base name".to_string());
-    }
-    if name.chars().any(|ch| ch == '\0' || ch.is_control()) {
-        return Err("filename contains control characters".to_string());
-    }
-    if name
-        .chars()
-        .any(|ch| matches!(ch, '<' | '>' | ':' | '"' | '|' | '?' | '*'))
-    {
-        return Err("filename contains platform-reserved characters".to_string());
-    }
-    let trimmed = name.trim();
-    match trimmed {
-        "" => Err("filename must not be blank".to_string()),
-        "." | ".." => Err("filename is reserved".to_string()),
-        _ if is_windows_reserved_name(trimmed) => Err("filename is platform-reserved".to_string()),
-        _ => Ok(trimmed.to_string()),
-    }
-}
-
-fn is_windows_reserved_name(name: &str) -> bool {
-    let stem = name.rsplit_once('.').map_or(name, |(base, _)| base);
-    matches!(
-        stem.to_ascii_uppercase().as_str(),
-        "CON"
-            | "PRN"
-            | "AUX"
-            | "NUL"
-            | "COM1"
-            | "COM2"
-            | "COM3"
-            | "COM4"
-            | "COM5"
-            | "COM6"
-            | "COM7"
-            | "COM8"
-            | "COM9"
-            | "LPT1"
-            | "LPT2"
-            | "LPT3"
-            | "LPT4"
-            | "LPT5"
-            | "LPT6"
-            | "LPT7"
-            | "LPT8"
-            | "LPT9"
-    )
+fn sanitize_filename(name: &str) -> String {
+    sanitize_attachment_filename(name)
 }
 
 fn sanitize_mime_type(value: &str) -> Result<String, String> {
@@ -258,11 +207,10 @@ mod tests {
     }
 
     #[test]
-    fn rejects_path_filenames() {
+    #[expect(clippy::unwrap_used, reason = "unwrap is acceptable in tests")]
+    fn sanitizes_path_filenames() {
         let manifest = br#"{"protocol_version":2,"files":[{"name":"../a.txt","type":"text/plain","size":0}],"created_at":"2026-06-30T12:00:00Z"}"#;
-        assert!(matches!(
-            split_payload(manifest, b""),
-            Err(ManifestError::InvalidFilename { .. })
-        ));
+        let files = split_payload(manifest, b"").unwrap();
+        assert_eq!(files[0].filename, ".._a.txt");
     }
 }
