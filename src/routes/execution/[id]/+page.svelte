@@ -478,26 +478,6 @@
         color: #666;
     }
 
-    .status-active {
-        background: #e8f5e9;
-        color: #2e7d32;
-    }
-
-    .status-pass {
-        background: #e0f2f1;
-        color: #00695c;
-    }
-
-    .status-fail {
-        background: #fce4ec;
-        color: #c62828;
-    }
-
-    .status-aborted {
-        background: #fff3e0;
-        color: #e65100;
-    }
-
     .progress {
         font-size: 13px;
         color: #888;
@@ -547,57 +527,4 @@
         gap: 12px;
     }
 
-    /* Buttons */
-    .btn {
-        padding: 6px 16px;
-        border-radius: 4px;
-        font: inherit;
-        font-size: 13px;
-        font-weight: 600;
-        cursor: pointer;
-        border: 1px solid transparent;
-    }
-
-    .btn:disabled {
-        opacity: 0.5;
-        cursor: not-allowed;
-    }
-
-    .btn-secondary {
-        background: #fff;
-        color: #333;
-        border-color: #ccc;
-    }
-
-    .btn-secondary:hover {
-        background: #f5f5f5;
-    }
-
-    .btn-success {
-        background: #2e7d32;
-        color: #fff;
-    }
-
-    .btn-success:hover {
-        background: #1b5e20;
-    }
-
-    .btn-danger {
-        background: #c62828;
-        color: #fff;
-    }
-
-    .btn-danger:hover:not(:disabled) {
-        background: #b71c1c;
-    }
-
-    .btn-undo {
-        background: #fff;
-        color: #6a1b9a;
-        border-color: #ce93d8;
-    }
-
-    .btn-undo:hover {
-        background: #f3e5f5;
-    }
 </style>

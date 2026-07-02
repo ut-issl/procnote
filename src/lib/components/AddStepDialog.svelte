@@ -88,38 +88,4 @@
         font-size: 13px;
         color: #888;
     }
-
-    .btn {
-        padding: 8px 16px;
-        border-radius: 4px;
-        font: inherit;
-        font-size: 13px;
-        font-weight: 600;
-        cursor: pointer;
-        border: 1px solid transparent;
-    }
-
-    .btn:disabled {
-        opacity: 0.5;
-        cursor: not-allowed;
-    }
-
-    .btn-primary {
-        background: #1a1a2e;
-        color: #fff;
-    }
-
-    .btn-primary:hover:not(:disabled) {
-        background: #16213e;
-    }
-
-    .btn-secondary {
-        background: #fff;
-        color: #333;
-        border-color: #ccc;
-    }
-
-    .btn-secondary:hover {
-        background: #f5f5f5;
-    }
 </style>

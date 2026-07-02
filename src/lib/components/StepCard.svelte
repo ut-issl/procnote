@@ -486,49 +486,8 @@
         border-top: 1px solid #eee;
     }
 
-    .btn {
-        padding: 6px 16px;
-        border-radius: 4px;
-        font: inherit;
-        font-size: 13px;
-        font-weight: 600;
-        cursor: pointer;
-        border: 1px solid transparent;
-    }
-
-    .btn-muted {
-        background: #fff;
-        color: #666;
-        border-color: #ccc;
-    }
-
-    .btn-muted:hover {
-        background: #f5f5f5;
-    }
-
     .btn-undo {
-        background: #fff;
-        color: #6a1b9a;
-        border-color: #ce93d8;
         margin-left: auto;
-    }
-
-    .btn-undo:hover {
-        background: #f3e5f5;
-    }
-
-    .btn-warn {
-        background: #e65100;
-        color: #fff;
-    }
-
-    .btn-warn:hover:not(:disabled) {
-        background: #bf360c;
-    }
-
-    .btn-warn:disabled {
-        opacity: 0.4;
-        cursor: not-allowed;
     }
 
     .skip-dialog {
