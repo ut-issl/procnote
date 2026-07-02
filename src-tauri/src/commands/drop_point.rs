@@ -21,6 +21,7 @@ use crate::state::AppState;
 #[ts(export)]
 pub struct AttachmentDropPointSessionSummary {
     pub session_id: String,
+    pub display_name: String,
     pub qr_url: String,
     pub qr_svg: String,
     pub expires_at: String,
@@ -31,6 +32,7 @@ pub struct AttachmentDropPointSessionSummary {
 #[ts(export)]
 pub struct AttachmentDropPointStatus {
     pub status: String,
+    pub display_name: String,
     pub encrypted_size: u32,
     #[ts(optional)]
     pub dropped_at: Option<String>,
@@ -88,6 +90,7 @@ pub async fn start_attachment_drop_point_session(
 
     Ok(AttachmentDropPointSessionSummary {
         session_id,
+        display_name: created.display_name,
         qr_url,
         qr_svg,
         expires_at: created.expires_at,
@@ -111,6 +114,7 @@ pub async fn poll_attachment_drop_point_session(
 
     Ok(AttachmentDropPointStatus {
         status: status.status,
+        display_name: status.display_name,
         encrypted_size: u32::try_from(status.encrypted_size)
             .map_err(|_| "DropPoint encrypted_size exceeds frontend range".to_string())?,
         dropped_at: status.dropped_at,

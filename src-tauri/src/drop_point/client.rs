@@ -100,6 +100,7 @@ struct CreateDropPointRequest {
 #[derive(Debug, Deserialize)]
 pub struct CreateDropPointResponse {
     pub drop_point_id: String,
+    pub display_name: String,
     pub drop_link: String,
     pub pickup_token: String,
     pub expires_at: String,
@@ -109,6 +110,7 @@ pub struct CreateDropPointResponse {
 #[derive(Debug, Deserialize)]
 pub struct DropPointStatusResponse {
     pub status: String,
+    pub display_name: String,
     pub encrypted_size: u64,
     pub dropped_at: Option<String>,
     pub first_picked_up_at: Option<String>,
