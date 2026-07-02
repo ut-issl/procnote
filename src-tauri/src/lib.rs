@@ -21,7 +21,7 @@ use commands::execution::{
     get_attachment_preview_data_url, get_execution_state, list_executions, pick_attachment_sources,
     record_action, reveal_execution_dir, start_execution,
 };
-use commands::template::{list_templates, load_template};
+use commands::template::list_templates;
 use drop_point::{DropPointConfig, DropPointSessions};
 use state::AppState;
 
@@ -95,7 +95,6 @@ pub fn run(workspace: &Path) {
         })
         .invoke_handler(tauri::generate_handler![
             list_templates,
-            load_template,
             start_execution,
             record_action,
             get_execution_state,

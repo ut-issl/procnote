@@ -7,10 +7,6 @@ class ExecutionStore {
   loading = $state(false);
   error: string | null = $state(null);
 
-  get isActive() {
-    return this.summary?.status === "active";
-  }
-
   get isFinished() {
     const s = this.summary?.status;
     return s === "pass" || s === "fail" || s === "aborted";

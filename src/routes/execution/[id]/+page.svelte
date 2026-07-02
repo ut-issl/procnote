@@ -115,8 +115,11 @@
     }
 
     async function openDirectory() {
-        if (summary?.execution_id) {
+        if (!summary?.execution_id) return;
+        try {
             await api.revealExecutionDir(summary.execution_id);
+        } catch (e) {
+            executionStore.error = String(e);
         }
     }
 </script>
@@ -248,7 +251,7 @@
                 <StepCard
                     {stepSummary}
                     executionId={summary.execution_id}
-                    executionActive={isActive ?? false}
+                    executionActive={isActive}
                     {dropPointEnabled}
                     onaction={handleAction}
                     ondropimported={handleDropPointImported}

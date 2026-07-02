@@ -3,7 +3,7 @@
 export type AttachmentDropPointStatus = {
   status: string;
   display_name: string;
-  encrypted_size: number;
+  encrypted_size: bigint;
   dropped_at?: string;
   first_picked_up_at?: string;
   expires_at: string;

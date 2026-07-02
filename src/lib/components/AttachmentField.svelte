@@ -137,27 +137,35 @@
 
     async function confirmRemoveFile(file: AttachmentState) {
         if (!onremovefile) return;
-        const ok = await confirmDialog(`Remove ${file.filename}?`, {
-            title: "Remove attachment",
-            kind: "warning",
-            okLabel: "Remove",
-            cancelLabel: "Cancel",
-        });
-        if (ok) onremovefile(file.path);
+        try {
+            const ok = await confirmDialog(`Remove ${file.filename}?`, {
+                title: "Remove attachment",
+                kind: "warning",
+                okLabel: "Remove",
+                cancelLabel: "Cancel",
+            });
+            if (ok) onremovefile(file.path);
+        } catch (e) {
+            remoteError = String(e);
+        }
     }
 
     async function confirmClearAll() {
         if (!onclear) return;
-        const ok = await confirmDialog(
-            `Remove all ${attachments.length} attachments from ${definition.label}?`,
-            {
-                title: "Remove all attachments",
-                kind: "warning",
-                okLabel: "Remove all",
-                cancelLabel: "Cancel",
-            },
-        );
-        if (ok) onclear();
+        try {
+            const ok = await confirmDialog(
+                `Remove all ${attachments.length} attachments from ${definition.label}?`,
+                {
+                    title: "Remove all attachments",
+                    kind: "warning",
+                    okLabel: "Remove all",
+                    cancelLabel: "Cancel",
+                },
+            );
+            if (ok) onclear();
+        } catch (e) {
+            remoteError = String(e);
+        }
     }
 
     async function startRemoteUpload() {

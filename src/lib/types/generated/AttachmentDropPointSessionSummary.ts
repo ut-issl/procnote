@@ -6,5 +6,5 @@ export type AttachmentDropPointSessionSummary = {
   qr_url: string;
   qr_svg: string;
   expires_at: string;
-  max_bytes: number;
+  max_bytes: bigint;
 };

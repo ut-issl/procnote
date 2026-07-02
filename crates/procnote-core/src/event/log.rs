@@ -64,18 +64,20 @@ pub fn append_event(path: &Path, event: &Event) -> Result<(), EventLogError> {
 pub fn read_log(path: &Path) -> Result<Vec<Event>, EventLogError> {
     let file = std::fs::File::open(path)?;
     let reader = std::io::BufReader::new(file);
-    let lines: Vec<String> = reader.lines().collect::<Result<_, _>>()?;
-    let total_lines = lines.len();
+    let mut lines = reader.lines().enumerate();
 
-    // Find the first non-empty line — it must be LogMeta.
-    let first_content_idx = lines
-        .iter()
-        .position(|line| !line.trim().is_empty())
+    let (_first_line_idx, first_line) = lines
+        .by_ref()
+        .find_map(|(line_idx, line)| match line {
+            Ok(line) if line.trim().is_empty() => None,
+            Ok(line) => Some(Ok((line_idx, line))),
+            Err(e) => Some(Err(e)),
+        })
+        .transpose()?
         .ok_or(EventLogError::MissingLogMeta)?;
 
-    let first_line = lines[first_content_idx].trim();
     let first_event: Event =
-        serde_json::from_str(first_line).map_err(|_| EventLogError::MissingLogMeta)?;
+        serde_json::from_str(first_line.trim()).map_err(|_| EventLogError::MissingLogMeta)?;
 
     match &first_event {
         Event::LogMeta { version, .. } => {
@@ -90,12 +92,18 @@ pub fn read_log(path: &Path) -> Result<Vec<Event>, EventLogError> {
     }
 
     let mut events = vec![first_event];
+    let mut pending_truncated_tail: Option<(usize, String)> = None;
 
-    for (line_idx, line) in lines.iter().enumerate().skip(first_content_idx + 1) {
+    for (line_idx, line) in lines {
+        let line = line?;
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
         }
+        if let Some((line, _preview)) = pending_truncated_tail {
+            return Err(EventLogError::CorruptLine { line });
+        }
+
         match serde_json::from_str::<Event>(trimmed) {
             Ok(event) => events.push(event),
             Err(source) => {
@@ -117,16 +125,16 @@ pub fn read_log(path: &Path) -> Result<Vec<Event>, EventLogError> {
                         line: line_idx + 1,
                     });
                 }
-                if line_idx + 1 == total_lines {
-                    // Tolerate truncated write at the tail.
-                    let preview: String = trimmed.chars().take(100).collect();
-                    log::warn!("Skipping truncated line at end of event log: {preview}");
-                } else {
-                    return Err(EventLogError::CorruptLine { line: line_idx + 1 });
-                }
+                pending_truncated_tail =
+                    Some((line_idx + 1, trimmed.chars().take(100).collect::<String>()));
             }
         }
     }
+
+    if let Some((_line, preview)) = pending_truncated_tail {
+        log::warn!("Skipping truncated line at end of event log: {preview}");
+    }
+
     Ok(events)
 }
 
