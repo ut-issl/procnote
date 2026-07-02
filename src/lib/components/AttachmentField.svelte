@@ -32,6 +32,7 @@
         onattach,
         onremovefile,
         onclear,
+        onpreview,
         onstartdrop,
         onpolldrop,
         onimportdrop,
@@ -44,6 +45,7 @@
         onattach: (files: AttachmentSource[]) => void;
         onremovefile?: (path: string) => void;
         onclear?: () => void;
+        onpreview?: (path: string) => Promise<string | null>;
         onstartdrop?: () => Promise<AttachmentDropPointSessionSummary>;
         onpolldrop?: (sessionId: string) => Promise<AttachmentDropPointStatus>;
         onimportdrop?: (sessionId: string) => Promise<void>;
@@ -51,6 +53,8 @@
     } = $props();
 
     let selectedFiles = $state<AttachmentSource[]>([]);
+    let previewUrls = $state<Record<string, string>>({});
+    let previewRunId = 0;
     let remotePhase = $state<RemotePhase>("idle");
     let remoteSession = $state<AttachmentDropPointSessionSummary | null>(null);
     let remoteStatus = $state<AttachmentDropPointStatus | null>(null);
@@ -68,8 +72,44 @@
         stopPolling();
     });
 
+    $effect(() => {
+        const previewLoader = onpreview;
+        const runId = ++previewRunId;
+        previewUrls = {};
+        if (!previewLoader) return;
+
+        const imageAttachments = attachments.filter(isImageAttachment);
+        for (const file of imageAttachments) {
+            void loadPreview(previewLoader, file, runId);
+        }
+    });
+
+    function normalizedContentType(contentType: string): string {
+        return contentType.split(";")[0]?.trim().toLowerCase() ?? "";
+    }
+
+    function isImageAttachment(file: AttachmentState): boolean {
+        return normalizedContentType(file.content_type).startsWith("image/");
+    }
+
+    async function loadPreview(
+        previewLoader: (path: string) => Promise<string | null>,
+        file: AttachmentState,
+        runId: number,
+    ) {
+        try {
+            const dataUrl = await previewLoader(file.path);
+            if (runId === previewRunId && dataUrl) {
+                previewUrls[file.path] = dataUrl;
+            }
+        } catch {
+            // Thumbnail previews are best-effort; keep the attachment usable without one.
+        }
+    }
+
     function filenameFromPath(path: string): string {
-        return path.split(/[/\\]/).pop() ?? path;
+        const separatorIndex = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+        return separatorIndex >= 0 ? path.slice(separatorIndex + 1) : path;
     }
 
     async function pickFiles() {
@@ -292,6 +332,14 @@
         <div class="attachment-list">
             {#each attachments as file}
                 <div class="attachment-row">
+                    {#if isImageAttachment(file) && previewUrls[file.path]}
+                        <img
+                            class="attachment-thumbnail"
+                            src={previewUrls[file.path]}
+                            alt=""
+                            title={file.filename}
+                        />
+                    {/if}
                     <span class="filename" title={file.path}>{file.filename}</span>
                     <span class="hash">{file.sha256.slice(0, 7)}</span>
                     {#if file.at}
@@ -345,7 +393,7 @@
             </button>
             {#if canUseDropPoint}
                 <button class="btn-drop" onclick={startRemoteUpload} disabled={disabled}>
-                    Scan to Upload
+                    Upload via QR Code
                 </button>
             {/if}
             {#if isRecorded && onclear && attachments.length > 1}
@@ -359,7 +407,7 @@
 
 {#if remotePhase !== "idle"}
     <Modal oncancel={cancelRemoteUpload}>
-        <h3>Scan to Upload</h3>
+        <h3>Upload via QR Code</h3>
         {#if remoteSession}
             <div class="qr-code">{@html remoteSession.qr_svg}</div>
             <p class="drop-url">{remoteSession.qr_url}</p>
@@ -435,6 +483,16 @@
 
     .attachment-row {
         min-height: 28px;
+    }
+
+    .attachment-thumbnail {
+        width: 32px;
+        height: 32px;
+        flex-shrink: 0;
+        border: 1px solid #c8e6c9;
+        border-radius: 4px;
+        background: #fff;
+        object-fit: cover;
     }
 
     .filename {
