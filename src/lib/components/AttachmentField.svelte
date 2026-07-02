@@ -64,6 +64,7 @@
     let pollTimer: number | null = null;
     let countdownTimer: number | null = null;
     let remoteRunId = 0;
+    let pollInFlight = false;
 
     let isRecorded = $derived(attachments.length > 0);
     let hasSelectedFiles = $derived(selectedFiles.length > 0);
@@ -218,7 +219,8 @@
     }
 
     async function pollRemoteOnce() {
-        if (!remoteSession || !onpolldrop) return;
+        if (!remoteSession || !onpolldrop || pollInFlight) return;
+        pollInFlight = true;
         const session = remoteSession;
         const runId = remoteRunId;
         try {
@@ -254,6 +256,8 @@
             stopPolling();
             remotePhase = "failed";
             remoteError = String(e);
+        } finally {
+            pollInFlight = false;
         }
     }
 

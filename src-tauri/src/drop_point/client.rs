@@ -6,6 +6,8 @@ const ENV_API_TOKEN: &str = "PROCNOTE_DROPPOINT_API_TOKEN";
 const ENV_TTL_SECONDS: &str = "PROCNOTE_DROPPOINT_TTL_SECONDS";
 const ENV_MAX_BYTES: &str = "PROCNOTE_DROPPOINT_MAX_BYTES";
 const CLIENT_NAME: &str = "procnote";
+const DEFAULT_PICKUP_BODY_LIMIT: u64 = 100 * 1024 * 1024;
+const MAX_ERROR_BODY_BYTES: u64 = 8 * 1024;
 
 #[derive(Clone)]
 pub struct DropPointConfig {
@@ -71,7 +73,20 @@ fn parse_base_url(raw: &str) -> Result<Url, String> {
     if !url.username().is_empty() || url.password().is_some() {
         return Err(format!("{ENV_URL} must not include user info"));
     }
+    if url.scheme() != "https" && !is_loopback_http_url(&url) {
+        return Err(format!(
+            "{ENV_URL} must use https (http is only allowed for localhost)"
+        ));
+    }
     Ok(url)
+}
+
+fn is_loopback_http_url(url: &Url) -> bool {
+    url.scheme() == "http"
+        && matches!(
+            url.host_str(),
+            Some("localhost" | "127.0.0.1" | "::1" | "[::1]")
+        )
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -85,6 +100,12 @@ pub enum DropPointClientError {
         status: reqwest::StatusCode,
         body: String,
     },
+    #[error("DropPoint response body exceeded {limit} bytes")]
+    BodyTooLarge { limit: u64 },
+    #[error("DropPoint server returned an invalid drop_point_id")]
+    InvalidDropPointId,
+    #[error("DropPoint base URL cannot be used as a URL base")]
+    InvalidBaseUrl,
 }
 
 #[derive(Debug, Serialize)]
@@ -141,7 +162,7 @@ impl DropPointClient {
         };
         let response = self
             .http
-            .post(self.endpoint("/api/drop-points")?)
+            .post(self.endpoint(&["api", "drop-points"])?)
             .bearer_auth(&self.config.api_token)
             .json(&request)
             .send()
@@ -156,7 +177,7 @@ impl DropPointClient {
     ) -> Result<DropPointStatusResponse, DropPointClientError> {
         let response = self
             .http
-            .get(self.endpoint(&format!("/api/drop-points/{drop_point_id}/status"))?)
+            .get(self.drop_point_endpoint(drop_point_id, Some("status"))?)
             .bearer_auth(pickup_token)
             .send()
             .await?;
@@ -170,7 +191,7 @@ impl DropPointClient {
     ) -> Result<(String, Vec<u8>), DropPointClientError> {
         let response = self
             .http
-            .get(self.endpoint(&format!("/api/drop-points/{drop_point_id}/pickup"))?)
+            .get(self.drop_point_endpoint(drop_point_id, Some("pickup"))?)
             .bearer_auth(pickup_token)
             .send()
             .await?;
@@ -181,7 +202,7 @@ impl DropPointClient {
             .and_then(|value| value.to_str().ok())
             .unwrap_or_default()
             .to_string();
-        let body = response.bytes().await?.to_vec();
+        let body = read_body_limited(response, self.pickup_body_limit()).await?;
         Ok((content_type, body))
     }
 
@@ -192,17 +213,50 @@ impl DropPointClient {
     ) -> Result<(), DropPointClientError> {
         let response = self
             .http
-            .delete(self.endpoint(&format!("/api/drop-points/{drop_point_id}"))?)
+            .delete(self.drop_point_endpoint(drop_point_id, None)?)
             .bearer_auth(pickup_token)
             .send()
             .await?;
         ensure_success(response).await.map(|_| ())
     }
 
-    fn endpoint(&self, path: &str) -> Result<Url, DropPointClientError> {
-        let base = self.config.base_url.as_str().trim_end_matches('/');
-        Ok(Url::parse(&format!("{base}{path}"))?)
+    fn pickup_body_limit(&self) -> u64 {
+        self.config.max_bytes.unwrap_or(DEFAULT_PICKUP_BODY_LIMIT)
     }
+
+    fn endpoint(&self, segments: &[&str]) -> Result<Url, DropPointClientError> {
+        let mut url = self.config.base_url.clone();
+        {
+            let mut path = url
+                .path_segments_mut()
+                .map_err(|()| DropPointClientError::InvalidBaseUrl)?;
+            path.pop_if_empty();
+            path.extend(segments);
+        }
+        Ok(url)
+    }
+
+    fn drop_point_endpoint(
+        &self,
+        drop_point_id: &str,
+        suffix: Option<&str>,
+    ) -> Result<Url, DropPointClientError> {
+        validate_drop_point_id(drop_point_id)?;
+        let mut segments = vec!["api", "drop-points", drop_point_id];
+        if let Some(suffix) = suffix {
+            segments.push(suffix);
+        }
+        self.endpoint(&segments)
+    }
+}
+
+fn validate_drop_point_id(drop_point_id: &str) -> Result<(), DropPointClientError> {
+    (!drop_point_id.is_empty()
+        && drop_point_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')))
+    .then_some(())
+    .ok_or(DropPointClientError::InvalidDropPointId)
 }
 
 async fn ensure_success(
@@ -212,9 +266,38 @@ async fn ensure_success(
     if status.is_success() {
         return Ok(response);
     }
-    let body = response.bytes().await.map_or_else(
-        |e| format!("<failed to read response body: {e}>"),
-        |bytes| String::from_utf8_lossy(&bytes).into_owned(),
-    );
+    let body = match read_body_limited(response, MAX_ERROR_BODY_BYTES).await {
+        Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+        Err(DropPointClientError::BodyTooLarge { .. }) => {
+            format!("<error body exceeded {MAX_ERROR_BODY_BYTES} bytes>")
+        }
+        Err(e) => format!("<failed to read response body: {e}>"),
+    };
     Err(DropPointClientError::Http { status, body })
+}
+
+async fn read_body_limited(
+    mut response: reqwest::Response,
+    limit: u64,
+) -> Result<Vec<u8>, DropPointClientError> {
+    if response
+        .content_length()
+        .is_some_and(|content_length| content_length > limit)
+    {
+        return Err(DropPointClientError::BodyTooLarge { limit });
+    }
+
+    let capacity = response
+        .content_length()
+        .and_then(|length| usize::try_from(length).ok())
+        .unwrap_or_default();
+    let mut body = Vec::with_capacity(capacity);
+    while let Some(chunk) = response.chunk().await? {
+        let next_len = body.len().saturating_add(chunk.len());
+        if u64::try_from(next_len).map_or(true, |next_len| next_len > limit) {
+            return Err(DropPointClientError::BodyTooLarge { limit });
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
 }
