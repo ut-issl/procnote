@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { onDestroy } from "svelte";
+    import { onDestroy, untrack } from "svelte";
     import DOMPurify from "dompurify";
     import type {
         AttachmentDropPointSessionSummary,
@@ -65,7 +65,6 @@
     let pollTimer: number | null = null;
     let countdownTimer: number | null = null;
     let remoteRunId = 0;
-    let pollInFlight = false;
 
     let isRecorded = $derived(attachments.length > 0);
     let hasSelectedFiles = $derived(selectedFiles.length > 0);
@@ -96,13 +95,28 @@
 
         const imageAttachments = attachments.filter(isImageAttachment);
         const imagePaths = new Set(imageAttachments.map((file) => file.path));
-        previewUrls = Object.fromEntries(
-            Object.entries(previewUrls).filter(([path]) => imagePaths.has(path)),
+        const currentPreviewUrls = untrack(() => previewUrls);
+        const retainedPreviewUrls = Object.fromEntries(
+            Object.entries(currentPreviewUrls).filter(([path]) => imagePaths.has(path)),
         );
+        if (!samePreviewUrls(currentPreviewUrls, retainedPreviewUrls)) {
+            previewUrls = retainedPreviewUrls;
+        }
         for (const file of imageAttachments) {
-            if (!previewUrls[file.path]) void loadPreview(previewLoader, file, runId);
+            if (!currentPreviewUrls[file.path]) void loadPreview(previewLoader, file, runId);
         }
     });
+
+    function samePreviewUrls(
+        left: Record<string, string>,
+        right: Record<string, string>,
+    ): boolean {
+        const leftEntries = Object.entries(left);
+        return (
+            leftEntries.length === Object.keys(right).length &&
+            leftEntries.every(([path, url]) => right[path] === url)
+        );
+    }
 
     function normalizedContentType(contentType: string): string {
         return contentType.split(";")[0]?.trim().toLowerCase() ?? "";
@@ -150,35 +164,27 @@
 
     async function confirmRemoveFile(file: AttachmentState) {
         if (!onremovefile) return;
-        try {
-            const ok = await confirmDialog(`Remove ${file.filename}?`, {
-                title: "Remove attachment",
-                kind: "warning",
-                okLabel: "Remove",
-                cancelLabel: "Cancel",
-            });
-            if (ok) onremovefile(file.path);
-        } catch (e) {
-            remoteError = String(e);
-        }
+        const ok = await confirmDialog(`Remove ${file.filename}?`, {
+            title: "Remove attachment",
+            kind: "warning",
+            okLabel: "Remove",
+            cancelLabel: "Cancel",
+        });
+        if (ok) onremovefile(file.path);
     }
 
     async function confirmClearAll() {
         if (!onclear) return;
-        try {
-            const ok = await confirmDialog(
-                `Remove all ${attachments.length} attachments from ${definition.label}?`,
-                {
-                    title: "Remove all attachments",
-                    kind: "warning",
-                    okLabel: "Remove all",
-                    cancelLabel: "Cancel",
-                },
-            );
-            if (ok) onclear();
-        } catch (e) {
-            remoteError = String(e);
-        }
+        const ok = await confirmDialog(
+            `Remove all ${attachments.length} attachments from ${definition.label}?`,
+            {
+                title: "Remove all attachments",
+                kind: "warning",
+                okLabel: "Remove all",
+                cancelLabel: "Cancel",
+            },
+        );
+        if (ok) onclear();
     }
 
     async function startRemoteUpload() {
@@ -239,8 +245,7 @@
     }
 
     async function pollRemoteOnce() {
-        if (!remoteSession || !onpolldrop || pollInFlight) return;
-        pollInFlight = true;
+        if (!remoteSession || !onpolldrop) return;
         const session = remoteSession;
         const runId = remoteRunId;
         try {
@@ -276,8 +281,6 @@
             stopPolling();
             remotePhase = "failed";
             remoteError = String(e);
-        } finally {
-            pollInFlight = false;
         }
     }
 
