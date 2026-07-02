@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use chrono::Utc;
 use uuid::Uuid;
@@ -35,6 +35,10 @@ pub enum ExecutionError {
     InputAlreadyRecorded(String),
     #[error("input not recorded: {0}")]
     InputNotRecorded(String),
+    #[error("input not found: {0}")]
+    InputNotFound(String),
+    #[error("input is an attachment input, not a scalar input: {0}")]
+    InputIsAttachment(String),
     #[error("attachment not found: {0}")]
     AttachmentNotFound(String),
     #[error("attachment already exists: {0}")]
@@ -45,6 +49,12 @@ pub enum ExecutionError {
     EmptyAttachmentBatch,
     #[error("note not found: {0}")]
     NoteNotFound(String),
+    #[error("step to insert after was not found: {0}")]
+    AfterStepNotFound(String),
+    #[error("invalid attachment event path: {0}")]
+    InvalidAttachmentPath(String),
+    #[error("LogMeta is replay metadata and cannot be applied as a state transition")]
+    ReplayMetadataEvent,
 }
 
 /// Status of the overall execution.
@@ -75,6 +85,9 @@ pub struct StepState {
     /// Ordered content items from the template (prose, checkboxes, input blocks).
     /// Checkbox `checked` state is mutated in-place.
     pub content: Vec<StepContent>,
+    /// Initial checkbox state keyed by checkbox ID, used to distinguish template
+    /// pre-checks from operator-captured checkbox changes.
+    pub initial_checkbox_states: HashMap<String, bool>,
     /// Recorded scalar input values keyed by input ID.
     pub inputs: HashMap<String, RecordedInput>,
     /// Recorded attachments keyed by input ID.
@@ -127,7 +140,7 @@ pub struct ExecutionState {
     pub name: Option<String>,
 
     pub status: ExecutionStatus,
-    /// Ordered step headings (preserves insertion order).
+    /// Ordered step IDs (preserves insertion order).
     pub step_order: Vec<String>,
     pub steps: HashMap<String, StepState>,
     pub global_notes: Vec<RecordedNote>,
@@ -211,27 +224,32 @@ impl ExecutionState {
                 if self.steps.contains_key(step_id) {
                     return Err(ExecutionError::DuplicateStepId(step_id.clone()));
                 }
+                let content = content_with_checkbox_ids(step_id, content);
+                let initial_checkbox_states = checkbox_states(&content);
+                let insert_position = match after_step_id {
+                    Some(after) => Some(
+                        self.step_order
+                            .iter()
+                            .position(|id| id == after)
+                            .ok_or_else(|| ExecutionError::AfterStepNotFound(after.clone()))?
+                            + 1,
+                    ),
+                    None => None,
+                };
                 let step_state = StepState {
                     id: step_id.clone(),
                     heading: heading.clone(),
                     status: StepStatus::Present,
-                    content: content.clone(),
+                    content,
+                    initial_checkbox_states,
                     inputs: HashMap::new(),
                     attachments: HashMap::new(),
                     notes: Vec::new(),
                 };
                 self.steps.insert(step_id.clone(), step_state);
-                match after_step_id {
-                    Some(after) => {
-                        if let Some(pos) = self.step_order.iter().position(|id| id == after) {
-                            self.step_order.insert(pos + 1, step_id.clone());
-                        } else {
-                            self.step_order.push(step_id.clone());
-                        }
-                    }
-                    None => {
-                        self.step_order.push(step_id.clone());
-                    }
+                match insert_position {
+                    Some(position) => self.step_order.insert(position, step_id.clone()),
+                    None => self.step_order.push(step_id.clone()),
                 }
             }
             Event::StepSkipped { step_id, .. } => {
@@ -287,13 +305,19 @@ impl ExecutionState {
             } => {
                 self.require_active()?;
                 let step = self.get_present_step_mut(step_id)?;
-                if step.inputs.contains_key(input_id) {
+                let label = step.scalar_input_label(input_id)?;
+                if step.inputs.contains_key(input_id)
+                    || step
+                        .attachments
+                        .get(input_id)
+                        .is_some_and(|files| !files.is_empty())
+                {
                     return Err(ExecutionError::InputAlreadyRecorded(input_id.clone()));
                 }
                 step.inputs.insert(
                     input_id.clone(),
                     RecordedInput {
-                        label: input_id.clone(),
+                        label,
                         value: value.clone(),
                         unit: unit.clone(),
                     },
@@ -348,6 +372,7 @@ impl ExecutionState {
                 ..
             } => {
                 self.require_active()?;
+                validate_attachment_path(path)?;
                 let step = self.get_present_step_mut(step_id)?;
                 let record = AttachmentRecord {
                     filename: filename.clone(),
@@ -364,6 +389,9 @@ impl ExecutionState {
                 ..
             } => {
                 self.require_active()?;
+                attachments
+                    .iter()
+                    .try_for_each(|attachment| validate_attachment_path(&attachment.path))?;
                 let step = self.get_present_step_mut(step_id)?;
                 add_attachments_to_step(step, input_id, attachments)?;
             }
@@ -374,6 +402,7 @@ impl ExecutionState {
                 ..
             } => {
                 self.require_active()?;
+                validate_attachment_path(path)?;
                 let step = self.get_present_step_mut(step_id)?;
                 remove_attachment_file_from_step(step, input_id, path)?;
             }
@@ -395,7 +424,7 @@ impl ExecutionState {
                 self.name = Some(name.clone());
             }
 
-            Event::LogMeta { .. } => {}
+            Event::LogMeta { .. } => return Err(ExecutionError::ReplayMetadataEvent),
         }
         Ok(())
     }
@@ -707,17 +736,16 @@ impl ExecutionState {
         content_type: &str,
         sha256: &str,
     ) -> Result<Event, ExecutionError> {
-        self.require_active()?;
-        self.validated_candidate(Event::AttachmentAdded {
-            at: Utc::now(),
-            execution_id: self.require_execution_id()?,
-            step_id: step_id.to_string(),
-            input_id: input_id.to_string(),
-            filename: filename.to_string(),
-            path: path.to_string(),
-            content_type: content_type.to_string(),
-            sha256: sha256.to_string(),
-        })
+        self.add_attachments_event(
+            step_id,
+            input_id,
+            vec![AttachmentRecord {
+                filename: filename.to_string(),
+                path: path.to_string(),
+                content_type: content_type.to_string(),
+                sha256: sha256.to_string(),
+            }],
+        )
     }
 
     /// Add an attachment.
@@ -825,16 +853,9 @@ impl ExecutionState {
         &self,
         step_id: &str,
         input_id: &str,
-        reason: &str,
+        _reason: &str,
     ) -> Result<Event, ExecutionError> {
-        self.require_active()?;
-        self.validated_candidate(Event::AttachmentRemoved {
-            at: Utc::now(),
-            execution_id: self.require_execution_id()?,
-            step_id: step_id.to_string(),
-            input_id: input_id.to_string(),
-            reason: reason.to_string(),
-        })
+        self.clear_attachments_event(step_id, input_id)
     }
 
     /// Remove an attachment.
@@ -963,9 +984,6 @@ impl ExecutionState {
         self.steps
             .values_mut()
             .find_map(|step| {
-                if step.status == StepStatus::Skipped {
-                    return None;
-                }
                 step.notes
                     .iter()
                     .position(|note| note.id.as_str() == note_id)
@@ -976,6 +994,68 @@ impl ExecutionState {
             })
             .ok_or_else(|| ExecutionError::NoteNotFound(note_id.to_string()))
     }
+}
+
+fn content_with_checkbox_ids(step_id: &str, content: &[StepContent]) -> Vec<StepContent> {
+    let mut used_ids: HashSet<String> = content
+        .iter()
+        .filter_map(|item| match item {
+            StepContent::Checkbox { id: Some(id), .. } => Some(id.clone()),
+            _ => None,
+        })
+        .collect();
+    let mut checkbox_index = 0usize;
+
+    content
+        .iter()
+        .map(|item| match item {
+            StepContent::Checkbox { id, text, checked } => {
+                let id = id.clone().unwrap_or_else(|| {
+                    loop {
+                        let candidate = format!("{step_id}/cb-{checkbox_index}");
+                        checkbox_index += 1;
+                        if used_ids.insert(candidate.clone()) {
+                            break candidate;
+                        }
+                    }
+                });
+                StepContent::Checkbox {
+                    id: Some(id),
+                    text: text.clone(),
+                    checked: *checked,
+                }
+            }
+            other => other.clone(),
+        })
+        .collect()
+}
+
+fn checkbox_states(content: &[StepContent]) -> HashMap<String, bool> {
+    content
+        .iter()
+        .filter_map(|item| match item {
+            StepContent::Checkbox {
+                id: Some(id),
+                checked,
+                ..
+            } => Some((id.clone(), *checked)),
+            _ => None,
+        })
+        .collect()
+}
+
+fn validate_attachment_path(path: &str) -> Result<(), ExecutionError> {
+    if path.is_empty()
+        || path.starts_with('/')
+        || path.starts_with('\\')
+        || path.contains('\\')
+        || path.split('/').any(|segment| {
+            segment.is_empty() || segment == "." || segment == ".." || segment.contains(':')
+        })
+    {
+        return Err(ExecutionError::InvalidAttachmentPath(path.to_string()));
+    }
+    Ok(())
 }
 
 fn add_attachments_to_step(
@@ -1055,24 +1135,47 @@ impl StepState {
         }
     }
 
-    fn input_type(&self, input_id: &str) -> Option<&InputType> {
+    fn scalar_input_label(&self, input_id: &str) -> Result<String, ExecutionError> {
+        let definition = self
+            .input_definition(input_id)
+            .ok_or_else(|| ExecutionError::InputNotFound(input_id.to_string()))?;
+        match definition.input_type {
+            InputType::Attachment => Err(ExecutionError::InputIsAttachment(input_id.to_string())),
+            InputType::Measurement | InputType::Text | InputType::Selection => {
+                Ok(definition.label.clone())
+            }
+        }
+    }
+
+    fn input_definition(&self, input_id: &str) -> Option<&crate::template::types::InputDefinition> {
         self.content.iter().find_map(|item| match item {
-            StepContent::InputBlock { inputs } => inputs
-                .iter()
-                .find(|definition| definition.id == input_id)
-                .map(|definition| &definition.input_type),
+            StepContent::InputBlock { inputs } => {
+                inputs.iter().find(|definition| definition.id == input_id)
+            }
             _ => None,
         })
+    }
+
+    fn input_type(&self, input_id: &str) -> Option<&InputType> {
+        self.input_definition(input_id)
+            .map(|definition| &definition.input_type)
     }
 
     fn has_captured_data(&self) -> bool {
         !self.inputs.is_empty()
             || self.attachments.values().any(|files| !files.is_empty())
             || !self.notes.is_empty()
-            || self
-                .content
-                .iter()
-                .any(|item| matches!(item, StepContent::Checkbox { checked: true, .. }))
+            || self.content.iter().any(|item| match item {
+                StepContent::Checkbox {
+                    id: Some(id),
+                    checked,
+                    ..
+                } => self
+                    .initial_checkbox_states
+                    .get(id)
+                    .is_some_and(|initial| initial != checked),
+                _ => false,
+            })
     }
 }
 
@@ -1128,6 +1231,22 @@ mod tests {
                                 label: "Photos".to_string(),
                                 input_type: InputType::Attachment,
                                 unit: None,
+                                options: vec![],
+                                expected: None,
+                            },
+                            InputDefinition {
+                                id: "current-draw".to_string(),
+                                label: "Current draw".to_string(),
+                                input_type: InputType::Measurement,
+                                unit: Some("mA".to_string()),
+                                options: vec![],
+                                expected: None,
+                            },
+                            InputDefinition {
+                                id: "voltage".to_string(),
+                                label: "Voltage".to_string(),
+                                input_type: InputType::Measurement,
+                                unit: Some("V".to_string()),
                                 options: vec![],
                                 expected: None,
                             },
@@ -1537,6 +1656,124 @@ mod tests {
         assert_eq!(
             result.unwrap_err(),
             ExecutionError::StepHasCapturedData("step-1".to_string())
+        );
+    }
+
+    #[test]
+    fn test_prechecked_template_checkbox_does_not_block_skip() {
+        let mut template = sample_template();
+        template.steps[2].content = vec![StepContent::Checkbox {
+            id: None,
+            text: "Already verified by setup".to_string(),
+            checked: true,
+        }];
+        let mut state = ExecutionState::new();
+        state.start(&template).unwrap();
+
+        state.skip_step("step-2", "not needed").unwrap();
+
+        assert_eq!(state.steps["step-2"].status, StepStatus::Skipped);
+    }
+
+    #[test]
+    fn test_checkbox_change_blocks_skip_even_when_unchecked() {
+        let mut template = sample_template();
+        template.steps[2].content = vec![StepContent::Checkbox {
+            id: None,
+            text: "Initially checked".to_string(),
+            checked: true,
+        }];
+        let mut state = ExecutionState::new();
+        state.start(&template).unwrap();
+        state
+            .toggle_checkbox("step-2", "step-2/cb-0", false)
+            .unwrap();
+
+        let result = state.skip_step("step-2", "not needed");
+
+        assert_eq!(
+            result.unwrap_err(),
+            ExecutionError::StepHasCapturedData("step-2".to_string())
+        );
+    }
+
+    #[test]
+    fn test_record_input_requires_defined_scalar_input_and_uses_label() {
+        let template = sample_template();
+        let mut state = ExecutionState::new();
+        state.start(&template).unwrap();
+
+        let unknown = state.record_input("step-1", "missing", "value", None);
+        assert_eq!(
+            unknown.unwrap_err(),
+            ExecutionError::InputNotFound("missing".to_string())
+        );
+
+        let attachment = state.record_input("step-1", "log-file", "value", None);
+        assert_eq!(
+            attachment.unwrap_err(),
+            ExecutionError::InputIsAttachment("log-file".to_string())
+        );
+
+        state
+            .record_input("step-1", "current-draw", "120", Some("mA"))
+            .unwrap();
+        assert_eq!(
+            state.steps["step-1"].inputs["current-draw"].label,
+            "Current draw"
+        );
+    }
+
+    #[test]
+    fn test_add_step_requires_existing_after_step_and_assigns_checkbox_ids() {
+        let template = sample_template();
+        let mut state = ExecutionState::new();
+        state.start(&template).unwrap();
+
+        let missing_after = state.add_step("dyn-bad", "Bad", vec![], Some("missing"));
+        assert_eq!(
+            missing_after.unwrap_err(),
+            ExecutionError::AfterStepNotFound("missing".to_string())
+        );
+
+        state
+            .add_step(
+                "dyn-good",
+                "Good",
+                vec![StepContent::Checkbox {
+                    id: None,
+                    text: "Dynamic check".to_string(),
+                    checked: false,
+                }],
+                Some("step-1"),
+            )
+            .unwrap();
+        state
+            .toggle_checkbox("dyn-good", "dyn-good/cb-0", true)
+            .unwrap();
+        assert!(state.steps["dyn-good"].content.iter().any(|item| {
+            matches!(item, StepContent::Checkbox { id: Some(id), checked, .. } if id == "dyn-good/cb-0" && *checked)
+        }));
+    }
+
+    #[test]
+    fn test_attachment_event_paths_must_be_relative_and_normal() {
+        let template = sample_template();
+        let mut state = ExecutionState::new();
+        state.start(&template).unwrap();
+
+        let result = state.add_attachment(
+            "step-1",
+            "log-file",
+            "secret.txt",
+            "../secret.txt",
+            "text/plain",
+            "abc123",
+        );
+
+        assert_eq!(
+            result.unwrap_err(),
+            ExecutionError::InvalidAttachmentPath("../secret.txt".to_string())
         );
     }
 

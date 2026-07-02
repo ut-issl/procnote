@@ -19,12 +19,18 @@ pub enum EventLogError {
         "unsupported event log version {found} (this version of procnote supports version {supported})"
     )]
     UnsupportedVersion { found: u32, supported: u32 },
-    #[error(
-        "unknown event type {type_name:?} at line {line} (within a supported schema version, this is a bug)"
-    )]
+    #[error("unknown event type {type_name:?} at line {line}")]
     UnknownEventType { type_name: String, line: usize },
+    #[error("invalid payload for event type {type_name:?} at line {line}: {source}")]
+    InvalidEventPayload {
+        type_name: String,
+        line: usize,
+        source: serde_json::Error,
+    },
     #[error("corrupt data at line {line} in event log (not valid JSON)")]
     CorruptLine { line: usize },
+    #[error("the first event in a new event log must be LogMeta")]
+    FirstEventMustBeLogMeta,
 }
 
 /// Append a single event to a JSONL file.
@@ -38,8 +44,13 @@ pub fn append_event(path: &Path, event: &Event) -> Result<(), EventLogError> {
         .create(true)
         .append(true)
         .open(path)?;
+    if file.metadata()?.len() == 0 && !matches!(event, Event::LogMeta { .. }) {
+        return Err(EventLogError::FirstEventMustBeLogMeta);
+    }
     let json = serde_json::to_string(event)?;
     writeln!(file, "{json}")?;
+    file.flush()?;
+    file.sync_all()?;
     Ok(())
 }
 
@@ -85,28 +96,63 @@ pub fn read_log(path: &Path) -> Result<Vec<Event>, EventLogError> {
         if trimmed.is_empty() {
             continue;
         }
-        if let Ok(event) = serde_json::from_str::<Event>(trimmed) {
-            events.push(event);
-        } else if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
-            // Valid JSON but unknown event type.
-            let type_name = value
-                .get("type")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("<no type>")
-                .to_string();
-            return Err(EventLogError::UnknownEventType {
-                type_name,
-                line: line_idx + 1,
-            });
-        } else if line_idx + 1 == total_lines {
-            // Tolerate truncated write at the tail.
-            let preview: String = trimmed.chars().take(100).collect();
-            log::warn!("Skipping truncated line at end of event log: {preview}");
-        } else {
-            return Err(EventLogError::CorruptLine { line: line_idx + 1 });
+        match serde_json::from_str::<Event>(trimmed) {
+            Ok(event) => events.push(event),
+            Err(source) => {
+                if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                    let type_name = value
+                        .get("type")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("<no type>")
+                        .to_string();
+                    if is_known_event_type(&type_name) {
+                        return Err(EventLogError::InvalidEventPayload {
+                            type_name,
+                            line: line_idx + 1,
+                            source,
+                        });
+                    }
+                    return Err(EventLogError::UnknownEventType {
+                        type_name,
+                        line: line_idx + 1,
+                    });
+                }
+                if line_idx + 1 == total_lines {
+                    // Tolerate truncated write at the tail.
+                    let preview: String = trimmed.chars().take(100).collect();
+                    log::warn!("Skipping truncated line at end of event log: {preview}");
+                } else {
+                    return Err(EventLogError::CorruptLine { line: line_idx + 1 });
+                }
+            }
         }
     }
     Ok(events)
+}
+
+fn is_known_event_type(type_name: &str) -> bool {
+    matches!(
+        type_name,
+        "execution_started"
+            | "execution_completed"
+            | "execution_aborted"
+            | "execution_reopened"
+            | "step_added"
+            | "step_skipped"
+            | "step_unskipped"
+            | "checkbox_toggled"
+            | "input_recorded"
+            | "input_cleared"
+            | "note_added"
+            | "note_removed"
+            | "attachment_added"
+            | "attachments_added"
+            | "attachment_file_removed"
+            | "attachments_cleared"
+            | "attachment_removed"
+            | "execution_renamed"
+            | "log_meta"
+    )
 }
 
 #[cfg(test)]
@@ -266,13 +312,28 @@ mod tests {
     }
 
     #[test]
+    fn test_append_requires_log_meta_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        let events = sample_events();
+
+        let result = append_event(&path, &events[0]);
+
+        assert!(matches!(
+            result.unwrap_err(),
+            EventLogError::FirstEventMustBeLogMeta
+        ));
+    }
+
+    #[test]
     fn test_missing_log_meta_errors() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("events.jsonl");
 
         // Write events without LogMeta first line.
         let events = sample_events();
-        append_event(&path, &events[0]).unwrap();
+        let json = serde_json::to_string(&events[0]).unwrap();
+        std::fs::write(&path, format!("{json}\n")).unwrap();
 
         let result = read_log(&path);
         assert!(result.is_err());
@@ -281,6 +342,30 @@ mod tests {
             err.contains("LogMeta"),
             "expected missing LogMeta error, got: {err}"
         );
+    }
+
+    #[test]
+    fn test_invalid_known_event_payload_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        append_event(&path, &log_meta()).unwrap();
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        writeln!(
+            file,
+            r#"{{"type":"input_recorded","at":"2025-01-01T00:00:00Z","execution_id":"not-a-uuid","step_id":"step-0","input_id":"v","value":"1"}}"#
+        )
+        .unwrap();
+        drop(file);
+
+        let result = read_log(&path);
+
+        assert!(matches!(
+            result.unwrap_err(),
+            EventLogError::InvalidEventPayload { type_name, .. } if type_name == "input_recorded"
+        ));
     }
 
     #[test]
@@ -333,8 +418,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("nested").join("dir").join("events.jsonl");
 
-        let events = sample_events();
-        append_event(&path, &events[0]).unwrap();
+        append_event(&path, &log_meta()).unwrap();
 
         assert!(path.exists());
     }
