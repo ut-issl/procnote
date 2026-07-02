@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   AttachmentDropPointSessionSummary,
   AttachmentDropPointStatus,
+  AttachmentSource,
   ExecutionAction,
   ExecutionSummary,
   ProcedureTemplate,
@@ -40,6 +41,14 @@ export async function getAttachmentPreviewDataUrl(
   path: string,
 ): Promise<string | null> {
   return invoke("get_attachment_preview_data_url", { executionId, path });
+}
+
+export async function pickAttachmentSources(title: string): Promise<AttachmentSource[]> {
+  return invoke("pick_attachment_sources", { title });
+}
+
+export async function revealExecutionDir(executionId: string): Promise<void> {
+  return invoke("reveal_execution_dir", { executionId });
 }
 
 export async function isDropPointConfigured(): Promise<boolean> {

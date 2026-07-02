@@ -234,7 +234,7 @@
             />
         {:else if block.type === "InputBlock"}
             <div class="step-section">
-                {#each block.inputs as input}
+                {#each block.inputs as input (input.definition.id)}
                     {@const revertHandler = input.recorded && executionActive
                         ? () => clearInput(input.definition.id)
                         : undefined}
@@ -245,6 +245,7 @@
                             disabled={!isInteractable}
                             dropPointEnabled={dropPointEnabled && isInteractable}
                             onattach={(files) => attachFiles(input.definition.id, files)}
+                            onpick={() => api.pickAttachmentSources(input.definition.label)}
                             onremovefile={isInteractable
                                 ? (path) => removeAttachmentFile(input.definition.id, path)
                                 : undefined}

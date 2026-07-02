@@ -1,11 +1,11 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use procnote_core::event::types::CompletionStatus;
 use procnote_core::template::types::StepContent;
 
-/// A file selected by the frontend for attachment storage.
-#[derive(Debug, Deserialize, TS)]
+/// A file selected by the trusted native file picker for attachment storage.
+#[derive(Debug, Deserialize, Serialize, TS)]
 #[ts(export)]
 pub struct AttachmentSource {
     pub filename: String,

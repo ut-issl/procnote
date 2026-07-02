@@ -48,7 +48,12 @@ impl EventLog {
 
         lock_file.lock_exclusive()?;
         let result = f();
-        lock_file.unlock()?;
+        if let Err(e) = lock_file.unlock() {
+            log::warn!(
+                "failed to unlock event log {}; lock will be released on close: {e}",
+                self.path.display()
+            );
+        }
         Ok(result)
     }
 
@@ -130,8 +135,22 @@ fn sync_parent_dir(path: &Path) -> Result<(), std::io::Error> {
     path.parent().map_or(Ok(()), sync_dir)
 }
 
+#[cfg(not(windows))]
 pub(super) fn sync_dir(path: &Path) -> Result<(), std::io::Error> {
     std::fs::File::open(path)?.sync_all()
+}
+
+#[cfg(windows)]
+pub(super) fn sync_dir(path: &Path) -> Result<(), std::io::Error> {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)?
+        .sync_all()
 }
 
 #[cfg(test)]

@@ -8,8 +8,7 @@
         InputDefinition,
     } from "$lib/types";
     import { formatTimestamp } from "$lib/utils/format";
-    import { inferContentType } from "$lib/utils/mime";
-    import { confirm as confirmDialog, open } from "@tauri-apps/plugin-dialog";
+    import { confirm as confirmDialog } from "@tauri-apps/plugin-dialog";
     import Modal from "./Modal.svelte";
     import TrashIcon from "./TrashIcon.svelte";
 
@@ -30,6 +29,7 @@
         disabled = false,
         dropPointEnabled = false,
         onattach,
+        onpick,
         onremovefile,
         onclear,
         onpreview,
@@ -43,6 +43,7 @@
         disabled?: boolean;
         dropPointEnabled?: boolean;
         onattach: (files: AttachmentSource[]) => void;
+        onpick?: () => Promise<AttachmentSource[]>;
         onremovefile?: (path: string) => void;
         onclear?: () => void;
         onpreview?: (path: string) => Promise<string | null>;
@@ -113,31 +114,11 @@
         }
     }
 
-    function filenameFromPath(path: string): string {
-        const separatorIndex = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
-        return separatorIndex >= 0 ? path.slice(separatorIndex + 1) : path;
-    }
-
     async function pickFiles() {
-        const result = await open({
-            multiple: true,
-            directory: false,
-            title: definition.label,
-        });
-        if (!result) return;
-
-        const paths = Array.isArray(result) ? result : [result];
-        selectedFiles = [
-            ...selectedFiles,
-            ...paths.map((path) => {
-                const filename = filenameFromPath(path);
-                return {
-                    filename,
-                    path,
-                    content_type: inferContentType(filename),
-                };
-            }),
-        ];
+        if (!onpick) return;
+        const files = await onpick();
+        if (files.length === 0) return;
+        selectedFiles = [...selectedFiles, ...files];
     }
 
     function attachSelected() {

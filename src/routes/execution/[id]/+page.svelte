@@ -10,7 +10,6 @@
     import StepCard from "$lib/components/StepCard.svelte";
     import AddStepDialog from "$lib/components/AddStepDialog.svelte";
     import Modal from "$lib/components/Modal.svelte";
-    import { revealItemInDir } from "@tauri-apps/plugin-opener";
 
     let showAddStepDialog = $state(false);
     let showCompleteDialog = $state(false);
@@ -116,8 +115,8 @@
     }
 
     async function openDirectory() {
-        if (summary?.execution_dir) {
-            await revealItemInDir(summary.execution_dir);
+        if (summary?.execution_id) {
+            await api.revealExecutionDir(summary.execution_id);
         }
     }
 </script>
@@ -245,7 +244,7 @@
         {/if}
 
         <div class="steps">
-            {#each summary.steps as stepSummary}
+            {#each summary.steps as stepSummary (stepSummary.id)}
                 <StepCard
                     {stepSummary}
                     executionId={summary.execution_id}

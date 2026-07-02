@@ -1,10 +1,13 @@
 mod action;
 mod commands;
 mod drop_point;
+mod path_security;
 mod persistence;
 mod state;
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use clap::Parser;
 use tauri::Manager;
@@ -15,8 +18,8 @@ use commands::drop_point::{
     start_attachment_drop_point_session,
 };
 use commands::execution::{
-    get_attachment_preview_data_url, get_execution_state, list_executions, record_action,
-    start_execution,
+    get_attachment_preview_data_url, get_execution_state, list_executions, pick_attachment_sources,
+    record_action, reveal_execution_dir, start_execution,
 };
 use commands::template::{list_templates, load_template};
 use drop_point::{DropPointConfig, DropPointSessions};
@@ -84,6 +87,7 @@ pub fn run(workspace: &Path) {
             app.manage(AppState {
                 procedures_dir,
                 drop_point_config,
+                attachment_grants: Mutex::new(HashSet::new()),
             });
             app.manage(DropPointSessions::default());
 
@@ -97,6 +101,8 @@ pub fn run(workspace: &Path) {
             get_execution_state,
             list_executions,
             get_attachment_preview_data_url,
+            pick_attachment_sources,
+            reveal_execution_dir,
             is_drop_point_configured,
             start_attachment_drop_point_session,
             poll_attachment_drop_point_session,

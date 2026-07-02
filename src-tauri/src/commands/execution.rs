@@ -3,12 +3,16 @@ use std::path::{Component, Path, PathBuf};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use serde::Serialize;
-use tauri::State;
+use tauri::{AppHandle, State};
+use tauri_plugin_dialog::DialogExt;
 use ts_rs::TS;
 
-use crate::action::ExecutionAction;
+use crate::action::{AttachmentSource, ExecutionAction};
+use crate::path_security::resolve_template_path;
 use crate::persistence::event_log::EventLog;
-use crate::persistence::execution_store::ExecutionStore;
+use crate::persistence::execution_store::{
+    ExecutionStore, find_execution_dir, is_temp_execution_dir,
+};
 use crate::state::AppState;
 use procnote_core::event::types::{CompletionStatus, Event, ExecutionId};
 use procnote_core::execution::{ExecutionState, RecordedAttachment, StepStatus};
@@ -168,7 +172,7 @@ pub(super) fn summarize(
     state: &ExecutionState,
     events: &[Event],
     execution_dir: &Path,
-) -> ExecutionSummary {
+) -> Result<ExecutionSummary, String> {
     use std::collections::HashMap;
 
     // Build timestamp lookup maps.
@@ -338,19 +342,30 @@ pub(super) fn summarize(
 
     let event_history = build_event_history(events);
 
-    ExecutionSummary {
-        execution_id: state.execution_id.unwrap_or_default(),
+    Ok(ExecutionSummary {
+        execution_id: state
+            .execution_id
+            .ok_or_else(|| "execution log is missing ExecutionStarted".to_string())?,
         name: state.name.clone(),
-        procedure_id: state.procedure_id.clone().unwrap_or_default(),
-        procedure_title: state.procedure_title.clone().unwrap_or_default(),
-        procedure_version: state.procedure_version.clone().unwrap_or_default(),
+        procedure_id: state
+            .procedure_id
+            .clone()
+            .ok_or_else(|| "execution log is missing procedure id".to_string())?,
+        procedure_title: state
+            .procedure_title
+            .clone()
+            .ok_or_else(|| "execution log is missing procedure title".to_string())?,
+        procedure_version: state
+            .procedure_version
+            .clone()
+            .ok_or_else(|| "execution log is missing procedure version".to_string())?,
         status: status_string(&state.status),
         started_at,
         finished_at,
         steps,
         event_history,
         execution_dir: execution_dir.display().to_string(),
-    }
+    })
 }
 
 fn build_event_history(events: &[Event]) -> Vec<EventHistoryEntry> {
@@ -460,35 +475,12 @@ fn event_at(event: &Event) -> String {
     }
 }
 
-/// Find the execution directory by scanning all procedure subdirectories.
-fn find_execution_dir(procedures_dir: &Path, execution_id: ExecutionId) -> Option<PathBuf> {
-    let suffix = format!("-{}", &execution_id.to_string()[..8]);
-    let proc_entries = std::fs::read_dir(procedures_dir).ok()?;
-    for proc_entry in proc_entries.flatten() {
-        let exec_base = proc_entry.path().join(".executions");
-        if !exec_base.is_dir() {
-            continue;
-        }
-        let entries = std::fs::read_dir(&exec_base).ok()?;
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir()
-                && let Some(name) = path.file_name().and_then(|n| n.to_str())
-                && name.ends_with(&suffix)
-            {
-                return Some(path);
-            }
-        }
-    }
-    None
-}
-
 /// Load an execution from disk by replaying its event log.
 pub(super) fn load_execution_from_disk(
     procedures_dir: &Path,
     execution_id: ExecutionId,
 ) -> Result<(ExecutionState, Vec<Event>, PathBuf), String> {
-    let exec_dir = find_execution_dir(procedures_dir, execution_id)
+    let exec_dir = find_execution_dir(procedures_dir, execution_id)?
         .ok_or_else(|| format!("Execution not found: {execution_id}"))?;
     let log_path = exec_dir.join("events.jsonl");
     if !log_path.exists() {
@@ -525,7 +517,8 @@ fn preview_content_type(content_type: &str) -> Option<String> {
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '+' | '.'));
 
-    (top_level == "image" && !subtype.is_empty() && subtype_is_safe).then_some(media_type)
+    (top_level == "image" && subtype != "svg+xml" && !subtype.is_empty() && subtype_is_safe)
+        .then_some(media_type)
 }
 
 fn resolve_attachment_file_path(
@@ -582,12 +575,138 @@ pub fn get_attachment_preview_data_url(
     path: String,
 ) -> Result<Option<String>, String> {
     let (exec_state, _, log_path) = load_execution_from_disk(&state.procedures_dir, execution_id)?;
-    let exec_dir = log_path.parent().expect("log_path must have a parent");
+    let exec_dir = log_path
+        .parent()
+        .ok_or_else(|| "event log path has no parent".to_string())?;
     let Some(attachment) = find_attachment(&exec_state, &path) else {
         return Err(format!("Attachment not found: {path}"));
     };
 
     attachment_preview_data_url(exec_dir, attachment)
+}
+
+fn authorize_attachment_action(
+    state: &AppState,
+    action: &mut ExecutionAction,
+) -> Result<(), String> {
+    match action {
+        ExecutionAction::AddAttachment {
+            filename,
+            path,
+            content_type,
+            ..
+        } => authorize_attachment_source(state, filename, path, content_type),
+        ExecutionAction::AddAttachments { files, .. } => files.iter_mut().try_for_each(|source| {
+            authorize_attachment_source(
+                state,
+                &mut source.filename,
+                &mut source.path,
+                &mut source.content_type,
+            )
+        }),
+        _ => Ok(()),
+    }
+}
+
+fn authorize_attachment_source(
+    state: &AppState,
+    filename: &mut String,
+    path: &mut String,
+    content_type: &mut String,
+) -> Result<(), String> {
+    let canonical = Path::new(path)
+        .canonicalize()
+        .map_err(|e| format!("failed to canonicalize attachment path: {e}"))?;
+    if !canonical.is_file() {
+        return Err("attachment path is not a file".to_string());
+    }
+    state.consume_attachment_path(&canonical)?;
+    *filename = canonical
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "attachment path has no filename".to_string())?
+        .to_string();
+    *content_type = infer_attachment_content_type(filename);
+    *path = canonical.to_string_lossy().to_string();
+    Ok(())
+}
+
+fn infer_attachment_content_type(filename: &str) -> String {
+    let extension = Path::new(filename)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase);
+    match extension.as_deref() {
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("png") => "image/png",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        Some("bmp") => "image/bmp",
+        Some("txt" | "log") => "text/plain",
+        Some("csv") => "text/csv",
+        Some("json") => "application/json",
+        Some("pdf") => "application/pdf",
+        _ => "application/octet-stream",
+    }
+    .to_string()
+}
+
+/// Open the native file picker and grant the selected files for one attachment action.
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri command handlers require owned parameters"
+)]
+pub fn pick_attachment_sources(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    title: String,
+) -> Result<Vec<AttachmentSource>, String> {
+    let selected = app
+        .dialog()
+        .file()
+        .set_title(title)
+        .blocking_pick_files()
+        .unwrap_or_default();
+
+    selected
+        .into_iter()
+        .map(|file_path| {
+            let path = file_path.into_path().map_err(|e| e.to_string())?;
+            let canonical = path
+                .canonicalize()
+                .map_err(|e| format!("failed to canonicalize selected file: {e}"))?;
+            if !canonical.is_file() {
+                return Err("selected attachment is not a file".to_string());
+            }
+            state.grant_attachment_path(canonical.clone())?;
+            let filename = canonical
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or_else(|| "selected attachment has no filename".to_string())?
+                .to_string();
+            Ok(AttachmentSource {
+                content_type: infer_attachment_content_type(&filename),
+                filename,
+                path: canonical.to_string_lossy().to_string(),
+            })
+        })
+        .collect()
+}
+
+/// Reveal an execution directory after resolving the execution ID server-side.
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri command handlers require owned parameters"
+)]
+pub fn reveal_execution_dir(
+    state: State<'_, AppState>,
+    execution_id: ExecutionId,
+) -> Result<(), String> {
+    let exec_dir = find_execution_dir(&state.procedures_dir, execution_id)?
+        .ok_or_else(|| format!("Execution not found: {execution_id}"))?;
+    tauri_plugin_opener::reveal_item_in_dir(exec_dir).map_err(|e| e.to_string())
 }
 
 /// Start a new execution from a template file.
@@ -600,6 +719,7 @@ pub fn start_execution(
     state: State<'_, AppState>,
     template_path: String,
 ) -> Result<ExecutionSummary, String> {
+    let template_path = resolve_template_path(&state.procedures_dir, Path::new(&template_path))?;
     let source = std::fs::read_to_string(&template_path).map_err(|e| e.to_string())?;
     let template = parse_template(&source).map_err(|e| e.to_string())?;
 
@@ -608,7 +728,7 @@ pub fn start_execution(
 
     let execution_id = exec_state
         .execution_id
-        .expect("start() must set execution_id");
+        .ok_or_else(|| "start() did not set execution_id".to_string())?;
 
     // Extract the timestamp from the ExecutionStarted event.
     let started_at = events
@@ -617,10 +737,10 @@ pub fn start_execution(
             Event::ExecutionStarted { at, .. } => Some(*at),
             _ => None,
         })
-        .expect("start() must produce an ExecutionStarted event");
+        .ok_or_else(|| "start() did not produce an ExecutionStarted event".to_string())?;
 
     let recorded = ExecutionStore::new(state.procedures_dir.clone()).create_execution(
-        Path::new(&template_path),
+        &template_path,
         exec_state,
         events,
         started_at,
@@ -628,11 +748,7 @@ pub fn start_execution(
         env!("CARGO_PKG_VERSION").to_string(),
     )?;
 
-    Ok(summarize(
-        &recorded.state,
-        &recorded.events,
-        &recorded.execution_dir,
-    ))
+    summarize(&recorded.state, &recorded.events, &recorded.execution_dir)
 }
 
 /// Record an action on an active execution.
@@ -644,16 +760,13 @@ pub fn start_execution(
 pub fn record_action(
     state: State<'_, AppState>,
     execution_id: ExecutionId,
-    action: ExecutionAction,
+    mut action: ExecutionAction,
 ) -> Result<ExecutionSummary, String> {
+    authorize_attachment_action(&state, &mut action)?;
     log::debug!("record_action: execution={execution_id}, action={action:?}");
     let recorded =
         ExecutionStore::new(state.procedures_dir.clone()).record_action(execution_id, action)?;
-    Ok(summarize(
-        &recorded.state,
-        &recorded.events,
-        &recorded.execution_dir,
-    ))
+    summarize(&recorded.state, &recorded.events, &recorded.execution_dir)
 }
 
 /// Get the current state of an execution.
@@ -668,8 +781,10 @@ pub fn get_execution_state(
 ) -> Result<ExecutionSummary, String> {
     let (exec_state, events, log_path) =
         load_execution_from_disk(&state.procedures_dir, execution_id)?;
-    let exec_dir = log_path.parent().expect("log_path must have a parent");
-    Ok(summarize(&exec_state, &events, exec_dir))
+    let exec_dir = log_path
+        .parent()
+        .ok_or_else(|| "event log path has no parent".to_string())?;
+    summarize(&exec_state, &events, exec_dir)
 }
 
 /// List all executions by scanning each procedure's `.executions/` subdirectory.
@@ -692,11 +807,19 @@ pub fn list_executions(state: State<'_, AppState>) -> Result<Vec<ExecutionSummar
         if !exec_base.is_dir() {
             continue;
         }
-        let entries = std::fs::read_dir(&exec_base).map_err(|e| e.to_string())?;
-        for entry in entries {
-            let entry = entry.map_err(|e| e.to_string())?;
+        let entries = match std::fs::read_dir(&exec_base) {
+            Ok(entries) => entries,
+            Err(e) => {
+                log::warn!(
+                    "Skipping unreadable executions directory {}: {e}",
+                    exec_base.display()
+                );
+                continue;
+            }
+        };
+        for entry in entries.flatten() {
             let dir_path = entry.path();
-            if !dir_path.is_dir() {
+            if !dir_path.is_dir() || is_temp_execution_dir(&dir_path) {
                 continue;
             }
             let log_path = dir_path.join("events.jsonl");
@@ -717,7 +840,12 @@ pub fn list_executions(state: State<'_, AppState>) -> Result<Vec<ExecutionSummar
                     continue;
                 }
             };
-            summaries.push(summarize(&exec_state, &events, &dir_path));
+            match summarize(&exec_state, &events, &dir_path) {
+                Ok(summary) => summaries.push(summary),
+                Err(e) => {
+                    log::warn!("Failed to summarize execution {}: {e}", dir_path.display());
+                }
+            }
         }
     }
 
