@@ -1,4 +1,4 @@
-<script lang="ts">
+<script module lang="ts">
     import DOMPurify from "dompurify";
     import { Marked } from "marked";
     import { markedHighlight } from "marked-highlight";
@@ -16,6 +16,8 @@
     import xml from "highlight.js/lib/languages/xml";
     import css_lang from "highlight.js/lib/languages/css";
     import markdown_lang from "highlight.js/lib/languages/markdown";
+
+    import "highlight.js/styles/atom-one-light.css";
 
     hljs.registerLanguage("python", python);
     hljs.registerLanguage("rust", rust);
@@ -37,24 +39,6 @@
     hljs.registerLanguage("markdown", markdown_lang);
     hljs.registerLanguage("md", markdown_lang);
 
-    import "highlight.js/styles/atom-one-light.css";
-
-    import * as api from "$lib/api/commands";
-    import type {
-        AttachmentDropPointSessionSummary,
-        AttachmentDropPointStatus,
-        AttachmentSource,
-        ExecutionAction,
-        ExecutionSummary,
-        StepSummary,
-    } from "$lib/types";
-    import { formatTimestamp } from "$lib/utils/format";
-    import { isNonComposingEnter } from "$lib/utils/keyboard";
-    import AttachmentField from "./AttachmentField.svelte";
-    import CheckboxItem from "./CheckboxItem.svelte";
-    import InputField from "./InputField.svelte";
-    import NoteEditor from "./NoteEditor.svelte";
-
     const markedInstance = new Marked(
         markedHighlight({
             langPrefix: "hljs language-",
@@ -70,6 +54,48 @@
             markedInstance.parse(source, { async: false }) as string,
         );
     }
+</script>
+
+<script lang="ts">
+    import * as api from "$lib/api/commands";
+    import { warn } from "@tauri-apps/plugin-log";
+    import { openUrl } from "@tauri-apps/plugin-opener";
+    import type {
+        AttachmentDropPointSessionSummary,
+        AttachmentDropPointStatus,
+        AttachmentSource,
+        ExecutionAction,
+        ExecutionSummary,
+        StepSummary,
+    } from "$lib/types";
+    import { formatTimestamp } from "$lib/utils/format";
+    import { isNonComposingEnter } from "$lib/utils/keyboard";
+    import AttachmentField from "./AttachmentField.svelte";
+    import CheckboxItem from "./CheckboxItem.svelte";
+    import InputField from "./InputField.svelte";
+    import NoteEditor from "./NoteEditor.svelte";
+
+    function externalLinks(node: HTMLElement) {
+        node.addEventListener("click", handleMarkdownClick);
+        return {
+            destroy() {
+                node.removeEventListener("click", handleMarkdownClick);
+            },
+        };
+    }
+
+    async function handleMarkdownClick(event: MouseEvent) {
+        const target = event.target;
+        if (!(target instanceof Element)) return;
+        const anchor = target.closest("a[href]");
+        if (!(anchor instanceof HTMLAnchorElement)) return;
+        event.preventDefault();
+        try {
+            await openUrl(anchor.href);
+        } catch (e) {
+            await warn(`[StepCard] failed to open link ${anchor.href}: ${e}`);
+        }
+    }
 
     let {
         stepSummary,
@@ -83,7 +109,7 @@
         executionId: string;
         executionActive?: boolean;
         dropPointEnabled?: boolean;
-        onaction: (action: ExecutionAction) => void;
+        onaction: (action: ExecutionAction) => Promise<boolean> | boolean;
         ondropimported?: (summary: ExecutionSummary) => void;
     } = $props();
 
@@ -94,19 +120,21 @@
     let showSkipDialog = $state(false);
     let skipReason = $state("");
 
-    function confirmSkip() {
+    async function confirmSkip() {
         if (!skipReason.trim()) return;
-        onaction({
+        const skipped = await onaction({
             action: "skip_step",
             step_id: stepSummary.id,
             reason: skipReason.trim(),
         });
-        showSkipDialog = false;
-        skipReason = "";
+        if (skipped) {
+            showSkipDialog = false;
+            skipReason = "";
+        }
     }
 
-    function toggleCheckbox(checkboxId: string, checked: boolean) {
-        onaction({
+    function toggleCheckbox(checkboxId: string, checked: boolean): Promise<boolean> | boolean {
+        return onaction({
             action: "toggle_checkbox",
             step_id: stepSummary.id,
             checkbox_id: checkboxId,
@@ -225,7 +253,7 @@
 
     {#each stepSummary.content as block}
         {#if block.type === "Prose"}
-            <div class="step-description">{@html renderMarkdown(block.text)}</div>
+            <div class="step-description" use:externalLinks>{@html renderMarkdown(block.text)}</div>
         {:else if block.type === "Checkbox"}
             <CheckboxItem
                 checkbox={block}
@@ -278,12 +306,7 @@
             notes={stepSummary.notes}
             disabled={!isInteractable}
             onadd={addNote}
-            onrevert={executionActive
-                ? (noteIndex) => {
-                      const note = stepSummary.notes[noteIndex];
-                      if (note) removeNote(note.id);
-                  }
-                : undefined}
+            onrevert={executionActive ? removeNote : undefined}
         />
     </div>
 

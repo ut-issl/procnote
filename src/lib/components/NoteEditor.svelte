@@ -13,7 +13,7 @@
         notes: NoteState[];
         disabled?: boolean;
         onadd: (text: string) => void;
-        onrevert?: (noteIndex: number) => void;
+        onrevert?: (noteId: string) => void;
     } = $props();
 
     let noteText = $state("");
@@ -28,14 +28,14 @@
 <div class="note-editor">
     {#if notes.length > 0}
         <ul class="note-list">
-            {#each notes as note, i}
+            {#each notes as note (note.id)}
                 <li class="note-item">
                     <span class="note-text">{note.text}</span>
                     {#if note.at}
                         <span class="timestamp">{formatTimestamp(note.at)}</span>
                     {/if}
                     {#if onrevert}
-                        <button class="btn-delete" title="Delete note" onclick={() => onrevert(i)}>
+                        <button class="btn-delete" title="Delete note" onclick={() => onrevert(note.id)}>
                             <TrashIcon />
                         </button>
                     {/if}

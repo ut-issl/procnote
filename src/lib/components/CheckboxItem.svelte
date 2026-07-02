@@ -11,8 +11,20 @@
     }: {
         checkbox: CheckboxContent;
         disabled?: boolean;
-        ontoggle: (checkboxId: string, checked: boolean) => void;
+        ontoggle: (checkboxId: string, checked: boolean) => Promise<boolean> | boolean;
     } = $props();
+
+    async function handleChange(event: Event) {
+        const input = event.currentTarget as HTMLInputElement;
+        if (!checkbox.id) {
+            input.checked = checkbox.checked;
+            return;
+        }
+        const toggled = await ontoggle(checkbox.id, input.checked);
+        if (!toggled) {
+            input.checked = checkbox.checked;
+        }
+    }
 </script>
 
 <label class="checkbox-item" class:checked={checkbox.checked} class:disabled>
@@ -20,7 +32,7 @@
         type="checkbox"
         checked={checkbox.checked}
         {disabled}
-        onchange={() => ontoggle(checkbox.id ?? "", !checkbox.checked)}
+        onchange={handleChange}
     />
     <span class="checkbox-text">{checkbox.text}</span>
     {#if checkbox.at}

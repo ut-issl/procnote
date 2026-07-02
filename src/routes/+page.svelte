@@ -52,8 +52,8 @@
 	});
 
 	async function handleStart(template: TemplateSummary) {
-		await executionStore.start(template.path);
-		if (executionStore.summary) {
+		const started = await executionStore.start(template.path);
+		if (started && executionStore.summary) {
 			goto(`/execution/${executionStore.summary.execution_id}`);
 		}
 	}
@@ -66,6 +66,9 @@
 <div class="home">
 	<section class="section">
 		<h2 class="section-title">Procedure Templates</h2>
+		{#if executionStore.error}
+			<p class="error">{executionStore.error}</p>
+		{/if}
 		{#if loadingTemplates}
 			<p class="loading">Loading templates...</p>
 		{:else if error}
