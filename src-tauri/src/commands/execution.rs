@@ -15,9 +15,11 @@ use crate::persistence::execution_store::{
 };
 use crate::state::AppState;
 use procnote_core::event::types::{CompletionStatus, Event, ExecutionId};
-use procnote_core::execution::{ExecutionState, RecordedAttachment, StepStatus};
+use procnote_core::execution::{
+    ExecutionState, ExecutionStepContent, RecordedAttachment, StepStatus,
+};
 use procnote_core::template::parse_template;
-use procnote_core::template::types::{InputDefinition, StepContent};
+use procnote_core::template::types::InputDefinition;
 
 /// Serializable execution state summary for the frontend.
 #[derive(Debug, Serialize, TS)]
@@ -36,29 +38,12 @@ pub struct ExecutionSummary {
     /// ISO 8601 timestamp of when the execution was finished (completed/aborted).
     #[ts(optional)]
     pub finished_at: Option<String>,
+    /// ISO 8601 timestamp of the last state transition applied to this execution.
+    #[ts(optional)]
+    pub updated_at: Option<String>,
     pub steps: Vec<StepSummary>,
-    pub event_history: Vec<EventHistoryEntry>,
     /// Absolute path to the execution directory on disk.
     pub execution_dir: String,
-}
-
-/// A single entry in the event history, exposed to the frontend.
-#[derive(Debug, Serialize, TS)]
-#[ts(export)]
-pub struct EventHistoryEntry {
-    pub index: usize,
-    pub event_type: String,
-    /// ISO 8601 timestamp string.
-    pub at: String,
-    pub description: String,
-    /// Step ID for step-scoped events, if applicable.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub step_id: Option<String>,
-    /// Element ID (`checkbox_id` or `input_id`) for element-scoped events, if applicable.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub element_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, TS)]
@@ -160,102 +145,22 @@ fn status_string(status: &procnote_core::execution::ExecutionStatus) -> String {
 fn step_status_string(status: &StepStatus) -> String {
     match status {
         StepStatus::Present => "present".to_string(),
-        StepStatus::Skipped => "skipped".to_string(),
+        StepStatus::Skipped { .. } => "skipped".to_string(),
     }
+}
+
+fn datetime_string(value: Option<chrono::DateTime<chrono::Utc>>) -> Option<String> {
+    value.map(|at| at.to_rfc3339())
 }
 
 #[expect(
     clippy::too_many_lines,
-    reason = "large match over all event variants to build summary"
+    reason = "DTO conversion handles all execution content variants"
 )]
 pub(super) fn summarize(
     state: &ExecutionState,
-    events: &[Event],
     execution_dir: &Path,
 ) -> Result<ExecutionSummary, String> {
-    use std::collections::HashMap;
-
-    // Build timestamp lookup maps.
-    // Store as RFC3339 strings to avoid depending on chrono in this crate.
-    let mut started_at: Option<String> = None;
-    let mut finished_at: Option<String> = None;
-    // step_id -> most recent skip timestamp
-    let mut step_status_at: HashMap<&str, String> = HashMap::new();
-    // checkbox_id -> most recent toggle timestamp
-    let mut checkbox_at: HashMap<&str, String> = HashMap::new();
-    // input_id -> most recent record timestamp
-    let mut input_at: HashMap<&str, String> = HashMap::new();
-    // input_id -> attachment relative path -> add timestamp
-    let mut attachment_at: HashMap<String, HashMap<String, String>> = HashMap::new();
-    // note_id -> add timestamp
-    let mut note_at: HashMap<&str, String> = HashMap::new();
-
-    for event in events {
-        match event {
-            Event::ExecutionStarted { at, .. } => {
-                started_at = Some(at.to_rfc3339());
-            }
-            Event::ExecutionCompleted { at, .. } | Event::ExecutionAborted { at, .. } => {
-                finished_at = Some(at.to_rfc3339());
-            }
-            Event::ExecutionReopened { .. } => {
-                finished_at = None;
-            }
-            Event::StepSkipped { at, step_id, .. } => {
-                step_status_at.insert(step_id, at.to_rfc3339());
-            }
-            Event::StepUnskipped { step_id, .. } => {
-                step_status_at.remove(step_id.as_str());
-            }
-            Event::CheckboxToggled {
-                at, checkbox_id, ..
-            } => {
-                checkbox_at.insert(checkbox_id, at.to_rfc3339());
-            }
-            Event::InputRecorded { at, input_id, .. } => {
-                input_at.insert(input_id, at.to_rfc3339());
-            }
-            Event::InputCleared { input_id, .. } => {
-                input_at.remove(input_id.as_str());
-            }
-            Event::AttachmentAdded {
-                at, input_id, path, ..
-            } => {
-                attachment_at
-                    .entry(input_id.clone())
-                    .or_default()
-                    .insert(path.clone(), at.to_rfc3339());
-            }
-            Event::AttachmentsAdded {
-                at,
-                input_id,
-                attachments,
-                ..
-            } => {
-                let entry = attachment_at.entry(input_id.clone()).or_default();
-                for attachment in attachments {
-                    entry.insert(attachment.path.clone(), at.to_rfc3339());
-                }
-            }
-            Event::AttachmentFileRemoved { input_id, path, .. } => {
-                if let Some(paths) = attachment_at.get_mut(input_id) {
-                    paths.remove(path);
-                }
-            }
-            Event::AttachmentsCleared { input_id, .. }
-            | Event::AttachmentRemoved { input_id, .. } => {
-                attachment_at.remove(input_id);
-            }
-            Event::NoteAdded { at, note_id, .. } => {
-                note_at.insert(note_id, at.to_rfc3339());
-            }
-            Event::NoteRemoved { note_id, .. } => {
-                note_at.remove(note_id.as_str());
-            }
-            _ => {}
-        }
-    }
-
     let steps = state
         .step_order
         .iter()
@@ -265,58 +170,53 @@ pub(super) fn summarize(
                     .content
                     .iter()
                     .map(|item| match item {
-                        StepContent::Prose { text } => {
+                        ExecutionStepContent::Prose { text } => {
                             StepContentSummary::Prose { text: text.clone() }
                         }
-                        StepContent::Checkbox { id, text, checked } => {
-                            StepContentSummary::Checkbox {
-                                id: id.clone(),
-                                text: text.clone(),
-                                checked: *checked,
-                                at: id
-                                    .as_ref()
-                                    .and_then(|cb_id| checkbox_at.get(cb_id.as_str()).cloned()),
+                        ExecutionStepContent::Checkbox(checkbox) => StepContentSummary::Checkbox {
+                            id: Some(checkbox.id.clone()),
+                            text: checkbox.text.clone(),
+                            checked: checkbox.checked,
+                            at: datetime_string(checkbox.toggled_at),
+                        },
+                        ExecutionStepContent::InputBlock { inputs } => {
+                            StepContentSummary::InputBlock {
+                                inputs: inputs
+                                    .iter()
+                                    .map(|def| {
+                                        let recorded =
+                                            step.inputs.get(&def.id).map(|input| InputState {
+                                                label: input.label.clone(),
+                                                value: input.value.clone(),
+                                                unit: input.unit.clone(),
+                                                at: Some(input.at.to_rfc3339()),
+                                                sha256: None,
+                                            });
+                                        let attachments = step
+                                            .attachments
+                                            .get(&def.id)
+                                            .map(|files| {
+                                                files
+                                                    .iter()
+                                                    .map(|file| AttachmentState {
+                                                        filename: file.filename.clone(),
+                                                        path: file.path.clone(),
+                                                        content_type: file.content_type.clone(),
+                                                        sha256: file.sha256.clone(),
+                                                        at: Some(file.at.to_rfc3339()),
+                                                    })
+                                                    .collect()
+                                            })
+                                            .unwrap_or_default();
+                                        InputDefinitionSummary {
+                                            definition: def.clone(),
+                                            recorded,
+                                            attachments,
+                                        }
+                                    })
+                                    .collect(),
                             }
                         }
-                        StepContent::InputBlock { inputs } => StepContentSummary::InputBlock {
-                            inputs: inputs
-                                .iter()
-                                .map(|def| {
-                                    let recorded =
-                                        step.inputs.get(&def.id).map(|input| InputState {
-                                            label: input.label.clone(),
-                                            value: input.value.clone(),
-                                            unit: input.unit.clone(),
-                                            at: input_at.get(def.id.as_str()).cloned(),
-                                            sha256: None,
-                                        });
-                                    let attachments = step
-                                        .attachments
-                                        .get(&def.id)
-                                        .map(|files| {
-                                            files
-                                                .iter()
-                                                .map(|file| AttachmentState {
-                                                    filename: file.filename.clone(),
-                                                    path: file.path.clone(),
-                                                    content_type: file.content_type.clone(),
-                                                    sha256: file.sha256.clone(),
-                                                    at: attachment_at
-                                                        .get(&def.id)
-                                                        .and_then(|paths| paths.get(&file.path))
-                                                        .cloned(),
-                                                })
-                                                .collect()
-                                        })
-                                        .unwrap_or_default();
-                                    InputDefinitionSummary {
-                                        definition: def.clone(),
-                                        recorded,
-                                        attachments,
-                                    }
-                                })
-                                .collect(),
-                        },
                     })
                     .collect();
                 let notes = step
@@ -325,22 +225,23 @@ pub(super) fn summarize(
                     .map(|note| NoteState {
                         id: note.id.clone(),
                         text: note.text.clone(),
-                        at: note_at.get(note.id.as_str()).cloned(),
+                        at: Some(note.at.to_rfc3339()),
                     })
                     .collect();
                 StepSummary {
                     id: step_id.clone(),
                     heading: step.heading.clone(),
                     status: step_status_string(&step.status),
-                    status_at: step_status_at.get(step_id.as_str()).cloned(),
+                    status_at: match &step.status {
+                        StepStatus::Present => None,
+                        StepStatus::Skipped { at, .. } => Some(at.to_rfc3339()),
+                    },
                     content,
                     notes,
                 }
             })
         })
         .collect();
-
-    let event_history = build_event_history(events);
 
     Ok(ExecutionSummary {
         execution_id: state
@@ -360,126 +261,19 @@ pub(super) fn summarize(
             .clone()
             .ok_or_else(|| "execution log is missing procedure version".to_string())?,
         status: status_string(&state.status),
-        started_at,
-        finished_at,
+        started_at: datetime_string(state.started_at),
+        finished_at: datetime_string(state.finished_at),
+        updated_at: datetime_string(state.updated_at),
         steps,
-        event_history,
         execution_dir: execution_dir.display().to_string(),
     })
-}
-
-fn build_event_history(events: &[Event]) -> Vec<EventHistoryEntry> {
-    events
-        .iter()
-        .enumerate()
-        .map(|(index, event)| {
-            let (step_id, element_id) = event_step_and_label(event);
-            EventHistoryEntry {
-                index,
-                event_type: event_type_string(event),
-                at: event_at(event),
-                description: event.description(),
-                step_id,
-                element_id,
-            }
-        })
-        .collect()
-}
-
-/// Extract optional `step_id` and `element_id` from an event.
-fn event_step_and_label(event: &Event) -> (Option<String>, Option<String>) {
-    match event {
-        Event::StepSkipped { step_id, .. } | Event::StepUnskipped { step_id, .. } => {
-            (Some(step_id.clone()), None)
-        }
-        Event::CheckboxToggled {
-            step_id,
-            checkbox_id,
-            ..
-        } => (Some(step_id.clone()), Some(checkbox_id.clone())),
-        Event::InputRecorded {
-            step_id, input_id, ..
-        }
-        | Event::InputCleared {
-            step_id, input_id, ..
-        }
-        | Event::AttachmentAdded {
-            step_id, input_id, ..
-        }
-        | Event::AttachmentsAdded {
-            step_id, input_id, ..
-        }
-        | Event::AttachmentFileRemoved {
-            step_id, input_id, ..
-        }
-        | Event::AttachmentsCleared {
-            step_id, input_id, ..
-        }
-        | Event::AttachmentRemoved {
-            step_id, input_id, ..
-        } => (Some(step_id.clone()), Some(input_id.clone())),
-        Event::NoteAdded {
-            step_id, note_id, ..
-        } => (step_id.clone(), Some(note_id.clone())),
-        Event::NoteRemoved { note_id, .. } => (None, Some(note_id.clone())),
-        _ => (None, None),
-    }
-}
-
-fn event_type_string(event: &Event) -> String {
-    match event {
-        Event::ExecutionStarted { .. } => "execution_started",
-        Event::ExecutionCompleted { .. } => "execution_completed",
-        Event::ExecutionAborted { .. } => "execution_aborted",
-        Event::ExecutionReopened { .. } => "execution_reopened",
-        Event::StepAdded { .. } => "step_added",
-        Event::StepSkipped { .. } => "step_skipped",
-        Event::StepUnskipped { .. } => "step_unskipped",
-        Event::CheckboxToggled { .. } => "checkbox_toggled",
-        Event::InputRecorded { .. } => "input_recorded",
-        Event::InputCleared { .. } => "input_cleared",
-        Event::NoteAdded { .. } => "note_added",
-        Event::NoteRemoved { .. } => "note_removed",
-        Event::AttachmentAdded { .. } => "attachment_added",
-        Event::AttachmentsAdded { .. } => "attachments_added",
-        Event::AttachmentFileRemoved { .. } => "attachment_file_removed",
-        Event::AttachmentsCleared { .. } => "attachments_cleared",
-        Event::AttachmentRemoved { .. } => "attachment_removed",
-        Event::ExecutionRenamed { .. } => "execution_renamed",
-        Event::LogMeta { .. } => "log_meta",
-    }
-    .to_string()
-}
-
-fn event_at(event: &Event) -> String {
-    match event {
-        Event::ExecutionStarted { at, .. }
-        | Event::ExecutionCompleted { at, .. }
-        | Event::ExecutionAborted { at, .. }
-        | Event::ExecutionReopened { at, .. }
-        | Event::StepAdded { at, .. }
-        | Event::StepSkipped { at, .. }
-        | Event::StepUnskipped { at, .. }
-        | Event::CheckboxToggled { at, .. }
-        | Event::InputRecorded { at, .. }
-        | Event::InputCleared { at, .. }
-        | Event::NoteAdded { at, .. }
-        | Event::NoteRemoved { at, .. }
-        | Event::AttachmentAdded { at, .. }
-        | Event::AttachmentsAdded { at, .. }
-        | Event::AttachmentFileRemoved { at, .. }
-        | Event::AttachmentsCleared { at, .. }
-        | Event::AttachmentRemoved { at, .. }
-        | Event::ExecutionRenamed { at, .. }
-        | Event::LogMeta { at, .. } => at.to_rfc3339(),
-    }
 }
 
 /// Load an execution from disk by replaying its event log.
 pub(super) fn load_execution_from_disk(
     procedures_dir: &Path,
     execution_id: ExecutionId,
-) -> Result<(ExecutionState, Vec<Event>, PathBuf), String> {
+) -> Result<(ExecutionState, PathBuf), String> {
     let exec_dir = find_execution_dir(procedures_dir, execution_id)?
         .ok_or_else(|| format!("Execution not found: {execution_id}"))?;
     let log_path = exec_dir.join("events.jsonl");
@@ -490,7 +284,7 @@ pub(super) fn load_execution_from_disk(
         .read_locked()
         .map_err(|e| e.to_string())?;
     let state = ExecutionState::from_events(&events).map_err(|e| e.to_string())?;
-    Ok((state, events, log_path))
+    Ok((state, log_path))
 }
 
 fn find_attachment<'a>(
@@ -589,7 +383,7 @@ pub fn get_attachment_preview_data_url(
     execution_id: ExecutionId,
     path: String,
 ) -> Result<Option<String>, String> {
-    let (exec_state, _, log_path) = load_execution_from_disk(&state.procedures_dir, execution_id)?;
+    let (exec_state, log_path) = load_execution_from_disk(&state.procedures_dir, execution_id)?;
     let exec_dir = log_path
         .parent()
         .ok_or_else(|| "event log path has no parent".to_string())?;
@@ -763,7 +557,7 @@ pub fn start_execution(
         env!("CARGO_PKG_VERSION").to_string(),
     )?;
 
-    summarize(&recorded.state, &recorded.events, &recorded.execution_dir)
+    summarize(&recorded.state, &recorded.execution_dir)
 }
 
 /// Record an action on an active execution.
@@ -781,7 +575,7 @@ pub fn record_action(
     log::debug!("record_action: execution={execution_id}, action={action:?}");
     let recorded =
         ExecutionStore::new(state.procedures_dir.clone()).record_action(execution_id, action)?;
-    summarize(&recorded.state, &recorded.events, &recorded.execution_dir)
+    summarize(&recorded.state, &recorded.execution_dir)
 }
 
 /// Get the current state of an execution.
@@ -794,12 +588,11 @@ pub fn get_execution_state(
     state: State<'_, AppState>,
     execution_id: ExecutionId,
 ) -> Result<ExecutionSummary, String> {
-    let (exec_state, events, log_path) =
-        load_execution_from_disk(&state.procedures_dir, execution_id)?;
+    let (exec_state, log_path) = load_execution_from_disk(&state.procedures_dir, execution_id)?;
     let exec_dir = log_path
         .parent()
         .ok_or_else(|| "event log path has no parent".to_string())?;
-    summarize(&exec_state, &events, exec_dir)
+    summarize(&exec_state, exec_dir)
 }
 
 /// List all executions by scanning each procedure's `.executions/` subdirectory.
@@ -855,7 +648,7 @@ pub fn list_executions(state: State<'_, AppState>) -> Result<Vec<ExecutionSummar
                     continue;
                 }
             };
-            match summarize(&exec_state, &events, &dir_path) {
+            match summarize(&exec_state, &dir_path) {
                 Ok(summary) => summaries.push(summary),
                 Err(e) => {
                     log::warn!("Failed to summarize execution {}: {e}", dir_path.display());

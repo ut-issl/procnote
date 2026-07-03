@@ -5,6 +5,7 @@ use chrono::{DateTime, Utc};
 use procnote_core::event::SUPPORTED_VERSION;
 use procnote_core::event::types::{AttachmentRecord, Event, ExecutionId};
 use procnote_core::execution::ExecutionState;
+use procnote_core::snapshot::render_execution_markdown;
 
 use crate::action::{AttachmentSource, ExecutionAction};
 use crate::persistence::attachment_store::{AttachmentStore, PendingStoredAttachment};
@@ -16,7 +17,6 @@ pub struct ExecutionStore {
 
 pub struct RecordedExecution {
     pub state: ExecutionState,
-    pub events: Vec<Event>,
     pub execution_dir: PathBuf,
 }
 
@@ -84,6 +84,7 @@ impl ExecutionStore {
         EventLog::new(temp_dir.join("events.jsonl"))
             .create_with_events_durable(&events)
             .map_err(|e| e.to_string())?;
+        write_execution_snapshot_durable(&temp_dir, &state)?;
 
         sync_dir(&temp_dir).map_err(|e| e.to_string())?;
         std::fs::rename(&temp_dir, &final_dir).map_err(|e| e.to_string())?;
@@ -91,7 +92,6 @@ impl ExecutionStore {
 
         Ok(RecordedExecution {
             state,
-            events,
             execution_dir: final_dir,
         })
     }
@@ -147,7 +147,7 @@ impl ExecutionStore {
 
         event_log
             .with_exclusive_lock(|| {
-                let mut events = transaction_log.read().map_err(|e| e.to_string())?;
+                let events = transaction_log.read().map_err(|e| e.to_string())?;
                 let mut state = ExecutionState::from_events(&events).map_err(|e| e.to_string())?;
 
                 let built = build_action(&state, &execution_dir)?;
@@ -156,10 +156,13 @@ impl ExecutionStore {
                 transaction_log
                     .append_durable(&built.event)
                     .map_err(|e| e.to_string())?;
-                events.push(built.event);
+                if let Err(e) = write_execution_snapshot_durable(&execution_dir, &state) {
+                    log::warn!(
+                        "failed to update execution snapshot for {execution_id} after appending event: {e}"
+                    );
+                }
                 Ok(RecordedExecution {
                     state,
-                    events,
                     execution_dir,
                 })
             })
@@ -450,6 +453,43 @@ pub fn is_temp_execution_dir(path: &Path) -> bool {
         .is_some_and(|name| name.starts_with('.') || name.contains(".tmp-"))
 }
 
+fn write_execution_snapshot_durable(
+    execution_dir: &Path,
+    state: &ExecutionState,
+) -> Result<(), String> {
+    let snapshot_path = execution_dir.join("README.md");
+    let temp_path = execution_dir.join(format!(".README.md.tmp-{}", uuid::Uuid::new_v4()));
+    let markdown = render_execution_markdown(state);
+
+    let write_result = write_file_durable(&temp_path, markdown.as_bytes())
+        .and_then(|()| std::fs::rename(&temp_path, &snapshot_path))
+        .and_then(|()| sync_dir(execution_dir));
+
+    if let Err(error) = write_result {
+        if let Err(remove_error) = std::fs::remove_file(&temp_path)
+            && remove_error.kind() != std::io::ErrorKind::NotFound
+        {
+            log::warn!(
+                "failed to remove temporary execution snapshot {}: {remove_error}",
+                temp_path.display()
+            );
+        }
+        return Err(error.to_string());
+    }
+
+    Ok(())
+}
+
+fn write_file_durable(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut file = std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(path)?;
+    file.write_all(bytes)?;
+    file.flush()?;
+    file.sync_all()
+}
+
 fn copy_file_durable(source: &Path, destination: &Path) -> std::io::Result<()> {
     let bytes = std::fs::read(source)?;
     let mut file = std::fs::OpenOptions::new()
@@ -469,4 +509,85 @@ fn execution_dir_name(at: &DateTime<Utc>, execution_id: ExecutionId) -> String {
         at.format("%Y%m%dT%H%M%S"),
         &execution_id.to_string()[..8]
     )
+}
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used, reason = "unwrap is acceptable in tests")]
+mod tests {
+    use super::*;
+    use procnote_core::template::parse_template;
+
+    const TEMPLATE: &str = r"---
+id: snapshot-test
+title: Snapshot Test
+version: 1.0.0
+---
+
+## Prepare
+
+- [ ] Ready
+
+## Measure
+
+```inputs
+- id: voltage
+  label: Voltage
+  type: measurement
+  unit: V
+```
+";
+
+    #[test]
+    fn create_and_update_execution_snapshot_readme() {
+        let temp = tempfile::tempdir().unwrap();
+        let procedure_dir = temp.path().join("snapshot-test");
+        std::fs::create_dir(&procedure_dir).unwrap();
+        let template_path = procedure_dir.join("template.md");
+        std::fs::write(&template_path, TEMPLATE).unwrap();
+
+        let template = parse_template(TEMPLATE).unwrap();
+        let mut state = ExecutionState::new();
+        let events = state.start(&template).unwrap();
+        let execution_id = state.execution_id.unwrap();
+        let started_at = events
+            .iter()
+            .find_map(|event| match event {
+                Event::ExecutionStarted { at, .. } => Some(*at),
+                _ => None,
+            })
+            .unwrap();
+
+        let store = ExecutionStore::new(temp.path().to_path_buf());
+        let recorded = store
+            .create_execution(
+                &template_path,
+                state,
+                events,
+                started_at,
+                execution_id,
+                "test".to_string(),
+            )
+            .unwrap();
+
+        let readme_path = recorded.execution_dir.join("README.md");
+        let initial_readme = std::fs::read_to_string(&readme_path).unwrap();
+        assert!(initial_readme.contains("# Snapshot Test"));
+        assert!(initial_readme.contains("- [ ] Ready"));
+        assert!(!initial_readme.contains("Event history"));
+
+        store
+            .record_action(
+                execution_id,
+                ExecutionAction::ToggleCheckbox {
+                    step_id: "step-0".to_string(),
+                    checkbox_id: "step-0/cb-0".to_string(),
+                    checked: true,
+                },
+            )
+            .unwrap();
+
+        let updated_readme = std::fs::read_to_string(readme_path).unwrap();
+        assert!(updated_readme.contains("- [x] Ready"));
+        assert!(updated_readme.contains("Toggled at:"));
+    }
 }

@@ -1,6 +1,6 @@
 use procnote_core::event::types::ExecutionId;
-use procnote_core::execution::{ExecutionState, ExecutionStatus, StepStatus};
-use procnote_core::template::types::{InputType, StepContent};
+use procnote_core::execution::{ExecutionState, ExecutionStatus, ExecutionStepContent, StepStatus};
+use procnote_core::template::types::InputType;
 use qrcode::QrCode;
 use qrcode::render::svg;
 use serde::Serialize;
@@ -64,7 +64,7 @@ pub async fn start_attachment_drop_point_session(
 ) -> Result<AttachmentDropPointSessionSummary, String> {
     let config = configured(&state)?;
     let client = configured_client(&state)?;
-    let (execution_state, _events, log_path) =
+    let (execution_state, log_path) =
         load_execution_from_disk(&state.procedures_dir, execution_id)?;
     let execution_dir = log_path
         .parent()
@@ -190,7 +190,7 @@ pub async fn import_attachment_drop_point_upload(
             .collect();
         let recorded = ExecutionStore::new(state.procedures_dir.clone())
             .record_attachment_bytes_batch(execution_id, &step_id, &input_id, sources)?;
-        summarize(&recorded.state, &recorded.events, &recorded.execution_dir)
+        summarize(&recorded.state, &recorded.execution_dir)
     }
     .await;
 
@@ -320,7 +320,7 @@ fn validate_attachment_target(
     step_id: &str,
     input_id: &str,
 ) -> Result<(), String> {
-    match state.status {
+    match &state.status {
         ExecutionStatus::Active => {}
         ExecutionStatus::Pending => return Err("execution has not been started".to_string()),
         ExecutionStatus::Finished(_) => return Err("execution has already finished".to_string()),
@@ -329,12 +329,12 @@ fn validate_attachment_target(
         .steps
         .get(step_id)
         .ok_or_else(|| format!("step not found: {step_id}"))?;
-    match step.status {
+    match &step.status {
         StepStatus::Present => {}
-        StepStatus::Skipped => return Err(format!("step already skipped: {step_id}")),
+        StepStatus::Skipped { .. } => return Err(format!("step already skipped: {step_id}")),
     }
     let input_type = step.content.iter().find_map(|item| match item {
-        StepContent::InputBlock { inputs } => inputs
+        ExecutionStepContent::InputBlock { inputs } => inputs
             .iter()
             .find(|definition| definition.id == input_id)
             .map(|definition| &definition.input_type),

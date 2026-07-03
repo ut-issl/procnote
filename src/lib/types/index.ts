@@ -6,7 +6,6 @@ export type { AttachmentSource } from "./generated/AttachmentSource";
 export type { AttachmentState } from "./generated/AttachmentState";
 export type { CompletionStatus } from "./generated/CompletionStatus";
 export type { Equipment } from "./generated/Equipment";
-export type { EventHistoryEntry } from "./generated/EventHistoryEntry";
 export type { ExecutionAction } from "./generated/ExecutionAction";
 export type { ExecutionSummary } from "./generated/ExecutionSummary";
 export type { ExpectedValue } from "./generated/ExpectedValue";
