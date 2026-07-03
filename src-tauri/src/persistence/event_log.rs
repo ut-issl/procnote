@@ -25,35 +25,27 @@ impl EventLog {
         read_log(&self.path)
     }
 
+    pub fn read_locked(&self) -> Result<Vec<Event>, EventLogError> {
+        self.with_shared_lock(|| self.read())?
+    }
+
     /// Run a closure while holding an exclusive advisory lock for this event log.
     ///
     /// The lock file lives next to `events.jsonl`. Callers should keep the full
     /// read/replay/validate/append sequence inside this critical section.
     pub fn with_exclusive_lock<T>(&self, f: impl FnOnce() -> T) -> Result<T, EventLogError> {
-        if let Some(parent) = self.path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-
-        let lock_path = self.lock_path();
-        let lock_existed = lock_path.exists();
-        let lock_file = std::fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .open(&lock_path)?;
-        if !lock_existed {
-            sync_parent_dir(&lock_path)?;
-        }
-
+        let lock_file = self.open_lock_file()?;
         lock_file.lock_exclusive()?;
         let result = f();
-        if let Err(e) = lock_file.unlock() {
-            log::warn!(
-                "failed to unlock event log {}; lock will be released on close: {e}",
-                self.path.display()
-            );
-        }
+        self.unlock_or_warn(&lock_file);
+        Ok(result)
+    }
+
+    pub fn with_shared_lock<T>(&self, f: impl FnOnce() -> T) -> Result<T, EventLogError> {
+        let lock_file = self.open_lock_file()?;
+        lock_file.lock_shared()?;
+        let result = f();
+        self.unlock_or_warn(&lock_file);
         Ok(result)
     }
 
@@ -112,6 +104,34 @@ impl EventLog {
         sync_parent_dir(&self.path)?;
 
         Ok(())
+    }
+
+    fn open_lock_file(&self) -> Result<std::fs::File, EventLogError> {
+        if let Some(parent) = self.path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let lock_path = self.lock_path();
+        let lock_existed = lock_path.exists();
+        let lock_file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&lock_path)?;
+        if !lock_existed {
+            sync_parent_dir(&lock_path)?;
+        }
+        Ok(lock_file)
+    }
+
+    fn unlock_or_warn(&self, lock_file: &std::fs::File) {
+        if let Err(e) = lock_file.unlock() {
+            log::warn!(
+                "failed to unlock event log {}; lock will be released on close: {e}",
+                self.path.display()
+            );
+        }
     }
 
     fn lock_path(&self) -> PathBuf {

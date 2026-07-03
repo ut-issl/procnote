@@ -5,16 +5,11 @@ import type {
   AttachmentSource,
   ExecutionAction,
   ExecutionSummary,
-  ProcedureTemplate,
   TemplateSummary,
 } from "$lib/types";
 
 export async function listTemplates(): Promise<TemplateSummary[]> {
   return invoke("list_templates");
-}
-
-export async function loadTemplate(path: string): Promise<ProcedureTemplate> {
-  return invoke("load_template", { path });
 }
 
 export async function startExecution(templatePath: string): Promise<ExecutionSummary> {

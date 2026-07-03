@@ -8,10 +8,6 @@ class ExecutionStore {
   error: string | null = $state(null);
   #actionQueue: Promise<boolean> = Promise.resolve(true);
 
-  get isActive() {
-    return this.summary?.status === "active";
-  }
-
   get isFinished() {
     const s = this.summary?.status;
     return s === "pass" || s === "fail" || s === "aborted";

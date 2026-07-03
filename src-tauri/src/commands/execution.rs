@@ -487,7 +487,7 @@ pub(super) fn load_execution_from_disk(
         return Err(format!("Execution not found: {execution_id}"));
     }
     let events = EventLog::new(log_path.clone())
-        .read()
+        .read_locked()
         .map_err(|e| e.to_string())?;
     let state = ExecutionState::from_events(&events).map_err(|e| e.to_string())?;
     Ok((state, events, log_path))
@@ -826,7 +826,7 @@ pub fn list_executions(state: State<'_, AppState>) -> Result<Vec<ExecutionSummar
             if !log_path.exists() {
                 continue;
             }
-            let events = match EventLog::new(log_path.clone()).read() {
+            let events = match EventLog::new(log_path.clone()).read_locked() {
                 Ok(events) => events,
                 Err(e) => {
                     log::warn!("Failed to read events from {}: {e}", log_path.display());
