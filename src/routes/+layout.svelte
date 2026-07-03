@@ -42,6 +42,101 @@
 		flex-shrink: 0;
 	}
 
+	:global(.btn) {
+		padding: 6px 16px;
+		border-radius: 4px;
+		font: inherit;
+		font-size: 13px;
+		font-weight: 600;
+		cursor: pointer;
+		border: 1px solid transparent;
+	}
+
+	:global(.btn:disabled) {
+		opacity: 0.5;
+		cursor: not-allowed;
+	}
+
+	:global(.btn-primary),
+	:global(.btn-record) {
+		background: #1a1a2e;
+		color: #fff;
+	}
+
+	:global(.btn-primary:hover:not(:disabled)),
+	:global(.btn-record:hover:not(:disabled)) {
+		background: #16213e;
+	}
+
+	:global(.btn-secondary),
+	:global(.btn-muted) {
+		background: #fff;
+		color: #333;
+		border-color: #ccc;
+	}
+
+	:global(.btn-secondary:hover:not(:disabled)),
+	:global(.btn-muted:hover:not(:disabled)) {
+		background: #f5f5f5;
+	}
+
+	:global(.btn-success) {
+		background: #2e7d32;
+		color: #fff;
+	}
+
+	:global(.btn-success:hover:not(:disabled)) {
+		background: #1b5e20;
+	}
+
+	:global(.btn-danger) {
+		background: #c62828;
+		color: #fff;
+	}
+
+	:global(.btn-danger:hover:not(:disabled)) {
+		background: #b71c1c;
+	}
+
+	:global(.btn-warn) {
+		background: #e65100;
+		color: #fff;
+	}
+
+	:global(.btn-warn:hover:not(:disabled)) {
+		background: #bf360c;
+	}
+
+	:global(.btn-undo) {
+		background: #fff;
+		color: #6a1b9a;
+		border-color: #ce93d8;
+	}
+
+	:global(.btn-undo:hover:not(:disabled)) {
+		background: #f3e5f5;
+	}
+
+	:global(.status-active) {
+		background: #e8f5e9;
+		color: #2e7d32;
+	}
+
+	:global(.status-pass) {
+		background: #e0f2f1;
+		color: #00695c;
+	}
+
+	:global(.status-fail) {
+		background: #fce4ec;
+		color: #c2185b;
+	}
+
+	:global(.status-aborted) {
+		background: #fff3e0;
+		color: #e65100;
+	}
+
 	:global(.btn-delete) {
 		display: flex;
 		align-items: center;

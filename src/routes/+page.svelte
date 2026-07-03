@@ -209,26 +209,6 @@
 		color: #666;
 	}
 
-	.status-active {
-		background: #e8f5e9;
-		color: #2e7d32;
-	}
-
-	.status-pass {
-		background: #e0f2f1;
-		color: #00695c;
-	}
-
-	.status-fail {
-		background: #fce4ec;
-		color: #c62828;
-	}
-
-	.status-aborted {
-		background: #fff3e0;
-		color: #e65100;
-	}
-
 	.exec-meta {
 		display: flex;
 		gap: 16px;
