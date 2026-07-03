@@ -5,7 +5,9 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use hkdf::Hkdf;
 use serde::Deserialize;
 use sha2::Sha256;
+use subtle::ConstantTimeEq;
 use x25519_dalek::{PublicKey, StaticSecret};
+use zeroize::Zeroizing;
 
 use crate::drop_point::manifest::{ManifestError, RecoveredFile, split_payload};
 
@@ -18,6 +20,7 @@ const AAD_PAYLOAD: &[u8] = b"\x02payload";
 const X25519_KEY_BYTES: usize = 32;
 const AES_GCM_NONCE_BYTES: usize = 12;
 const AES_GCM_TAG_BYTES: usize = 16;
+type AesKey = Zeroizing<[u8; 32]>;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -51,10 +54,10 @@ pub enum DropPointCryptoError {
 }
 
 #[must_use]
-pub fn generate_recipient_key_pair() -> ([u8; 32], [u8; 32]) {
+pub fn generate_recipient_key_pair() -> (Zeroizing<[u8; 32]>, [u8; 32]) {
     let private = StaticSecret::random();
     let public = PublicKey::from(&private);
-    (private.to_bytes(), public.to_bytes())
+    (Zeroizing::new(private.to_bytes()), public.to_bytes())
 }
 
 #[must_use]
@@ -63,7 +66,7 @@ pub fn encode_base64url(bytes: &[u8]) -> String {
 }
 
 pub fn decrypt_bundle(
-    recipient_private_key: [u8; 32],
+    recipient_private_key: &[u8; 32],
     envelope_json: &[u8],
     encrypted_payload: &[u8],
 ) -> Result<Vec<RecoveredFile>, DropPointCryptoError> {
@@ -82,11 +85,11 @@ pub fn decrypt_bundle(
         AES_GCM_TAG_BYTES,
     )?;
 
-    let recipient_private = StaticSecret::from(recipient_private_key);
+    let recipient_private = StaticSecret::from(*recipient_private_key);
     let recipient_public = PublicKey::from(&recipient_private).to_bytes();
     let sender_public = PublicKey::from(sender_public_key);
     let shared_secret = recipient_private.diffie_hellman(&sender_public);
-    if shared_secret.as_bytes().iter().all(|byte| *byte == 0) {
+    if bool::from(shared_secret.as_bytes().ct_eq(&[0u8; 32])) {
         return Err(DropPointCryptoError::AllZeroSharedSecret);
     }
 
@@ -204,17 +207,17 @@ fn derive_keys(
     shared_secret: &[u8; 32],
     sender_public_key: &[u8; 32],
     recipient_public_key: &[u8; 32],
-) -> Result<([u8; 32], [u8; 32]), DropPointCryptoError> {
-    let mut salt = [0u8; 64];
+) -> Result<(AesKey, AesKey), DropPointCryptoError> {
+    let mut salt = Zeroizing::new([0u8; 64]);
     salt[..32].copy_from_slice(sender_public_key);
     salt[32..].copy_from_slice(recipient_public_key);
 
-    let hkdf = Hkdf::<Sha256>::new(Some(&salt), shared_secret);
-    let mut metadata_key = [0u8; 32];
-    let mut payload_key = [0u8; 32];
-    hkdf.expand(INFO_METADATA, &mut metadata_key)
+    let hkdf = Hkdf::<Sha256>::new(Some(&*salt), shared_secret);
+    let mut metadata_key = Zeroizing::new([0u8; 32]);
+    let mut payload_key = Zeroizing::new([0u8; 32]);
+    hkdf.expand(INFO_METADATA, &mut *metadata_key)
         .map_err(|_| DropPointCryptoError::Hkdf)?;
-    hkdf.expand(INFO_PAYLOAD, &mut payload_key)
+    hkdf.expand(INFO_PAYLOAD, &mut *payload_key)
         .map_err(|_| DropPointCryptoError::Hkdf)?;
     Ok((metadata_key, payload_key))
 }
@@ -265,7 +268,7 @@ mod tests {
     #[test]
     fn decrypts_single_file_vector() {
         let files = decrypt_bundle(
-            private_key(),
+            &private_key(),
             SINGLE_ENVELOPE_JSON.as_bytes(),
             &decode_test_b64(SINGLE_ENCRYPTED_PAYLOAD),
         )
@@ -280,7 +283,7 @@ mod tests {
     #[test]
     fn decrypts_multi_file_vector() {
         let files = decrypt_bundle(
-            private_key(),
+            &private_key(),
             MULTI_ENVELOPE_JSON.as_bytes(),
             &decode_test_b64(MULTI_ENCRYPTED_PAYLOAD),
         )
@@ -299,7 +302,7 @@ mod tests {
         let mut payload = decode_test_b64(SINGLE_ENCRYPTED_PAYLOAD);
         payload[0] ^= 1;
         assert!(matches!(
-            decrypt_bundle(private_key(), SINGLE_ENVELOPE_JSON.as_bytes(), &payload),
+            decrypt_bundle(&private_key(), SINGLE_ENVELOPE_JSON.as_bytes(), &payload),
             Err(DropPointCryptoError::Decrypt("payload"))
         ));
     }
