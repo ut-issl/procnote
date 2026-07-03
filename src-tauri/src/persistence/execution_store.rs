@@ -106,35 +106,9 @@ impl ExecutionStore {
         execution_id: ExecutionId,
         action: ExecutionAction,
     ) -> Result<RecordedExecution, String> {
-        let execution_dir = find_execution_dir(&self.procedures_dir, execution_id)?
-            .ok_or_else(|| format!("Execution not found: {execution_id}"))?;
-        let log_path = execution_dir.join("events.jsonl");
-        if !log_path.exists() {
-            return Err(format!("Execution not found: {execution_id}"));
-        }
-        let event_log = EventLog::new(log_path.clone());
-
-        event_log
-            .with_exclusive_lock(|| {
-                let mut events = EventLog::new(log_path.clone())
-                    .read()
-                    .map_err(|e| e.to_string())?;
-                let mut state = ExecutionState::from_events(&events).map_err(|e| e.to_string())?;
-
-                let built = build_event_for_action(&state, &execution_dir, action)?;
-                state.apply(&built.event).map_err(|e| e.to_string())?;
-                commit_pending_attachments(&execution_dir, built.pending_attachments)?;
-                EventLog::new(log_path.clone())
-                    .append_durable(&built.event)
-                    .map_err(|e| e.to_string())?;
-                events.push(built.event);
-                Ok(RecordedExecution {
-                    state,
-                    events,
-                    execution_dir,
-                })
-            })
-            .map_err(|e| e.to_string())?
+        self.with_log_transaction(execution_id, |state, execution_dir| {
+            build_event_for_action(state, execution_dir, action)
+        })
     }
 
     pub fn record_attachment_bytes_batch(
@@ -144,32 +118,45 @@ impl ExecutionStore {
         input_id: &str,
         files: Vec<AttachmentBytesSource>,
     ) -> Result<RecordedExecution, String> {
+        self.with_log_transaction(execution_id, |state, execution_dir| {
+            let pending_attachments = prepare_attachment_bytes(execution_dir, files)?;
+            let attachments = pending_attachments.iter().map(attachment_record).collect();
+            let event = state
+                .add_attachments_event(step_id, input_id, attachments)
+                .map_err(|e| e.to_string())?;
+            Ok(BuiltAction {
+                event,
+                pending_attachments,
+            })
+        })
+    }
+
+    fn with_log_transaction(
+        &self,
+        execution_id: ExecutionId,
+        build_action: impl FnOnce(&ExecutionState, &Path) -> Result<BuiltAction, String>,
+    ) -> Result<RecordedExecution, String> {
         let execution_dir = find_execution_dir(&self.procedures_dir, execution_id)?
             .ok_or_else(|| format!("Execution not found: {execution_id}"))?;
         let log_path = execution_dir.join("events.jsonl");
         if !log_path.exists() {
             return Err(format!("Execution not found: {execution_id}"));
         }
-        let event_log = EventLog::new(log_path.clone());
+        let event_log = EventLog::new(log_path);
+        let transaction_log = event_log.clone();
 
         event_log
             .with_exclusive_lock(|| {
-                let mut events = EventLog::new(log_path.clone())
-                    .read()
-                    .map_err(|e| e.to_string())?;
+                let mut events = transaction_log.read().map_err(|e| e.to_string())?;
                 let mut state = ExecutionState::from_events(&events).map_err(|e| e.to_string())?;
 
-                let prepared = prepare_attachment_bytes(&execution_dir, files)?;
-                let attachments = prepared.iter().map(attachment_record).collect();
-                let event = state
-                    .add_attachments_event(step_id, input_id, attachments)
+                let built = build_action(&state, &execution_dir)?;
+                state.apply(&built.event).map_err(|e| e.to_string())?;
+                commit_pending_attachments(&execution_dir, built.pending_attachments)?;
+                transaction_log
+                    .append_durable(&built.event)
                     .map_err(|e| e.to_string())?;
-                state.apply(&event).map_err(|e| e.to_string())?;
-                commit_pending_attachments(&execution_dir, prepared)?;
-                EventLog::new(log_path.clone())
-                    .append_durable(&event)
-                    .map_err(|e| e.to_string())?;
-                events.push(event);
+                events.push(built.event);
                 Ok(RecordedExecution {
                     state,
                     events,
@@ -433,7 +420,7 @@ pub fn find_execution_dir(
             if !log_path.exists() {
                 continue;
             }
-            let events = match EventLog::new(log_path.clone()).read() {
+            let events = match EventLog::new(log_path.clone()).read_locked() {
                 Ok(events) => events,
                 Err(e) => {
                     log::warn!("skipping unreadable event log {}: {e}", log_path.display());

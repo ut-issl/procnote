@@ -51,7 +51,7 @@ pub struct AttachmentDropPointStatus {
     reason = "Tauri command handlers require owned parameters"
 )]
 pub fn is_drop_point_configured(state: State<'_, AppState>) -> bool {
-    state.drop_point_config.is_some()
+    state.drop_point_client.is_some()
 }
 
 #[tauri::command]
@@ -63,21 +63,27 @@ pub async fn start_attachment_drop_point_session(
     input_id: String,
 ) -> Result<AttachmentDropPointSessionSummary, String> {
     let config = configured(&state)?;
-    let (execution_state, _events, _log_path) =
+    let client = configured_client(&state)?;
+    let (execution_state, _events, log_path) =
         load_execution_from_disk(&state.procedures_dir, execution_id)?;
+    let execution_dir = log_path
+        .parent()
+        .ok_or_else(|| "event log path has no parent".to_string())?
+        .to_path_buf();
     validate_attachment_target(&execution_state, &step_id, &input_id)?;
 
-    let client = DropPointClient::new(config.clone());
-    if let Some(previous) = sessions.remove_for_target(execution_id, &step_id, &input_id)?
-        && let Err(e) = client
+    if let Some(previous) = sessions.remove_for_target(execution_id, &step_id, &input_id)? {
+        match client
             .close(&previous.drop_point_id, &previous.pickup_token)
             .await
-    {
-        log::warn!(
-            "DropPoint close failed while replacing session {}: {}",
-            previous.session_id,
-            e
-        );
+        {
+            Ok(()) => previous.delete_persisted()?,
+            Err(e) => log::warn!(
+                "DropPoint close failed while replacing session {}: {}",
+                previous.session_id,
+                e
+            ),
+        }
     }
 
     let (recipient_private_key, recipient_public_key) = generate_recipient_key_pair();
@@ -93,6 +99,7 @@ pub async fn start_attachment_drop_point_session(
         recipient_public_key,
         execution_id,
         target,
+        execution_dir,
     );
     match session {
         Ok((session, summary)) => match sessions.insert(session.clone()) {
@@ -130,9 +137,9 @@ pub async fn poll_attachment_drop_point_session(
     sessions: State<'_, DropPointSessions>,
     session_id: String,
 ) -> Result<AttachmentDropPointStatus, String> {
-    let config = configured(&state)?;
+    let client = configured_client(&state)?;
     let session = sessions.get(&session_id)?;
-    let status = DropPointClient::new(config)
+    let status = client
         .status(&session.drop_point_id, &session.pickup_token)
         .await
         .map_err(|e| e.to_string())?;
@@ -156,9 +163,8 @@ pub async fn import_attachment_drop_point_upload(
     input_id: String,
     session_id: String,
 ) -> Result<super::execution::ExecutionSummary, String> {
-    let config = configured(&state)?;
+    let client = configured_client(&state)?;
     let session = sessions.take(&session_id)?;
-    let client = DropPointClient::new(config);
 
     let import_result = async {
         ensure_session_target(&session, execution_id, &step_id, &input_id)?;
@@ -190,15 +196,16 @@ pub async fn import_attachment_drop_point_upload(
 
     match import_result {
         Ok(summary) => {
-            if let Err(e) = client
+            match client
                 .close(&session.drop_point_id, &session.pickup_token)
                 .await
             {
-                log::warn!(
+                Ok(()) => session.delete_persisted()?,
+                Err(e) => log::warn!(
                     "DropPoint close failed after local import for session {}: {}",
                     session.session_id,
                     e
-                );
+                ),
             }
             Ok(summary)
         }
@@ -215,20 +222,15 @@ pub async fn cancel_attachment_drop_point_session(
     sessions: State<'_, DropPointSessions>,
     session_id: String,
 ) -> Result<(), String> {
-    let config = configured(&state)?;
+    let client = configured_client(&state)?;
     let Ok(session) = sessions.take(&session_id) else {
         return Ok(());
     };
-    if let Err(e) = DropPointClient::new(config)
+    client
         .close(&session.drop_point_id, &session.pickup_token)
         .await
-    {
-        log::warn!(
-            "DropPoint close failed while cancelling session {}: {}",
-            session.session_id,
-            e
-        );
-    }
+        .map_err(|e| e.to_string())?;
+    session.delete_persisted()?;
     Ok(())
 }
 
@@ -250,6 +252,7 @@ fn build_session(
     recipient_public_key: [u8; 32],
     execution_id: ExecutionId,
     target: SessionInputTarget,
+    execution_dir: std::path::PathBuf,
 ) -> Result<(ActiveDropPointSession, AttachmentDropPointSessionSummary), SessionSetupError> {
     let drop_point_id = created.drop_point_id;
     let pickup_token = created.pickup_token;
@@ -272,6 +275,7 @@ fn build_session(
             step_id: target.step_id,
             input_id: target.input_id,
             expires_at,
+            execution_dir,
         };
         let summary = AttachmentDropPointSessionSummary {
             session_id,
@@ -300,6 +304,13 @@ fn parse_server_datetime(value: &str) -> Result<DateTime<Utc>, String> {
 fn configured(state: &AppState) -> Result<DropPointConfig, String> {
     state
         .drop_point_config
+        .clone()
+        .ok_or_else(|| "DropPoint is not configured".to_string())
+}
+
+fn configured_client(state: &AppState) -> Result<DropPointClient, String> {
+    state
+        .drop_point_client
         .clone()
         .ok_or_else(|| "DropPoint is not configured".to_string())
 }

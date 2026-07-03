@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
@@ -18,7 +18,12 @@ pub struct StoredAttachment {
 
 pub struct PendingStoredAttachment {
     pub stored: StoredAttachment,
-    bytes: Vec<u8>,
+    source: PendingAttachmentSource,
+}
+
+enum PendingAttachmentSource {
+    File(PathBuf),
+    Bytes(Vec<u8>),
 }
 
 impl AttachmentStore {
@@ -27,13 +32,21 @@ impl AttachmentStore {
         Self { execution_dir }
     }
 
+    #[expect(
+        clippy::unused_self,
+        reason = "keeps the attachment preparation API uniform with byte preparation"
+    )]
     pub fn prepare_copy(
         &self,
         source: &Path,
         filename: &str,
     ) -> Result<PendingStoredAttachment, String> {
-        let bytes = std::fs::read(source).map_err(|e| e.to_string())?;
-        self.prepare_bytes(filename, bytes)
+        let filename = sanitize_attachment_filename(filename);
+        let sha256 = compute_sha256(source).map_err(|e| e.to_string())?;
+        Ok(PendingStoredAttachment {
+            stored: stored_attachment(filename, sha256),
+            source: PendingAttachmentSource::File(source.to_path_buf()),
+        })
     }
 
     #[expect(
@@ -48,15 +61,9 @@ impl AttachmentStore {
     ) -> Result<PendingStoredAttachment, String> {
         let filename = sanitize_attachment_filename(filename);
         let sha256 = hex_encode(Sha256::digest(&bytes).as_ref());
-        let short_hash = &sha256[..7];
-        let stored_name = format!("{short_hash}-{filename}");
         Ok(PendingStoredAttachment {
-            stored: StoredAttachment {
-                filename,
-                relative_path: format!("attachments/{stored_name}"),
-                sha256,
-            },
-            bytes,
+            stored: stored_attachment(filename, sha256),
+            source: PendingAttachmentSource::Bytes(bytes),
         })
     }
 
@@ -85,12 +92,57 @@ impl AttachmentStore {
             .write(true)
             .open(&destination)
             .map_err(|e| e.to_string())?;
-        file.write_all(&pending.bytes).map_err(|e| e.to_string())?;
+        write_pending_source(&pending.source, &mut file, &pending.stored.sha256)?;
         file.flush().map_err(|e| e.to_string())?;
         file.sync_all().map_err(|e| e.to_string())?;
         sync_dir(&attachments_dir).map_err(|e| e.to_string())?;
 
         Ok(pending.stored)
+    }
+}
+
+fn stored_attachment(filename: String, sha256: String) -> StoredAttachment {
+    let short_hash = &sha256[..7];
+    let stored_name = format!("{short_hash}-{filename}");
+    StoredAttachment {
+        filename,
+        relative_path: format!("attachments/{stored_name}"),
+        sha256,
+    }
+}
+
+fn write_pending_source(
+    source: &PendingAttachmentSource,
+    destination: &mut std::fs::File,
+    expected_sha256: &str,
+) -> Result<(), String> {
+    match source {
+        PendingAttachmentSource::Bytes(bytes) => {
+            destination.write_all(bytes).map_err(|e| e.to_string())
+        }
+        PendingAttachmentSource::File(path) => {
+            let mut source = std::fs::File::open(path).map_err(|e| e.to_string())?;
+            let mut hasher = Sha256::new();
+            let mut buffer = vec![0u8; 64 * 1024];
+            loop {
+                let read = source.read(&mut buffer).map_err(|e| e.to_string())?;
+                if read == 0 {
+                    break;
+                }
+                hasher.update(&buffer[..read]);
+                destination
+                    .write_all(&buffer[..read])
+                    .map_err(|e| e.to_string())?;
+            }
+            let copied_hash = hex_encode(hasher.finalize().as_ref());
+            if copied_hash == expected_sha256 {
+                Ok(())
+            } else {
+                Err(format!(
+                    "attachment hash mismatch while copying: expected {expected_sha256}, got {copied_hash}"
+                ))
+            }
+        }
     }
 }
 
@@ -177,8 +229,17 @@ fn is_windows_reserved_name(filename: &str) -> bool {
 }
 
 fn compute_sha256(path: &Path) -> std::io::Result<String> {
-    let bytes = std::fs::read(path)?;
-    Ok(hex_encode(Sha256::digest(&bytes).as_ref()))
+    let mut file = std::fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(hex_encode(hasher.finalize().as_ref()))
 }
 
 fn hex_encode(bytes: &[u8]) -> String {
