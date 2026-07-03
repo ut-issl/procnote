@@ -10,6 +10,7 @@
     } from "$lib/types";
     import { formatTimestamp } from "$lib/utils/format";
     import { confirm as confirmDialog } from "@tauri-apps/plugin-dialog";
+    import { warn } from "@tauri-apps/plugin-log";
     import Modal from "./Modal.svelte";
     import TrashIcon from "./TrashIcon.svelte";
 
@@ -65,6 +66,7 @@
     let pollTimer: number | null = null;
     let countdownTimer: number | null = null;
     let remoteRunId = 0;
+    let pollInFlightRunId: number | null = null;
 
     let isRecorded = $derived(attachments.length > 0);
     let hasSelectedFiles = $derived(selectedFiles.length > 0);
@@ -164,26 +166,38 @@
 
     async function confirmRemoveFile(file: AttachmentState) {
         if (!onremovefile) return;
-        const ok = await confirmDialog(`Remove ${file.filename}?`, {
-            title: "Remove attachment",
-            kind: "warning",
-            okLabel: "Remove",
-            cancelLabel: "Cancel",
-        });
+        let ok = false;
+        try {
+            ok = await confirmDialog(`Remove ${file.filename}?`, {
+                title: "Remove attachment",
+                kind: "warning",
+                okLabel: "Remove",
+                cancelLabel: "Cancel",
+            });
+        } catch (e) {
+            await warn(`[AttachmentField] remove confirmation failed: ${e}`);
+            return;
+        }
         if (ok) onremovefile(file.path);
     }
 
     async function confirmClearAll() {
         if (!onclear) return;
-        const ok = await confirmDialog(
-            `Remove all ${attachments.length} attachments from ${definition.label}?`,
-            {
-                title: "Remove all attachments",
-                kind: "warning",
-                okLabel: "Remove all",
-                cancelLabel: "Cancel",
-            },
-        );
+        let ok = false;
+        try {
+            ok = await confirmDialog(
+                `Remove all ${attachments.length} attachments from ${definition.label}?`,
+                {
+                    title: "Remove all attachments",
+                    kind: "warning",
+                    okLabel: "Remove all",
+                    cancelLabel: "Cancel",
+                },
+            );
+        } catch (e) {
+            await warn(`[AttachmentField] clear confirmation failed: ${e}`);
+            return;
+        }
         if (ok) onclear();
     }
 
@@ -248,6 +262,8 @@
         if (!remoteSession || !onpolldrop) return;
         const session = remoteSession;
         const runId = remoteRunId;
+        if (pollInFlightRunId === runId) return;
+        pollInFlightRunId = runId;
         try {
             const status = await onpolldrop(session.session_id);
             if (runId !== remoteRunId) return;
@@ -278,9 +294,14 @@
                     break;
             }
         } catch (e) {
+            if (runId !== remoteRunId) return;
             stopPolling();
             remotePhase = "failed";
             remoteError = String(e);
+        } finally {
+            if (pollInFlightRunId === runId) {
+                pollInFlightRunId = null;
+            }
         }
     }
 
