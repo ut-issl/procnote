@@ -264,16 +264,40 @@ fn render_attachment_input(step: &StepState, definition: &InputDefinition, outpu
 }
 
 fn render_attachment(file: &RecordedAttachment, output: &mut String) {
+    let link_text = escape_link_text(&file.filename);
+    let link_destination = escape_link_destination(&file.path);
     push_fmt(
         output,
         format_args!(
             "  - [{}]({})  \n    SHA256: {}  \n    Added at: {}\n",
-            escape_link_text(&file.filename),
-            escape_link_destination(&file.path),
+            link_text,
+            link_destination,
             inline_code(&file.sha256),
             file.at.to_rfc3339()
         ),
     );
+    if is_markdown_preview_image(&file.content_type) {
+        push_fmt(
+            output,
+            format_args!("\n    ![{link_text}]({link_destination})\n"),
+        );
+    }
+}
+
+fn is_markdown_preview_image(content_type: &str) -> bool {
+    let media_type = content_type
+        .split_once(';')
+        .map_or(content_type, |(media_type, _)| media_type)
+        .trim()
+        .to_ascii_lowercase();
+    let Some((top_level, subtype)) = media_type.split_once('/') else {
+        return false;
+    };
+    let subtype_is_safe = subtype
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '+' | '.'));
+
+    top_level == "image" && subtype != "svg+xml" && !subtype.is_empty() && subtype_is_safe
 }
 
 fn render_step_notes(step: &StepState, output: &mut String) {
@@ -576,6 +600,7 @@ mod tests {
                 .contains("| voltage | Bus \\| voltage | `28.1` | V | 2026-07-04T12:00:02+00:00 |")
         );
         assert!(markdown.contains("[panel photo.jpg](attachments/abc1234-panel%20photo.jpg)"));
+        assert!(markdown.contains("![panel photo.jpg](attachments/abc1234-panel%20photo.jpg)"));
         assert!(markdown.contains("Stable \\| nominal"));
         assert!(!markdown.contains("Event history"));
     }
