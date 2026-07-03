@@ -34,6 +34,10 @@ Each step in the procedure is displayed as a card. To work through a step:
 4. **Add notes** -- Attach freeform notes to any step or to the execution as a whole.
 5. **Complete the step** -- Mark it as done, or skip it with a reason.
 
+## Attachment Uploads from Another Device
+
+If [DropPoint integration](drop-point.md) is configured, attachment inputs also show **Upload via QR Code**. Use it when a sender needs to upload files from another device, such as photos from a phone. Procnote creates a short-lived DropPoint upload session, imports the encrypted upload as local attachments, and then closes the remote drop point.
+
 ## Adding Steps During Execution
 
 You can add new steps dynamically during an execution using the **+ Add Step** button in the toolbar. The new step is inserted after the currently selected step (or at the end).

@@ -2,15 +2,16 @@
 site_name = "Procnote Documentation"
 site_description = "Documentation for Procnote, an event-sourced desktop app for executing and auditing step-by-step procedures."
 site_author = "Shunichiro Nomura"
-site_url = "https://shunichironomura.github.io/procnote/"
-repo_name = "shunichironomura/procnote"
-repo_url = "https://github.com/shunichironomura/procnote"
+site_url = "https://www.space.t.u-tokyo.ac.jp/procnote/"
+repo_name = "ut-issl/procnote"
+repo_url = "https://github.com/ut-issl/procnote"
 nav = [
   { "Home" = "index.md" },
   { "Guide" = [
     { "Overview" = "guide/index.md" },
     { "Writing a Template" = "guide/writing-a-template.md" },
     { "Running an Execution" = "guide/running-an-execution.md" },
+    { "DropPoint Integration" = "guide/drop-point.md" },
   ] },
   { "Concepts" = [
     { "Overview" = "concepts/index.md" },
@@ -53,7 +54,9 @@ toggle.icon = "lucide/moon"
 toggle.name = "Switch to light mode"
 
 [project.markdown_extensions.admonition]
+
 [project.markdown_extensions.pymdownx.details]
+
 [project.markdown_extensions.pymdownx.superfences]
 custom_fences = [
   { name = "mermaid", class = "mermaid", format = "pymdownx.superfences.fence_code_format" },
