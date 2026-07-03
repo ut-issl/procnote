@@ -1,6 +1,6 @@
+use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
-use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use serde::Serialize;
 use tauri::{AppHandle, State};
@@ -558,8 +558,23 @@ fn attachment_preview_data_url(
         return Ok(None);
     };
     let file_path = resolve_attachment_file_path(execution_dir, &attachment.path)?;
-    let bytes = std::fs::read(file_path).map_err(|e| e.to_string())?;
-    let encoded = BASE64_STANDARD.encode(bytes);
+    let mut input = std::fs::File::open(file_path).map_err(|e| e.to_string())?;
+    let mut base64_output = Vec::new();
+    {
+        let mut base64_writer =
+            base64::write::EncoderWriter::new(&mut base64_output, &BASE64_STANDARD);
+        let mut buffer = vec![0u8; 64 * 1024];
+        loop {
+            let read = input.read(&mut buffer).map_err(|e| e.to_string())?;
+            if read == 0 {
+                break;
+            }
+            std::io::Write::write_all(&mut base64_writer, &buffer[..read])
+                .map_err(|e| e.to_string())?;
+        }
+        base64_writer.finish().map_err(|e| e.to_string())?;
+    }
+    let encoded = String::from_utf8(base64_output).map_err(|e| e.to_string())?;
     Ok(Some(format!("data:{content_type};base64,{encoded}")))
 }
 

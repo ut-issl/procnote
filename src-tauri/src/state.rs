@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use crate::drop_point::DropPointConfig;
+use crate::drop_point::{DropPointClient, DropPointConfig};
 
 /// Application state managed by Tauri.
 pub struct AppState {
@@ -11,6 +11,8 @@ pub struct AppState {
     pub procedures_dir: PathBuf,
     /// Optional `DropPoint` receiver configuration loaded from environment variables.
     pub drop_point_config: Option<DropPointConfig>,
+    /// Shared `DropPoint` HTTP client; clones reuse the same reqwest connection pool.
+    pub drop_point_client: Option<DropPointClient>,
     /// Canonical file paths that were returned by the trusted native file picker
     /// and may be consumed by one attachment-recording IPC call.
     pub attachment_grants: Mutex<HashSet<PathBuf>>,

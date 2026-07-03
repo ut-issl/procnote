@@ -22,7 +22,7 @@ use commands::execution::{
     record_action, reveal_execution_dir, start_execution,
 };
 use commands::template::list_templates;
-use drop_point::{DropPointConfig, DropPointSessions};
+use drop_point::{DropPointClient, DropPointConfig, DropPointSessions, cleanup_persisted_sessions};
 use state::AppState;
 
 /// Command-line arguments shared by both binary crates.
@@ -84,9 +84,18 @@ pub fn run(workspace: &Path) {
                 }
             };
 
+            let drop_point_client = drop_point_config.clone().map(DropPointClient::new);
+            if let Some(client) = drop_point_client.clone() {
+                let cleanup_dir = procedures_dir.clone();
+                tauri::async_runtime::spawn(async move {
+                    cleanup_persisted_sessions(&cleanup_dir, &client).await;
+                });
+            }
+
             app.manage(AppState {
                 procedures_dir,
                 drop_point_config,
+                drop_point_client,
                 attachment_grants: Mutex::new(HashSet::new()),
             });
             app.manage(DropPointSessions::default());

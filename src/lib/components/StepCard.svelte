@@ -49,10 +49,17 @@
         }),
     );
 
+    const markdownCache = new Map<string, string>();
+
     function renderMarkdown(source: string): string {
-        return DOMPurify.sanitize(
+        const cached = markdownCache.get(source);
+        if (cached) return cached;
+        const rendered = DOMPurify.sanitize(
             markedInstance.parse(source, { async: false }) as string,
         );
+        if (markdownCache.size > 500) markdownCache.clear();
+        markdownCache.set(source, rendered);
+        return rendered;
     }
 </script>
 
