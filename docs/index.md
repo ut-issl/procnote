@@ -6,6 +6,10 @@ icon: material/home
 
 Procnote is an **event-sourced desktop app** for executing and auditing step-by-step procedures. It replaces paper checklists and ad-hoc spreadsheets with a structured, crash-safe execution engine backed by append-only event logs.
 
+![Procnote execution page showing procedure steps, checkboxes, inputs, notes, and attachment upload controls](assets/procnote-execution-screenshot.png)
+
+_The screenshot is based on the example procedure in [`procedures/example-tvt/template.md`](https://github.com/shunichironomura/procnote/blob/main/procedures/example-tvt/template.md)._
+
 ## What Does Procnote Do?
 
 1. **Define procedures** as Markdown templates with checkboxes, data inputs, and prose instructions.
