@@ -7,6 +7,10 @@ A procedure execution tool for tracking step-by-step procedures with checkboxes,
 
 Procedures are written as Markdown templates with YAML frontmatter. Each execution replays an append-only event log, ensuring crash safety and full auditability.
 
+![Procnote execution page showing procedure steps, checkboxes, inputs, notes, and attachment upload controls](docs/assets/procnote-execution-screenshot.png)
+
+_The screenshot is based on the example procedure in [`procedures/example-tvt/template.md`](procedures/example-tvt/template.md)._
+
 ## Template Syntax
 
 A procedure template is a Markdown file with YAML frontmatter followed by steps defined as `##` headings.
