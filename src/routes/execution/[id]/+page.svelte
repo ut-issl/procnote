@@ -1,6 +1,5 @@
 <script lang="ts">
     import { page } from "$app/state";
-    import { onMount } from "svelte";
     import { goto } from "$app/navigation";
     import { executionStore } from "$lib/stores/execution.svelte";
     import * as api from "$lib/api/commands";
@@ -17,15 +16,26 @@
     let abortReason = $state("");
     let editingName = $state(false);
     let editNameValue = $state("");
+    let savingName = $state(false);
     let dropPointEnabled = $state(false);
 
     let executionId = $derived(page.params.id ?? "");
 
-    onMount(async () => {
-        dropPointEnabled = await api.isDropPointConfigured();
-        if (executionId) {
-            await executionStore.load(executionId);
-        }
+    let loadRunId = 0;
+
+    $effect(() => {
+        const id = executionId;
+        if (!id) return;
+        const runId = ++loadRunId;
+        void (async () => {
+            const [dropPointResult] = await Promise.allSettled([
+                api.isDropPointConfigured(),
+                executionStore.load(id),
+            ]);
+            if (runId !== loadRunId) return;
+            dropPointEnabled =
+                dropPointResult.status === "fulfilled" ? dropPointResult.value : false;
+        })();
     });
 
     let summary = $derived(executionStore.summary);
@@ -50,8 +60,8 @@
             .at(-1),
     );
 
-    async function handleAction(action: ExecutionAction) {
-        await executionStore.act(action);
+    function handleAction(action: ExecutionAction): Promise<boolean> {
+        return executionStore.act(action);
     }
 
     function handleDropPointImported(nextSummary: ExecutionSummary) {
@@ -64,29 +74,36 @@
         content: StepContent[],
         afterStepId?: string,
     ) {
-        await executionStore.act({
-            action: "add_step",
-            step_id: stepId,
-            heading,
-            content,
-            after_step_id: afterStepId,
-        });
-        showAddStepDialog = false;
+        if (
+            await executionStore.act({
+                action: "add_step",
+                step_id: stepId,
+                heading,
+                content,
+                after_step_id: afterStepId,
+            })
+        ) {
+            showAddStepDialog = false;
+        }
     }
 
     async function completeExecution(status: "pass" | "fail") {
-        await executionStore.act({ action: "complete", status });
-        showCompleteDialog = false;
+        if (await executionStore.act({ action: "complete", status })) {
+            showCompleteDialog = false;
+        }
     }
 
     async function abortExecution() {
         if (!abortReason.trim()) return;
-        await executionStore.act({
-            action: "abort",
-            reason: abortReason.trim(),
-        });
-        showAbortDialog = false;
-        abortReason = "";
+        if (
+            await executionStore.act({
+                action: "abort",
+                reason: abortReason.trim(),
+            })
+        ) {
+            showAbortDialog = false;
+            abortReason = "";
+        }
     }
 
     function startEditingName() {
@@ -95,14 +112,21 @@
     }
 
     async function saveName() {
+        if (savingName) return;
         const trimmed = editNameValue.trim();
-        if (trimmed && trimmed !== summary?.name) {
-            await executionStore.act({
-                action: "rename_execution",
-                name: trimmed,
-            });
+        if (!trimmed || trimmed === summary?.name) {
+            editingName = false;
+            return;
         }
-        editingName = false;
+        savingName = true;
+        const saved = await executionStore.act({
+            action: "rename_execution",
+            name: trimmed,
+        });
+        savingName = false;
+        if (saved) {
+            editingName = false;
+        }
     }
 
     function cancelEditName() {

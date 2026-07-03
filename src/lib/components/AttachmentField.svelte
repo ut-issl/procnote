@@ -1,5 +1,6 @@
 <script lang="ts">
     import { onDestroy } from "svelte";
+    import DOMPurify from "dompurify";
     import type {
         AttachmentDropPointSessionSummary,
         AttachmentDropPointStatus,
@@ -74,6 +75,11 @@
     let expiryCountdown = $derived(
         remoteSession ? formatExpiryCountdown(remoteSession.expires_at, countdownNow) : null,
     );
+    let sanitizedQrSvg = $derived(
+        remoteSession
+            ? DOMPurify.sanitize(remoteSession.qr_svg, { USE_PROFILES: { svg: true } })
+            : "",
+    );
 
     onDestroy(() => {
         stopPolling();
@@ -83,12 +89,18 @@
     $effect(() => {
         const previewLoader = onpreview;
         const runId = ++previewRunId;
-        previewUrls = {};
-        if (!previewLoader) return;
+        if (!previewLoader) {
+            previewUrls = {};
+            return;
+        }
 
         const imageAttachments = attachments.filter(isImageAttachment);
+        const imagePaths = new Set(imageAttachments.map((file) => file.path));
+        previewUrls = Object.fromEntries(
+            Object.entries(previewUrls).filter(([path]) => imagePaths.has(path)),
+        );
         for (const file of imageAttachments) {
-            void loadPreview(previewLoader, file, runId);
+            if (!previewUrls[file.path]) void loadPreview(previewLoader, file, runId);
         }
     });
 
@@ -441,7 +453,7 @@
                     After scanning, confirm the upload page shows <strong>{remoteSession.display_name}</strong>.
                 </p>
             </div>
-            <div class="qr-code">{@html remoteSession.qr_svg}</div>
+            <div class="qr-code">{@html sanitizedQrSvg}</div>
             <p class="drop-url">{remoteSession.qr_url}</p>
             <p class="expiry">
                 Expires at {formatTimestamp(remoteSession.expires_at)}

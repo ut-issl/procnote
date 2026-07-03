@@ -3,5 +3,11 @@
   "identifier": "default",
   "description": "enables the default permissions",
   "windows": ["main"],
-  "permissions": ["core:default", "dialog:default", "log:default"]
+  "permissions": [
+    "core:default",
+    "dialog:default",
+    "log:default",
+    "opener:allow-open-url",
+    "opener:allow-default-urls"
+  ]
 }
