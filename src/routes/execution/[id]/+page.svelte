@@ -49,16 +49,7 @@
 
     let stepRefs = $derived(summary?.steps.map((s) => ({ id: s.id, heading: s.heading })) ?? []);
 
-    // Find the latest finish event (completed or aborted) for its timestamp.
-    let finishEvent = $derived(
-        summary?.event_history
-            .filter(
-                (e) =>
-                    e.event_type === "execution_completed" ||
-                    e.event_type === "execution_aborted",
-            )
-            .at(-1),
-    );
+    let finishedAt = $derived(summary?.finished_at);
 
     function handleAction(action: ExecutionAction): Promise<boolean> {
         return executionStore.act(action);
@@ -252,8 +243,8 @@
                         : summary.status === "fail"
                           ? "failed"
                           : "aborted"}
-                    {#if finishEvent}
-                        at {formatTimestamp(finishEvent.at)}
+                    {#if finishedAt}
+                        at {formatTimestamp(finishedAt)}
                     {/if}
                     &mdash; {totalSteps} steps, {skippedSteps} skipped
                 </span>

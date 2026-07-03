@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 use crate::event::types::{AttachmentRecord, CompletionStatus, Event, ExecutionId};
@@ -72,7 +72,29 @@ pub enum ExecutionStatus {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StepStatus {
     Present,
-    Skipped,
+    Skipped { at: DateTime<Utc>, reason: String },
+}
+
+/// Runtime content item within an execution step.
+#[derive(Debug, Clone)]
+pub enum ExecutionStepContent {
+    Prose {
+        text: String,
+    },
+    Checkbox(ExecutionCheckbox),
+    InputBlock {
+        inputs: Vec<crate::template::types::InputDefinition>,
+    },
+}
+
+/// Runtime checkbox state, paired with its template text and stable ID.
+#[derive(Debug, Clone)]
+pub struct ExecutionCheckbox {
+    pub id: String,
+    pub text: String,
+    pub initial_checked: bool,
+    pub checked: bool,
+    pub toggled_at: Option<DateTime<Utc>>,
 }
 
 /// Tracked state for a single step during execution.
@@ -82,12 +104,8 @@ pub struct StepState {
     pub id: String,
     pub heading: String,
     pub status: StepStatus,
-    /// Ordered content items from the template (prose, checkboxes, input blocks).
-    /// Checkbox `checked` state is mutated in-place.
-    pub content: Vec<StepContent>,
-    /// Initial checkbox state keyed by checkbox ID, used to distinguish template
-    /// pre-checks from operator-captured checkbox changes.
-    pub initial_checkbox_states: HashMap<String, bool>,
+    /// Ordered content items from the template with runtime state attached.
+    pub content: Vec<ExecutionStepContent>,
     /// Recorded scalar input values keyed by input ID.
     pub inputs: HashMap<String, RecordedInput>,
     /// Recorded attachments keyed by input ID.
@@ -101,6 +119,7 @@ pub struct RecordedInput {
     pub label: String,
     pub value: String,
     pub unit: Option<String>,
+    pub at: DateTime<Utc>,
 }
 
 /// A recorded attachment file.
@@ -110,15 +129,17 @@ pub struct RecordedAttachment {
     pub path: String,
     pub content_type: String,
     pub sha256: String,
+    pub at: DateTime<Utc>,
 }
 
-impl From<&AttachmentRecord> for RecordedAttachment {
-    fn from(record: &AttachmentRecord) -> Self {
+impl RecordedAttachment {
+    fn from_record_at(record: &AttachmentRecord, at: DateTime<Utc>) -> Self {
         Self {
             filename: record.filename.clone(),
             path: record.path.clone(),
             content_type: record.content_type.clone(),
             sha256: record.sha256.clone(),
+            at,
         }
     }
 }
@@ -128,6 +149,7 @@ impl From<&AttachmentRecord> for RecordedAttachment {
 pub struct RecordedNote {
     pub id: String,
     pub text: String,
+    pub at: DateTime<Utc>,
 }
 
 /// The full state of a procedure execution, reconstructable from events.
@@ -140,6 +162,9 @@ pub struct ExecutionState {
     pub name: Option<String>,
 
     pub status: ExecutionStatus,
+    pub started_at: Option<DateTime<Utc>>,
+    pub finished_at: Option<DateTime<Utc>>,
+    pub updated_at: Option<DateTime<Utc>>,
     /// Ordered step IDs (preserves insertion order).
     pub step_order: Vec<String>,
     pub steps: HashMap<String, StepState>,
@@ -157,6 +182,9 @@ impl ExecutionState {
             procedure_version: None,
             name: None,
             status: ExecutionStatus::Pending,
+            started_at: None,
+            finished_at: None,
+            updated_at: None,
             step_order: Vec::new(),
             steps: HashMap::new(),
             global_notes: Vec::new(),
@@ -184,11 +212,11 @@ impl ExecutionState {
     pub fn apply(&mut self, event: &Event) -> Result<(), ExecutionError> {
         match event {
             Event::ExecutionStarted {
+                at,
                 execution_id,
                 procedure_id,
                 procedure_title,
                 procedure_version,
-                ..
             } => {
                 match &self.status {
                     ExecutionStatus::Pending => {}
@@ -200,18 +228,23 @@ impl ExecutionState {
                 self.procedure_title = Some(procedure_title.clone());
                 self.procedure_version = Some(procedure_version.clone());
                 self.status = ExecutionStatus::Active;
+                self.started_at = Some(*at);
+                self.finished_at = None;
             }
-            Event::ExecutionCompleted { status, .. } => {
+            Event::ExecutionCompleted { at, status, .. } => {
                 self.require_active()?;
                 self.status = ExecutionStatus::Finished(status.clone());
+                self.finished_at = Some(*at);
             }
-            Event::ExecutionAborted { .. } => {
+            Event::ExecutionAborted { at, .. } => {
                 self.require_active()?;
                 self.status = ExecutionStatus::Finished(CompletionStatus::Aborted);
+                self.finished_at = Some(*at);
             }
             Event::ExecutionReopened { .. } => {
                 self.require_finished()?;
                 self.status = ExecutionStatus::Active;
+                self.finished_at = None;
             }
             Event::StepAdded {
                 step_id,
@@ -224,8 +257,7 @@ impl ExecutionState {
                 if self.steps.contains_key(step_id) {
                     return Err(ExecutionError::DuplicateStepId(step_id.clone()));
                 }
-                let content = content_with_checkbox_ids(step_id, content);
-                let initial_checkbox_states = checkbox_states(&content);
+                let content = execution_content_with_checkbox_ids(step_id, content);
                 let insert_position = match after_step_id {
                     Some(after) => Some(
                         self.step_order
@@ -241,7 +273,6 @@ impl ExecutionState {
                     heading: heading.clone(),
                     status: StepStatus::Present,
                     content,
-                    initial_checkbox_states,
                     inputs: HashMap::new(),
                     attachments: HashMap::new(),
                     notes: Vec::new(),
@@ -252,26 +283,35 @@ impl ExecutionState {
                     None => self.step_order.push(step_id.clone()),
                 }
             }
-            Event::StepSkipped { step_id, .. } => {
+            Event::StepSkipped {
+                at,
+                step_id,
+                reason,
+                ..
+            } => {
                 self.require_active()?;
                 let step = self.get_present_step_mut(step_id)?;
                 if step.has_captured_data() {
                     return Err(ExecutionError::StepHasCapturedData(step_id.clone()));
                 }
-                step.status = StepStatus::Skipped;
+                step.status = StepStatus::Skipped {
+                    at: *at,
+                    reason: reason.clone(),
+                };
             }
             Event::StepUnskipped { step_id, .. } => {
                 self.require_active()?;
                 let step = self.get_step_mut(step_id)?;
-                match step.status {
+                match &step.status {
                     StepStatus::Present => Err(ExecutionError::StepNotSkipped(step_id.clone())),
-                    StepStatus::Skipped => {
+                    StepStatus::Skipped { .. } => {
                         step.status = StepStatus::Present;
                         Ok(())
                     }
                 }?;
             }
             Event::CheckboxToggled {
+                at,
                 step_id,
                 checkbox_id,
                 checked,
@@ -280,14 +320,11 @@ impl ExecutionState {
                 self.require_active()?;
                 let step = self.get_present_step_mut(step_id)?;
                 let found = step.content.iter_mut().any(|item| {
-                    if let StepContent::Checkbox {
-                        id: Some(id),
-                        checked: c,
-                        ..
-                    } = item
-                        && id == checkbox_id
+                    if let ExecutionStepContent::Checkbox(checkbox) = item
+                        && checkbox.id == checkbox_id.as_str()
                     {
-                        *c = *checked;
+                        checkbox.checked = *checked;
+                        checkbox.toggled_at = Some(*at);
                         return true;
                     }
                     false
@@ -297,6 +334,7 @@ impl ExecutionState {
                 }
             }
             Event::InputRecorded {
+                at,
                 step_id,
                 input_id,
                 value,
@@ -320,6 +358,7 @@ impl ExecutionState {
                         label,
                         value: value.clone(),
                         unit: unit.clone(),
+                        at: *at,
                     },
                 );
             }
@@ -334,6 +373,7 @@ impl ExecutionState {
                     .ok_or_else(|| ExecutionError::InputNotRecorded(input_id.clone()))?;
             }
             Event::NoteAdded {
+                at,
                 note_id,
                 text,
                 step_id,
@@ -346,6 +386,7 @@ impl ExecutionState {
                 let note = RecordedNote {
                     id: note_id.clone(),
                     text: text.clone(),
+                    at: *at,
                 };
                 match step_id {
                     Some(id) => {
@@ -363,6 +404,7 @@ impl ExecutionState {
             }
 
             Event::AttachmentAdded {
+                at,
                 step_id,
                 input_id,
                 filename,
@@ -380,9 +422,10 @@ impl ExecutionState {
                     content_type: content_type.clone(),
                     sha256: sha256.clone(),
                 };
-                add_attachments_to_step(step, input_id, &[record])?;
+                add_attachments_to_step(step, input_id, &[record], *at)?;
             }
             Event::AttachmentsAdded {
+                at,
                 step_id,
                 input_id,
                 attachments,
@@ -393,7 +436,7 @@ impl ExecutionState {
                     .iter()
                     .try_for_each(|attachment| validate_attachment_path(&attachment.path))?;
                 let step = self.get_present_step_mut(step_id)?;
-                add_attachments_to_step(step, input_id, attachments)?;
+                add_attachments_to_step(step, input_id, attachments, *at)?;
             }
             Event::AttachmentFileRemoved {
                 step_id,
@@ -426,6 +469,7 @@ impl ExecutionState {
 
             Event::LogMeta { .. } => return Err(ExecutionError::ReplayMetadataEvent),
         }
+        self.updated_at = Some(transition_event_at(event));
         Ok(())
     }
 
@@ -957,9 +1001,11 @@ impl ExecutionState {
 
     fn get_present_step_mut(&mut self, step_id: &str) -> Result<&mut StepState, ExecutionError> {
         let step = self.get_step_mut(step_id)?;
-        match step.status {
+        match &step.status {
             StepStatus::Present => Ok(step),
-            StepStatus::Skipped => Err(ExecutionError::StepAlreadySkipped(step_id.to_string())),
+            StepStatus::Skipped { .. } => {
+                Err(ExecutionError::StepAlreadySkipped(step_id.to_string()))
+            }
         }
     }
 
@@ -996,7 +1042,10 @@ impl ExecutionState {
     }
 }
 
-fn content_with_checkbox_ids(step_id: &str, content: &[StepContent]) -> Vec<StepContent> {
+fn execution_content_with_checkbox_ids(
+    step_id: &str,
+    content: &[StepContent],
+) -> Vec<ExecutionStepContent> {
     let mut used_ids: HashSet<String> = content
         .iter()
         .filter_map(|item| match item {
@@ -1009,6 +1058,7 @@ fn content_with_checkbox_ids(step_id: &str, content: &[StepContent]) -> Vec<Step
     content
         .iter()
         .map(|item| match item {
+            StepContent::Prose { text } => ExecutionStepContent::Prose { text: text.clone() },
             StepContent::Checkbox { id, text, checked } => {
                 let id = id.clone().unwrap_or_else(|| {
                     loop {
@@ -1019,29 +1069,43 @@ fn content_with_checkbox_ids(step_id: &str, content: &[StepContent]) -> Vec<Step
                         }
                     }
                 });
-                StepContent::Checkbox {
-                    id: Some(id),
+                ExecutionStepContent::Checkbox(ExecutionCheckbox {
+                    id,
                     text: text.clone(),
+                    initial_checked: *checked,
                     checked: *checked,
-                }
+                    toggled_at: None,
+                })
             }
-            other => other.clone(),
+            StepContent::InputBlock { inputs } => ExecutionStepContent::InputBlock {
+                inputs: inputs.clone(),
+            },
         })
         .collect()
 }
 
-fn checkbox_states(content: &[StepContent]) -> HashMap<String, bool> {
-    content
-        .iter()
-        .filter_map(|item| match item {
-            StepContent::Checkbox {
-                id: Some(id),
-                checked,
-                ..
-            } => Some((id.clone(), *checked)),
-            _ => None,
-        })
-        .collect()
+fn transition_event_at(event: &Event) -> DateTime<Utc> {
+    match event {
+        Event::ExecutionStarted { at, .. }
+        | Event::ExecutionCompleted { at, .. }
+        | Event::ExecutionAborted { at, .. }
+        | Event::ExecutionReopened { at, .. }
+        | Event::StepAdded { at, .. }
+        | Event::StepSkipped { at, .. }
+        | Event::StepUnskipped { at, .. }
+        | Event::CheckboxToggled { at, .. }
+        | Event::InputRecorded { at, .. }
+        | Event::InputCleared { at, .. }
+        | Event::NoteAdded { at, .. }
+        | Event::NoteRemoved { at, .. }
+        | Event::AttachmentAdded { at, .. }
+        | Event::AttachmentsAdded { at, .. }
+        | Event::AttachmentFileRemoved { at, .. }
+        | Event::AttachmentsCleared { at, .. }
+        | Event::AttachmentRemoved { at, .. }
+        | Event::ExecutionRenamed { at, .. } => *at,
+        Event::LogMeta { .. } => unreachable!("LogMeta is rejected before timestamp extraction"),
+    }
 }
 
 fn validate_attachment_path(path: &str) -> Result<(), ExecutionError> {
@@ -1062,6 +1126,7 @@ fn add_attachments_to_step(
     step: &mut StepState,
     input_id: &str,
     attachments: &[AttachmentRecord],
+    at: DateTime<Utc>,
 ) -> Result<(), ExecutionError> {
     if attachments.is_empty() {
         return Err(ExecutionError::EmptyAttachmentBatch);
@@ -1084,7 +1149,11 @@ fn add_attachments_to_step(
         ));
     }
 
-    existing.extend(attachments.iter().map(RecordedAttachment::from));
+    existing.extend(
+        attachments
+            .iter()
+            .map(|record| RecordedAttachment::from_record_at(record, at)),
+    );
     Ok(())
 }
 
@@ -1149,7 +1218,7 @@ impl StepState {
 
     fn input_definition(&self, input_id: &str) -> Option<&crate::template::types::InputDefinition> {
         self.content.iter().find_map(|item| match item {
-            StepContent::InputBlock { inputs } => {
+            ExecutionStepContent::InputBlock { inputs } => {
                 inputs.iter().find(|definition| definition.id == input_id)
             }
             _ => None,
@@ -1166,14 +1235,9 @@ impl StepState {
             || self.attachments.values().any(|files| !files.is_empty())
             || !self.notes.is_empty()
             || self.content.iter().any(|item| match item {
-                StepContent::Checkbox {
-                    id: Some(id),
-                    checked,
-                    ..
-                } => self
-                    .initial_checkbox_states
-                    .get(id)
-                    .is_some_and(|initial| initial != checked),
+                ExecutionStepContent::Checkbox(checkbox) => {
+                    checkbox.initial_checked != checkbox.checked
+                }
                 _ => false,
             })
     }
@@ -1313,6 +1377,30 @@ mod tests {
         assert_eq!(result.unwrap_err(), ExecutionError::NotStarted);
     }
 
+    fn event_time(event: &Event) -> DateTime<Utc> {
+        match event {
+            Event::ExecutionStarted { at, .. }
+            | Event::ExecutionCompleted { at, .. }
+            | Event::ExecutionAborted { at, .. }
+            | Event::ExecutionReopened { at, .. }
+            | Event::StepAdded { at, .. }
+            | Event::StepSkipped { at, .. }
+            | Event::StepUnskipped { at, .. }
+            | Event::CheckboxToggled { at, .. }
+            | Event::InputRecorded { at, .. }
+            | Event::InputCleared { at, .. }
+            | Event::NoteAdded { at, .. }
+            | Event::NoteRemoved { at, .. }
+            | Event::AttachmentAdded { at, .. }
+            | Event::AttachmentsAdded { at, .. }
+            | Event::AttachmentFileRemoved { at, .. }
+            | Event::AttachmentsCleared { at, .. }
+            | Event::AttachmentRemoved { at, .. }
+            | Event::ExecutionRenamed { at, .. }
+            | Event::LogMeta { at, .. } => *at,
+        }
+    }
+
     #[test]
     fn test_full_execution_flow() {
         let template = sample_template();
@@ -1340,9 +1428,12 @@ mod tests {
         );
         assert_eq!(state.steps["step-0"].status, StepStatus::Present);
         assert_eq!(state.steps["step-1"].status, StepStatus::Present);
-        assert_eq!(state.steps["step-2"].status, StepStatus::Skipped);
+        assert!(matches!(
+            state.steps["step-2"].status,
+            StepStatus::Skipped { .. }
+        ));
         assert!(state.steps["step-0"].content.iter().any(|item| {
-            matches!(item, StepContent::Checkbox { id: Some(id), checked, .. } if id == "step-0/cb-0" && *checked)
+            matches!(item, ExecutionStepContent::Checkbox(checkbox) if checkbox.id == "step-0/cb-0" && checkbox.checked)
         }));
         assert_eq!(state.steps["step-1"].inputs["current-draw"].value, "120");
         assert_eq!(state.steps["step-1"].notes.len(), 1);
@@ -1354,8 +1445,67 @@ mod tests {
         );
         assert_eq!(replayed.step_order.len(), 3);
         assert!(replayed.steps["step-0"].content.iter().any(|item| {
-            matches!(item, StepContent::Checkbox { id: Some(id), checked, .. } if id == "step-0/cb-0" && *checked)
+            matches!(item, ExecutionStepContent::Checkbox(checkbox) if checkbox.id == "step-0/cb-0" && checkbox.checked)
         }));
+    }
+
+    #[test]
+    fn test_execution_state_records_display_timestamps() {
+        let template = sample_template();
+        let mut state = ExecutionState::new();
+        let start_events = state.start(&template).unwrap();
+        assert_eq!(state.started_at, Some(event_time(&start_events[0])));
+        assert_eq!(state.updated_at, start_events.last().map(event_time));
+
+        let checkbox_event = state
+            .toggle_checkbox("step-0", "step-0/cb-0", true)
+            .unwrap();
+        let checkbox_at = event_time(&checkbox_event);
+        assert_eq!(state.updated_at, Some(checkbox_at));
+        assert!(state.steps["step-0"].content.iter().any(|item| {
+            matches!(item, ExecutionStepContent::Checkbox(checkbox) if checkbox.toggled_at == Some(checkbox_at))
+        }));
+
+        let input_event = state
+            .record_input("step-1", "voltage", "5.0", Some("V"))
+            .unwrap();
+        assert_eq!(
+            state.steps["step-1"].inputs["voltage"].at,
+            event_time(&input_event)
+        );
+
+        let note_event = state.add_note("timestamped", Some("step-1")).unwrap();
+        assert_eq!(state.steps["step-1"].notes[0].at, event_time(&note_event));
+
+        let attachment_event = state
+            .add_attachment(
+                "step-1",
+                "log-file",
+                "log.txt",
+                "attachments/abc1234-log.txt",
+                "text/plain",
+                "abc1234",
+            )
+            .unwrap();
+        assert_eq!(
+            state.steps["step-1"].attachments["log-file"][0].at,
+            event_time(&attachment_event)
+        );
+
+        let skip_event = state.skip_step("step-2", "not needed").unwrap();
+        assert!(matches!(
+            &state.steps["step-2"].status,
+            StepStatus::Skipped { at, reason }
+                if *at == event_time(&skip_event) && reason == "not needed"
+        ));
+
+        let complete_event = state.complete(CompletionStatus::Pass).unwrap();
+        assert_eq!(state.finished_at, Some(event_time(&complete_event)));
+
+        let reopen_event = state.reopen("more work").unwrap();
+        assert_eq!(state.status, ExecutionStatus::Active);
+        assert_eq!(state.finished_at, None);
+        assert_eq!(state.updated_at, Some(event_time(&reopen_event)));
     }
 
     #[test]
@@ -1614,7 +1764,7 @@ mod tests {
             .unwrap();
 
         assert!(state.steps["step-0"].content.iter().any(|item| {
-            matches!(item, StepContent::Checkbox { id: Some(id), checked, .. } if id == "step-0/cb-0" && !*checked)
+            matches!(item, ExecutionStepContent::Checkbox(checkbox) if checkbox.id == "step-0/cb-0" && !checkbox.checked)
         }));
     }
 
@@ -1672,7 +1822,10 @@ mod tests {
 
         state.skip_step("step-2", "not needed").unwrap();
 
-        assert_eq!(state.steps["step-2"].status, StepStatus::Skipped);
+        assert!(matches!(
+            state.steps["step-2"].status,
+            StepStatus::Skipped { .. }
+        ));
     }
 
     #[test]
@@ -1752,7 +1905,7 @@ mod tests {
             .toggle_checkbox("dyn-good", "dyn-good/cb-0", true)
             .unwrap();
         assert!(state.steps["dyn-good"].content.iter().any(|item| {
-            matches!(item, StepContent::Checkbox { id: Some(id), checked, .. } if id == "dyn-good/cb-0" && *checked)
+            matches!(item, ExecutionStepContent::Checkbox(checkbox) if checkbox.id == "dyn-good/cb-0" && checkbox.checked)
         }));
     }
 
