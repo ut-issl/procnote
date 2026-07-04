@@ -14,6 +14,11 @@
         ontoggle: (checkboxId: string, checked: boolean) => Promise<boolean> | boolean;
     } = $props();
 
+    function nestingIndent(level: number): string {
+        const safeLevel = Math.min(Math.max(Math.trunc(level), 0), 12);
+        return `${safeLevel * 20}px`;
+    }
+
     async function handleChange(event: Event) {
         const input = event.currentTarget as HTMLInputElement;
         if (!checkbox.id) {
@@ -27,7 +32,12 @@
     }
 </script>
 
-<label class="checkbox-item" class:checked={checkbox.checked} class:disabled>
+<label
+    class="checkbox-item"
+    class:checked={checkbox.checked}
+    class:disabled
+    style={`--checkbox-indent: ${nestingIndent(checkbox.nesting_level)};`}
+>
     <input
         type="checkbox"
         checked={checkbox.checked}
@@ -45,7 +55,7 @@
         display: flex;
         align-items: flex-start;
         gap: 8px;
-        padding: 6px 0;
+        padding: 6px 0 6px var(--checkbox-indent, 0px);
         cursor: pointer;
         font-size: 13px;
     }

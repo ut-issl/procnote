@@ -303,20 +303,36 @@ fn collect_task_checkboxes(
     list_start_index: usize,
     list_end_index: usize,
 ) -> Vec<StepContent> {
-    events
+    let mut checkboxes = Vec::new();
+    let mut list_depth = 1usize;
+
+    for (index, (event, _)) in events
         .iter()
         .enumerate()
         .take(list_end_index)
         .skip(list_start_index + 1)
-        .filter_map(|(index, (event, _))| match event {
-            Event::TaskListMarker(checked) => Some(StepContent::Checkbox {
+    {
+        match event {
+            Event::Start(Tag::List(_)) => list_depth += 1,
+            Event::End(TagEnd::List(_)) => {
+                list_depth = list_depth.saturating_sub(1);
+            }
+            Event::TaskListMarker(checked) => checkboxes.push(StepContent::Checkbox {
                 id: None,
                 text: collect_task_text(events, index),
                 checked: *checked,
+                nesting_level: checkbox_nesting_level(list_depth),
             }),
-            _ => None,
-        })
-        .collect()
+            _ => {}
+        }
+    }
+
+    checkboxes
+}
+
+fn checkbox_nesting_level(list_depth: usize) -> Option<u32> {
+    let level = list_depth.saturating_sub(1);
+    (level > 0).then(|| u32::try_from(level).unwrap_or(u32::MAX))
 }
 
 /// Collect the text of one task item, excluding nested lists from the parent text.
@@ -889,15 +905,22 @@ version: "0.1"
             .content
             .iter()
             .filter_map(|c| match c {
-                StepContent::Checkbox { text, .. } => Some(text.clone()),
+                StepContent::Checkbox {
+                    text,
+                    nesting_level,
+                    ..
+                } => Some((text.clone(), nesting_level.unwrap_or_default())),
                 _ => None,
             })
             .collect();
 
-        // Both should be captured as independent checkboxes with no duplicated prose.
+        // Both should be captured as independent checkboxes with their nesting.
         assert_eq!(
             checkboxes,
-            vec!["parent checkbox".to_string(), "nested checkbox".to_string()]
+            vec![
+                ("parent checkbox".to_string(), 0),
+                ("nested checkbox".to_string(), 1)
+            ]
         );
         assert_eq!(
             template.steps[0]

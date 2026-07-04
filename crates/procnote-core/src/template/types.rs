@@ -60,6 +60,10 @@ pub enum StepContent {
         id: Option<String>,
         text: String,
         checked: bool,
+        /// Zero-based nesting level within a pure Markdown task list.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        nesting_level: Option<u32>,
     },
     /// A block of input definitions from a fenced `inputs` code block.
     InputBlock { inputs: Vec<InputDefinition> },

@@ -12,6 +12,10 @@ export type StepContentSummary =
       text: string;
       checked: boolean;
       /**
+       * Zero-based nesting level within a Markdown task list.
+       */
+      nesting_level: number;
+      /**
        * ISO 8601 timestamp of the last toggle, if any.
        */
       at?: string;

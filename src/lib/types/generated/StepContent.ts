@@ -14,5 +14,9 @@ export type StepContent =
       id?: string;
       text: string;
       checked: boolean;
+      /**
+       * Zero-based nesting level within a pure Markdown task list.
+       */
+      nesting_level?: number;
     }
   | { type: "InputBlock"; inputs: Array<InputDefinition> };

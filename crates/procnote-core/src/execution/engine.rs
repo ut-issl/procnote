@@ -94,6 +94,7 @@ pub struct ExecutionCheckbox {
     pub text: String,
     pub initial_checked: bool,
     pub checked: bool,
+    pub nesting_level: u32,
     pub toggled_at: Option<DateTime<Utc>>,
 }
 
@@ -519,13 +520,19 @@ impl ExecutionState {
                 .content
                 .iter()
                 .map(|item| match item {
-                    StepContent::Checkbox { text, checked, .. } => {
+                    StepContent::Checkbox {
+                        text,
+                        checked,
+                        nesting_level,
+                        ..
+                    } => {
                         let id = format!("{step_id}/cb-{cb_index}");
                         cb_index += 1;
                         StepContent::Checkbox {
                             id: Some(id),
                             text: text.clone(),
                             checked: *checked,
+                            nesting_level: *nesting_level,
                         }
                     }
                     // InputDefinition already has its own `id` from the template YAML.
@@ -1059,7 +1066,12 @@ fn execution_content_with_checkbox_ids(
         .iter()
         .map(|item| match item {
             StepContent::Prose { text } => ExecutionStepContent::Prose { text: text.clone() },
-            StepContent::Checkbox { id, text, checked } => {
+            StepContent::Checkbox {
+                id,
+                text,
+                checked,
+                nesting_level,
+            } => {
                 let id = id.clone().unwrap_or_else(|| {
                     loop {
                         let candidate = format!("{step_id}/cb-{checkbox_index}");
@@ -1074,6 +1086,7 @@ fn execution_content_with_checkbox_ids(
                     text: text.clone(),
                     initial_checked: *checked,
                     checked: *checked,
+                    nesting_level: nesting_level.unwrap_or_default(),
                     toggled_at: None,
                 })
             }
@@ -1275,6 +1288,7 @@ mod tests {
                         id: None,
                         text: "Ready".to_string(),
                         checked: false,
+                        nesting_level: None,
                     }],
                 },
                 Step {
@@ -1816,6 +1830,7 @@ mod tests {
             id: None,
             text: "Already verified by setup".to_string(),
             checked: true,
+            nesting_level: None,
         }];
         let mut state = ExecutionState::new();
         state.start(&template).unwrap();
@@ -1835,6 +1850,7 @@ mod tests {
             id: None,
             text: "Initially checked".to_string(),
             checked: true,
+            nesting_level: None,
         }];
         let mut state = ExecutionState::new();
         state.start(&template).unwrap();
@@ -1897,6 +1913,7 @@ mod tests {
                     id: None,
                     text: "Dynamic check".to_string(),
                     checked: false,
+                    nesting_level: None,
                 }],
                 Some("step-1"),
             )
