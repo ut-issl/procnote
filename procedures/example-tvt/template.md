@@ -21,7 +21,7 @@ requirement_traces:
 Connect PSU to DUT J1 connector. Set voltage to 5.0V. Enable output.
 
 - [ ] a checkbox item
-- [ ] a nested checkbox item
+  - [ ] a nested checkbox item
 
 ### Some heading
 

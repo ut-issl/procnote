@@ -73,6 +73,8 @@ pub enum StepContentSummary {
         id: Option<String>,
         text: String,
         checked: bool,
+        /// Zero-based nesting level within a Markdown task list.
+        nesting_level: u32,
         /// ISO 8601 timestamp of the last toggle, if any.
         #[ts(optional)]
         at: Option<String>,
@@ -177,6 +179,7 @@ pub(super) fn summarize(
                             id: Some(checkbox.id.clone()),
                             text: checkbox.text.clone(),
                             checked: checkbox.checked,
+                            nesting_level: checkbox.nesting_level,
                             at: datetime_string(checkbox.toggled_at),
                         },
                         ExecutionStepContent::InputBlock { inputs } => {

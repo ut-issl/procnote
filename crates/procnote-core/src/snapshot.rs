@@ -166,14 +166,18 @@ fn render_step(number: usize, step: &StepState, output: &mut String) {
             ExecutionStepContent::Prose { text } => render_prose(text, output),
             ExecutionStepContent::Checkbox(checkbox) => {
                 let marker = if checkbox.checked { "x" } else { " " };
+                let indent = "  ".repeat(checkbox.nesting_level as usize);
                 push_fmt(
                     output,
-                    format_args!("- [{marker}] {}\n", escape_inline_text(&checkbox.text)),
+                    format_args!(
+                        "{indent}- [{marker}] {}\n",
+                        escape_inline_text(&checkbox.text)
+                    ),
                 );
                 if let Some(toggled_at) = checkbox.toggled_at {
                     push_fmt(
                         output,
-                        format_args!("  Toggled at: {}\n", toggled_at.to_rfc3339()),
+                        format_args!("{indent}  Toggled at: {}\n", toggled_at.to_rfc3339()),
                     );
                 }
                 push_fmt(output, format_args!("\n"));
@@ -527,6 +531,7 @@ mod tests {
                         text: "Probe connected".to_string(),
                         initial_checked: false,
                         checked: true,
+                        nesting_level: 0,
                         toggled_at: Some(timestamp(1)),
                     }),
                     ExecutionStepContent::InputBlock {
