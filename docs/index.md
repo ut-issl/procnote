@@ -63,28 +63,28 @@ Procnote discovers all `template.md` files in the workspace, guides the operator
 
 <div class="grid cards" markdown>
 
-- :material-school:{ .lg .middle } **Guide**
+-   :material-school:{ .lg .middle } **Guide**
 
-  ***
+    ---
 
-  Learn how to write templates and run executions.
+    Learn how to write templates and run executions.
 
-  [:octicons-arrow-right-24: Start the guide](guide/index.md)
+    [:octicons-arrow-right-24: Start the guide](guide/index.md)
 
-- :material-book-open-variant:{ .lg .middle } **Concepts**
+-   :material-book-open-variant:{ .lg .middle } **Concepts**
 
-  ***
+    ---
 
-  Understand templates, event sourcing, and crash safety.
+    Understand templates, event sourcing, and crash safety.
 
-  [:octicons-arrow-right-24: Key concepts](concepts/index.md)
+    [:octicons-arrow-right-24: Key concepts](concepts/index.md)
 
-- :material-code-braces:{ .lg .middle } **Development**
+-   :material-code-braces:{ .lg .middle } **Development**
 
-  ***
+    ---
 
-  Set up the development environment and contribute.
+    Set up the development environment and contribute.
 
-  [:octicons-arrow-right-24: Development](development.md)
+    [:octicons-arrow-right-24: Development](development.md)
 
 </div>

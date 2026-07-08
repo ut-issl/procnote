@@ -10,12 +10,11 @@ Once you have a [procedure template](writing-a-template.md), you can execute it 
 
 1. Launch Procnote with a workspace directory:
 
-   ```bash
-   procnote /path/to/my-workspace
-   ```
+    ```bash
+    procnote /path/to/my-workspace
+    ```
 
-   If omitted, Procnote uses the current working directory.
-
+    If omitted, Procnote uses the current working directory.
 2. The home screen lists all procedure templates found in the workspace. Click on a template to view its details.
 3. Click **Start Execution** to begin.
 
