@@ -25,5 +25,10 @@
       matchManagers: ["cargo"],
       addLabels: ["rust"],
     },
+    {
+      matchManagers: ["rust-toolchain"],
+      matchDepTypes: ["toolchain"],
+      addLabels: ["rust", "ci"],
+    },
   ],
 }
