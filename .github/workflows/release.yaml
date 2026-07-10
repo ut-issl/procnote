@@ -48,9 +48,12 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
 
-      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
-        with:
-          targets: ${{ matrix.rust-targets }}
+      - name: Install Rust toolchain
+        run: rustup toolchain install --no-self-update
+
+      - name: Install Rust targets
+        if: matrix['rust-targets'] != ''
+        run: rustup target add $(echo "${{ matrix['rust-targets'] }}" | tr ',' ' ')
 
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
 
