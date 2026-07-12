@@ -40,10 +40,12 @@ tauri-plugin-log.workspace = true
 tauri-plugin-opener.workspace = true
 thiserror.workspace = true
 ts-rs.workspace = true
+unicode-general-category = "1.1.0"
+unicode-normalization = "0.1.25"
 url = "2.5.8"
 uuid.workspace = true
 x25519-dalek = { version = "3.0.0", features = ["static_secrets", "getrandom"] }
-zeroize = "1.9.0"
+zeroize = { version = "1.9.0", features = ["serde"] }
 
 [build-dependencies]
 tauri-build.workspace = true
@@ -52,4 +54,11 @@ tauri-build.workspace = true
 workspace = true
 
 [dev-dependencies]
+proptest = "1.11.0"
 tempfile.workspace = true
+
+[target."cfg(windows)".dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Storage_FileSystem"] }
+
+[target."cfg(unix)".dependencies]
+rustix = { version = "1.1.4", features = ["fs"] }

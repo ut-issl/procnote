@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "max_filename_utf8_bytes": 240,
+  "max_manifest_files": 1000,
+  "canonicalization_bundles": [
+    {
+      "input": [
+        "Café.txt",
+        "report?.txt",
+        "CON.foo.txt",
+        "NUL .txt",
+        "trail. ",
+        "‍secret.txt",
+        "   ",
+        ".droppoint-receipt.json",
+        "photo:stream.jpg",
+        "a/b.txt"
+      ],
+      "output": [
+        "Café.txt",
+        "report_.txt",
+        "_CON.foo.txt",
+        "_NUL.txt",
+        "trail",
+        "_secret.txt",
+        "file",
+        "_.droppoint-receipt.json",
+        "photo_stream.jpg",
+        "a_b.txt"
+      ]
+    },
+    {
+      "input": ["Report.txt", "report.TXT", "é.txt", "é.txt", "file", "file"],
+      "output": ["Report.txt", "report (2).TXT", "é.txt", "é (2).txt", "file", "file (2)"]
+    }
+  ],
+  "validation": [
+    { "name": "report.txt", "valid": true },
+    { "name": "Café.txt", "valid": true },
+    { "name": " report.txt", "valid": true },
+    { "name": "Café.txt", "valid": false },
+    { "name": "CON.foo.txt", "valid": false },
+    { "name": "NUL .txt", "valid": false },
+    { "name": "report.txt.", "valid": false },
+    { "name": "report.txt ", "valid": false },
+    { "name": "photo:stream.jpg", "valid": false },
+    { "name": "a/b.txt", "valid": false },
+    { "name": "‍secret.txt", "valid": false },
+    { "name": " ", "valid": false },
+    { "name": ".droppoint-receipt.json", "valid": false },
+    {
+      "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "valid": false
+    }
+  ],
+  "collisions": [
+    { "names": ["Report.txt", "report.TXT"], "collides": true },
+    { "names": ["Ä.txt", "ä.TXT"], "collides": true },
+    { "names": ["ß.txt", "ss.txt"], "collides": false },
+    { "names": ["file.txt", "file-2.txt"], "collides": false }
+  ]
+}

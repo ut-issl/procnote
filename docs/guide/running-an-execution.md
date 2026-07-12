@@ -82,7 +82,10 @@ my-workspace/
             ├── template.md
             └── attachments/
                 ├── a1b2c3d-report.pdf
-                └── d4e5f6a-photo.jpg
+                ├── d4e5f6a-photo.jpg
+                └── bundle-dp_…/          # Atomically installed DropPoint bundle
+                    ├── .droppoint-receipt.json
+                    └── scan-01.jpg
 ```
 
-The `events.jsonl` file is the single source of truth. It is append-only and never modified after creation.
+The `events.jsonl` file is the single source of truth. It is append-only and never modified after creation. DropPoint bundle receipts support local crash recovery and are not attachment records themselves.
