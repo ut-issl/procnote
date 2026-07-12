@@ -18,12 +18,7 @@ pub struct StoredAttachment {
 
 pub struct PendingStoredAttachment {
     pub stored: StoredAttachment,
-    source: PendingAttachmentSource,
-}
-
-enum PendingAttachmentSource {
-    File(PathBuf),
-    Bytes(Vec<u8>),
+    source: PathBuf,
 }
 
 impl AttachmentStore {
@@ -45,25 +40,7 @@ impl AttachmentStore {
         let sha256 = compute_sha256(source).map_err(|e| e.to_string())?;
         Ok(PendingStoredAttachment {
             stored: stored_attachment(filename, sha256),
-            source: PendingAttachmentSource::File(source.to_path_buf()),
-        })
-    }
-
-    #[expect(
-        clippy::unused_self,
-        clippy::unnecessary_wraps,
-        reason = "keeps the attachment preparation API uniform with fallible file preparation"
-    )]
-    pub fn prepare_bytes(
-        &self,
-        filename: &str,
-        bytes: Vec<u8>,
-    ) -> Result<PendingStoredAttachment, String> {
-        let filename = sanitize_attachment_filename(filename);
-        let sha256 = hex_encode(Sha256::digest(&bytes).as_ref());
-        Ok(PendingStoredAttachment {
-            stored: stored_attachment(filename, sha256),
-            source: PendingAttachmentSource::Bytes(bytes),
+            source: source.to_path_buf(),
         })
     }
 
@@ -112,37 +89,30 @@ fn stored_attachment(filename: String, sha256: String) -> StoredAttachment {
 }
 
 fn write_pending_source(
-    source: &PendingAttachmentSource,
+    path: &Path,
     destination: &mut std::fs::File,
     expected_sha256: &str,
 ) -> Result<(), String> {
-    match source {
-        PendingAttachmentSource::Bytes(bytes) => {
-            destination.write_all(bytes).map_err(|e| e.to_string())
+    let mut source = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0u8; 64 * 1024];
+    loop {
+        let read = source.read(&mut buffer).map_err(|e| e.to_string())?;
+        if read == 0 {
+            break;
         }
-        PendingAttachmentSource::File(path) => {
-            let mut source = std::fs::File::open(path).map_err(|e| e.to_string())?;
-            let mut hasher = Sha256::new();
-            let mut buffer = vec![0u8; 64 * 1024];
-            loop {
-                let read = source.read(&mut buffer).map_err(|e| e.to_string())?;
-                if read == 0 {
-                    break;
-                }
-                hasher.update(&buffer[..read]);
-                destination
-                    .write_all(&buffer[..read])
-                    .map_err(|e| e.to_string())?;
-            }
-            let copied_hash = hex_encode(hasher.finalize().as_ref());
-            if copied_hash == expected_sha256 {
-                Ok(())
-            } else {
-                Err(format!(
-                    "attachment hash mismatch while copying: expected {expected_sha256}, got {copied_hash}"
-                ))
-            }
-        }
+        hasher.update(&buffer[..read]);
+        destination
+            .write_all(&buffer[..read])
+            .map_err(|e| e.to_string())?;
+    }
+    let copied_hash = hex_encode(hasher.finalize().as_ref());
+    if copied_hash == expected_sha256 {
+        Ok(())
+    } else {
+        Err(format!(
+            "attachment hash mismatch while copying: expected {expected_sha256}, got {copied_hash}"
+        ))
     }
 }
 

@@ -20,9 +20,11 @@ pub struct RecordedExecution {
     pub execution_dir: PathBuf,
 }
 
-pub struct AttachmentBytesSource {
+pub struct InstalledAttachmentSource {
     pub filename: String,
-    pub bytes: Vec<u8>,
+    pub relative_path: String,
+    pub content_type: String,
+    pub sha256: String,
 }
 
 impl ExecutionStore {
@@ -111,24 +113,68 @@ impl ExecutionStore {
         })
     }
 
-    pub fn record_attachment_bytes_batch(
+    /// Durably append the application record for an already-installed atomic
+    /// bundle. Replaying an identical committed batch is idempotent, which
+    /// allows `DropPoint` close recovery after a process restart.
+    pub fn record_installed_attachment_batch(
         &self,
         execution_id: ExecutionId,
         step_id: &str,
         input_id: &str,
-        files: Vec<AttachmentBytesSource>,
+        files: Vec<InstalledAttachmentSource>,
     ) -> Result<RecordedExecution, String> {
-        self.with_log_transaction(execution_id, |state, execution_dir| {
-            let pending_attachments = prepare_attachment_bytes(execution_dir, files)?;
-            let attachments = pending_attachments.iter().map(attachment_record).collect();
-            let event = state
-                .add_attachments_event(step_id, input_id, attachments)
-                .map_err(|e| e.to_string())?;
-            Ok(BuiltAction {
-                event,
-                pending_attachments,
+        let attachments = validate_installed_attachment_sources(files)?;
+        let execution_dir = find_execution_dir(&self.procedures_dir, execution_id)?
+            .ok_or_else(|| format!("Execution not found: {execution_id}"))?;
+        let event_log = EventLog::new(execution_dir.join("events.jsonl"));
+        let transaction_log = event_log.clone();
+
+        event_log
+            .with_exclusive_lock(|| {
+                let events = transaction_log.read().map_err(|error| error.to_string())?;
+                let mut state =
+                    ExecutionState::from_events(&events).map_err(|error| error.to_string())?;
+
+                let already_recorded = events.iter().any(|event| {
+                    matches!(
+                        event,
+                        Event::AttachmentsAdded {
+                            execution_id: event_execution_id,
+                            step_id: event_step_id,
+                            input_id: event_input_id,
+                            attachments: event_attachments,
+                            ..
+                        } if *event_execution_id == execution_id
+                            && event_step_id == step_id
+                            && event_input_id == input_id
+                            && event_attachments == &attachments
+                    )
+                });
+                if already_recorded {
+                    return Ok(RecordedExecution {
+                        state,
+                        execution_dir: execution_dir.clone(),
+                    });
+                }
+
+                let event = state
+                    .add_attachments_event(step_id, input_id, attachments)
+                    .map_err(|error| error.to_string())?;
+                state.apply(&event).map_err(|error| error.to_string())?;
+                transaction_log
+                    .append_durable(&event)
+                    .map_err(|error| error.to_string())?;
+                if let Err(error) = write_execution_snapshot_durable(&execution_dir, &state) {
+                    log::warn!(
+                        "failed to update execution snapshot for {execution_id} after appending installed attachment event: {error}"
+                    );
+                }
+                Ok(RecordedExecution {
+                    state,
+                    execution_dir: execution_dir.clone(),
+                })
             })
-        })
+            .map_err(|error| error.to_string())?
     }
 
     fn with_log_transaction(
@@ -338,18 +384,38 @@ fn prepare_attachment_sources(
         .collect()
 }
 
-fn prepare_attachment_bytes(
-    execution_dir: &Path,
-    sources: Vec<AttachmentBytesSource>,
-) -> Result<Vec<PendingStoredAttachment>, String> {
+fn validate_installed_attachment_sources(
+    sources: Vec<InstalledAttachmentSource>,
+) -> Result<Vec<AttachmentRecord>, String> {
     if sources.is_empty() {
-        return Err("at least one attachment file is required".to_string());
+        return Err("at least one installed attachment file is required".to_string());
     }
-
-    let store = AttachmentStore::new(execution_dir.to_path_buf());
     sources
         .into_iter()
-        .map(|source| store.prepare_bytes(&source.filename, source.bytes))
+        .map(|source| {
+            let relative = Path::new(&source.relative_path);
+            if relative.is_absolute()
+                || !source.relative_path.starts_with("attachments/")
+                || relative
+                    .components()
+                    .any(|component| !matches!(component, std::path::Component::Normal(_)))
+                || source.filename.is_empty()
+                || source.content_type.is_empty()
+                || source.sha256.len() != 64
+                || !source
+                    .sha256
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+            {
+                return Err("installed attachment metadata is invalid".to_string());
+            }
+            Ok(AttachmentRecord {
+                filename: source.filename,
+                path: source.relative_path,
+                content_type: source.content_type,
+                sha256: source.sha256,
+            })
+        })
         .collect()
 }
 
@@ -537,6 +603,21 @@ version: 1.0.0
 ```
 ";
 
+    const ATTACHMENT_TEMPLATE: &str = r"---
+id: attachment-test
+title: Attachment Test
+version: 1.0.0
+---
+
+## Capture
+
+```inputs
+- id: evidence
+  label: Evidence
+  type: attachment
+```
+";
+
     #[test]
     fn create_and_update_execution_snapshot_readme() {
         let temp = tempfile::tempdir().unwrap();
@@ -589,5 +670,65 @@ version: 1.0.0
         let updated_readme = std::fs::read_to_string(readme_path).unwrap();
         assert!(updated_readme.contains("- [x] Ready"));
         assert!(updated_readme.contains("Toggled at:"));
+    }
+
+    #[test]
+    fn installed_attachment_record_is_idempotent_after_restart_boundary() {
+        let temporary = tempfile::tempdir().unwrap();
+        let procedure_dir = temporary.path().join("attachment-test");
+        std::fs::create_dir(&procedure_dir).unwrap();
+        let template_path = procedure_dir.join("template.md");
+        std::fs::write(&template_path, ATTACHMENT_TEMPLATE).unwrap();
+
+        let template = parse_template(ATTACHMENT_TEMPLATE).unwrap();
+        let mut state = ExecutionState::new();
+        let events = state.start(&template).unwrap();
+        let execution_id = state.execution_id.unwrap();
+        let started_at = events
+            .iter()
+            .find_map(|event| match event {
+                Event::ExecutionStarted { at, .. } => Some(*at),
+                _ => None,
+            })
+            .unwrap();
+        let store = ExecutionStore::new(temporary.path().to_path_buf());
+        let created = store
+            .create_execution(
+                &template_path,
+                state,
+                events,
+                started_at,
+                execution_id,
+                "test".to_string(),
+            )
+            .unwrap();
+
+        let source = || InstalledAttachmentSource {
+            filename: "scan.txt".to_string(),
+            relative_path: "attachments/bundle-dp_example/scan.txt".to_string(),
+            content_type: "text/plain".to_string(),
+            sha256: "a".repeat(64),
+        };
+        store
+            .record_installed_attachment_batch(execution_id, "step-0", "evidence", vec![source()])
+            .unwrap();
+        let replayed = store
+            .record_installed_attachment_batch(execution_id, "step-0", "evidence", vec![source()])
+            .unwrap();
+
+        assert_eq!(
+            replayed.state.steps["step-0"].attachments["evidence"].len(),
+            1
+        );
+        let events = EventLog::new(created.execution_dir.join("events.jsonl"))
+            .read()
+            .unwrap();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, Event::AttachmentsAdded { .. }))
+                .count(),
+            1
+        );
     }
 }
