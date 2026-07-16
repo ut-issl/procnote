@@ -24,8 +24,8 @@ build-frontend:
 
 # --- Check & Lint ---
 
-# Run all checks (fmt, clippy, vp, svelte-check, type bindings, tests)
-check-all: check-fmt check-clippy check-vp check-frontend check-types test
+# Run all linters (fmt, clippy, vp, svelte-check, type bindings)
+lint: check-fmt check-clippy check-vp check-frontend check-types
 
 # Check Rust formatting
 check-fmt:
