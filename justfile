@@ -31,9 +31,9 @@ check-all: check-fmt check-clippy check-vp check-frontend check-types test
 check-fmt:
     cargo fmt --all -- --check
 
-# Run cargo clippy
+# Run cargo clippy, denying warnings for local packages
 check-clippy:
-    cargo clippy --workspace -- -D warnings
+    CARGO_BUILD_WARNINGS=deny cargo clippy --workspace --all-targets --all-features --keep-going
 
 # Run vite-plus check (format + lint)
 check-vp:
