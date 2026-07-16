@@ -168,7 +168,7 @@ pub fn sanitize_attachment_filename(filename: &str) -> String {
     sanitized
 }
 
-fn is_safe_filename_char(c: char) -> bool {
+const fn is_safe_filename_char(c: char) -> bool {
     !c.is_control()
         && !is_format_or_bidi_control(c)
         && !matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|')
