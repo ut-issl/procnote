@@ -64,6 +64,7 @@
     let remoteError = $state<string | null>(null);
     let countdownNow = $state(Date.now());
     let pollTimer: number | null = null;
+    let pollBackoffMs = 1000;
     let countdownTimer: number | null = null;
     let remoteRunId = 0;
     let pollInFlightRunId: number | null = null;
@@ -232,13 +233,22 @@
 
     function startPolling() {
         stopPolling();
+        pollBackoffMs = 1000;
         void pollRemoteOnce();
-        pollTimer = window.setInterval(() => void pollRemoteOnce(), 1500);
+    }
+
+    function schedulePoll(delayMs: number) {
+        if (!remoteSession || pollTimer !== null) return;
+        const jitteredDelay = Math.max(250, Math.round(delayMs * (0.8 + Math.random() * 0.4)));
+        pollTimer = window.setTimeout(() => {
+            pollTimer = null;
+            void pollRemoteOnce();
+        }, jitteredDelay);
     }
 
     function stopPolling() {
         if (pollTimer !== null) {
-            window.clearInterval(pollTimer);
+            window.clearTimeout(pollTimer);
             pollTimer = null;
         }
     }
@@ -268,12 +278,16 @@
             const status = await onpolldrop(session.session_id);
             if (runId !== remoteRunId) return;
             remoteStatus = status;
+            remoteError = null;
+            pollBackoffMs = 1000;
             switch (status.status) {
                 case "open":
                     remotePhase = "open";
+                    schedulePoll(1500);
                     break;
                 case "receiving":
                     remotePhase = "receiving";
+                    schedulePoll(1500);
                     break;
                 case "ready":
                     stopPolling();
@@ -287,17 +301,29 @@
                     stopPolling();
                     remotePhase = "expired";
                     break;
+                case "failed":
+                    stopPolling();
+                    remotePhase = "failed";
+                    remoteError = "DropPoint reported a terminal internal failure.";
+                    break;
                 default:
                     stopPolling();
                     remotePhase = "failed";
-                    remoteError = `DropPoint session status: ${status.status}`;
+                    remoteError = `Unsupported DropPoint session status: ${status.status}`;
                     break;
             }
         } catch (e) {
             if (runId !== remoteRunId) return;
+            const pollError = parsePollError(e);
+            if (pollError.kind === "retryable") {
+                remoteError = `Temporary polling failure: ${pollError.message}`;
+                schedulePoll(pollBackoffMs);
+                pollBackoffMs = Math.min(pollBackoffMs * 2, 15000);
+                return;
+            }
             stopPolling();
             remotePhase = "failed";
-            remoteError = String(e);
+            remoteError = pollError.message;
         } finally {
             if (pollInFlightRunId === runId) {
                 pollInFlightRunId = null;
@@ -321,9 +347,21 @@
         }
     }
 
-    async function retryRemoteImport() {
+    function retryRemoteImport() {
         if (!remoteSession) return;
-        await importRemoteUpload(remoteSession.session_id);
+        remoteError = null;
+        remotePhase = "open";
+        startPolling();
+    }
+
+    function parsePollError(error: unknown): { kind: string; message: string } {
+        if (typeof error === "object" && error !== null) {
+            const value = error as Record<string, unknown>;
+            if (typeof value.kind === "string" && typeof value.message === "string") {
+                return { kind: value.kind, message: value.message };
+            }
+        }
+        return { kind: "fatal", message: String(error) };
     }
 
     async function cancelRemoteUpload() {

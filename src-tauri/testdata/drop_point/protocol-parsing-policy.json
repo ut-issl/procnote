@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "base64url": [
+    { "value": "AA", "valid": true, "decoded_hex": "00" },
+    { "value": "_w", "valid": true, "decoded_hex": "ff" },
+    { "value": "SGVsbG8", "valid": true, "decoded_hex": "48656c6c6f" },
+    { "value": "", "valid": false },
+    { "value": "A", "valid": false },
+    { "value": "AB", "valid": false },
+    { "value": "AA==", "valid": false },
+    { "value": "+w", "valid": false },
+    { "value": "/w", "valid": false },
+    { "value": "AA\n", "valid": false }
+  ],
+  "timestamps": [
+    { "value": "2026-06-30T12:00:00Z", "valid": true },
+    { "value": "2026-06-30T12:00:00.123456789+09:00", "valid": true },
+    { "value": "2026-06-30T12:00:00", "valid": false },
+    { "value": "2026-02-30T12:00:00Z", "valid": false },
+    { "value": "2026-06-30", "valid": false }
+  ],
+  "mime_types": [
+    { "value": "", "valid": true, "canonical": "application/octet-stream" },
+    { "value": "text/plain", "valid": true, "canonical": "text/plain" },
+    { "value": "IMAGE/JPEG", "valid": true, "canonical": "image/jpeg" },
+    { "value": "text/plain; charset=utf-8", "valid": false },
+    { "value": "text/plain\nX-Evil: 1", "valid": false },
+    { "value": "not-a-mime", "valid": false }
+  ]
+}

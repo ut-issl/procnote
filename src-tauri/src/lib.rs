@@ -22,7 +22,7 @@ use commands::execution::{
     record_action, reveal_execution_dir, start_execution,
 };
 use commands::template::list_templates;
-use drop_point::{DropPointClient, DropPointConfig, DropPointSessions, cleanup_persisted_sessions};
+use drop_point::{DropPointClient, DropPointConfig, DropPointSessions};
 use state::AppState;
 
 /// Command-line arguments shared by both binary crates.
@@ -84,13 +84,22 @@ pub fn run(workspace: &Path) {
                 }
             };
 
-            let drop_point_client = drop_point_config.clone().map(DropPointClient::new);
-            if let Some(client) = drop_point_client.clone() {
-                let cleanup_dir = procedures_dir.clone();
-                tauri::async_runtime::spawn(async move {
-                    cleanup_persisted_sessions(&cleanup_dir, &client).await;
-                });
-            }
+            let drop_point_client = match drop_point_config
+                .clone()
+                .map(DropPointClient::new)
+                .transpose()
+            {
+                Ok(client) => client,
+                Err(error) => {
+                    log::warn!("DropPoint disabled: {error}");
+                    None
+                }
+            };
+            let drop_point_state_root =
+                app.path().app_local_data_dir()?.join("drop-point-sessions");
+            let drop_point_sessions =
+                DropPointSessions::new(drop_point_state_root, &procedures_dir)
+                    .map_err(std::io::Error::other)?;
 
             app.manage(AppState {
                 procedures_dir,
@@ -98,7 +107,7 @@ pub fn run(workspace: &Path) {
                 drop_point_client,
                 attachment_grants: Mutex::new(HashSet::new()),
             });
-            app.manage(DropPointSessions::default());
+            app.manage(drop_point_sessions);
 
             Ok(())
         })
