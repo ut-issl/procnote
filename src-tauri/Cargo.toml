@@ -1,7 +1,6 @@
 [package]
 name = "procnote-tauri"
-# Version not tracked here; see src-tauri/tauri.conf.json for the release version.
-version = "0.0.0"
+version.workspace = true
 edition = "2024"
 description.workspace = true
 repository.workspace = true
