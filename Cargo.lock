@@ -3135,14 +3135,14 @@ dependencies = [
 
 [[package]]
 name = "procnote-cli"
-version = "0.0.0"
+version = "0.0.3"
 dependencies = [
  "procnote-tauri",
 ]
 
 [[package]]
 name = "procnote-core"
-version = "0.0.0"
+version = "0.0.3"
 dependencies = [
  "chrono",
  "log",
@@ -3159,7 +3159,7 @@ dependencies = [
 
 [[package]]
 name = "procnote-tauri"
-version = "0.0.0"
+version = "0.0.3"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",

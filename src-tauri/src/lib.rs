@@ -28,6 +28,7 @@ use state::AppState;
 /// Command-line arguments shared by both binary crates.
 #[derive(Parser, Debug)]
 #[command(
+    name = "procnote",
     version,
     about = "procnote - Procedure execution tool for hardware testing."
 )]
