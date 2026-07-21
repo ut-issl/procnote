@@ -9,17 +9,24 @@ on:
         description: "Release tag (e.g., v0.0.1)"
         required: true
 
+permissions:
+  contents: read
+
 jobs:
   update-cask:
     runs-on: macos-latest
     steps:
       - name: Determine tag
         id: tag
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            printf 'tag=%s\n' "$INPUT_TAG" >> "$GITHUB_OUTPUT"
           else
-            echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+            printf 'tag=%s\n' "$REF_NAME" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Extract version from tag
@@ -31,9 +38,11 @@ jobs:
       - name: Download macOS DMGs
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          TAG: ${{ steps.tag.outputs.tag }}
         run: |
-          gh release download "${{ steps.tag.outputs.tag }}" \
-            --repo "${{ github.repository }}" \
+          gh release download "$TAG" \
+            --repo "$REPOSITORY" \
             --pattern '*_aarch64.dmg' \
             --pattern '*_x64.dmg'
 
@@ -48,6 +57,7 @@ jobs:
         with:
           repository: shunichironomura/homebrew-tap
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          persist-credentials: false
 
       - name: Update cask formula
         env:
@@ -95,6 +105,9 @@ jobs:
           '
 
       - name: Commit and push
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -102,6 +115,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "No changes to commit"
           else
-            git commit -m "Update procnote to ${{ steps.version.outputs.version }}"
+            git commit -m "Update procnote to $VERSION"
+            gh auth setup-git --hostname github.com --force
             git push
           fi
