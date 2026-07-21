@@ -55,8 +55,7 @@ jobs:
       - name: Checkout homebrew-tap
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          repository: shunichironomura/homebrew-tap
-          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          repository: ut-issl/homebrew-tap
           persist-credentials: false
 
       - name: Update cask formula
@@ -76,18 +75,20 @@ jobs:
 
                 on_arm do
                   sha256 "#{sha_arm64}"
-                  url "https://github.com/shunichironomura/procnote/releases/download/v\#{version}/procnote_\#{version}_aarch64.dmg",
-                      verified: "github.com/shunichironomura/procnote/"
+
+                  url "https://github.com/ut-issl/procnote/releases/download/v\#{version}/procnote_\#{version}_aarch64.dmg"
                 end
                 on_intel do
                   sha256 "#{sha_x64}"
-                  url "https://github.com/shunichironomura/procnote/releases/download/v\#{version}/procnote_\#{version}_x64.dmg",
-                      verified: "github.com/shunichironomura/procnote/"
+
+                  url "https://github.com/ut-issl/procnote/releases/download/v\#{version}/procnote_\#{version}_x64.dmg"
                 end
 
                 name "procnote"
                 desc "Procedure execution tool"
-                homepage "https://github.com/shunichironomura/procnote"
+                homepage "https://github.com/ut-issl/procnote"
+
+                depends_on :macos
 
                 app "procnote.app"
                 binary "\#{appdir}/procnote.app/Contents/MacOS/procnote"
