@@ -25,29 +25,28 @@ use commands::template::list_templates;
 use drop_point::{DropPointClient, DropPointConfig, DropPointSessions, cleanup_persisted_sessions};
 use state::AppState;
 
-/// Command-line arguments shared by both binary crates.
+/// Arguments accepted by the desktop executable.
 #[derive(Parser, Debug)]
 #[command(
     name = "procnote",
     version,
     about = "procnote - Procedure execution tool for hardware testing."
 )]
-pub struct Args {
+struct Args {
     /// Workspace directory containing procedure subdirectories.
     /// Defaults to the current working directory.
     #[arg(default_value = ".")]
-    pub workspace: PathBuf,
+    workspace: PathBuf,
 }
 
-/// Entry point used by both `procnote-cli` and `procnote-tauri` binaries.
-/// Parses CLI arguments and hands off to [`run`].
-pub fn run_cli() {
-    let args = Args::parse();
-    run(&args.workspace);
-}
-
+/// Parses the optional workspace argument and starts the desktop application.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run(workspace: &Path) {
+pub fn run() {
+    let args = Args::parse();
+    run_with_workspace(&args.workspace);
+}
+
+fn run_with_workspace(workspace: &Path) {
     // Canonicalize early so relative paths like "." resolve correctly.
     let procedures_dir = workspace.canonicalize().unwrap_or_else(|_| {
         panic!(

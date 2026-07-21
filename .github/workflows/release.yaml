@@ -8,6 +8,8 @@ concurrency:
 
 env:
   NODE_VERSION: 22
+  # tauri-build statically links the versioned VC runtime when this is enabled.
+  STATIC_VCRUNTIME: "true"
 
 jobs:
   build-tauri:
@@ -20,9 +22,11 @@ jobs:
           - platform: macos-latest
             args: "--target aarch64-apple-darwin"
             rust-targets: "aarch64-apple-darwin,x86_64-apple-darwin"
+            binary-arch: arm64
           - platform: macos-latest
             args: "--target x86_64-apple-darwin"
             rust-targets: "aarch64-apple-darwin,x86_64-apple-darwin"
+            binary-arch: x86_64
           - platform: ubuntu-22.04
             args: ""
             rust-targets: ""
@@ -61,11 +65,12 @@ jobs:
 
       - run: pnpm install
 
-      - name: Build CLI binary (Windows only)
-        if: matrix.platform == 'windows-latest'
+      - name: Remove cached package artifacts
+        shell: bash
         run: |
-          cargo build --release --package procnote-cli
-          Copy-Item "target/release/procnote.exe" "src-tauri/resources/cli/procnote.exe"
+          if [ -d target ]; then
+            find target -type d -name bundle -prune -exec rm -rf {} +
+          fi
 
       - uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         env:
@@ -77,3 +82,45 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
+
+      - name: Validate packaged macOS launcher
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          dmg=$(find target -type f -path '*/bundle/dmg/*.dmg' -print -quit)
+          test -n "$dmg"
+          scripts/validate-macos-package.sh "$dmg" "${{ matrix['binary-arch'] }}"
+
+      - name: Validate packaged Linux launcher
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          deb=$(find target -type f -path '*/bundle/deb/*.deb' -print -quit)
+          test -n "$deb"
+          scripts/validate-linux-package.sh "$deb"
+
+      - name: Validate packaged Windows launchers and installers
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem target -Recurse -Filter "*-setup.exe" |
+            Where-Object { $_.FullName.Contains("\bundle\nsis\") } |
+            Select-Object -First 1
+          $msi = Get-ChildItem target -Recurse -Filter "*.msi" |
+            Where-Object { $_.FullName.Contains("\bundle\msi\") } |
+            Select-Object -First 1
+          if ($null -eq $installer) {
+            throw "NSIS installer was not produced"
+          }
+          if ($null -eq $msi) {
+            throw "MSI installer was not produced"
+          }
+
+          $legacyInstaller = Join-Path $env:RUNNER_TEMP "procnote_0.0.4_x64-setup.exe"
+          Invoke-WebRequest `
+            -Uri "https://github.com/ut-issl/procnote/releases/download/v0.0.4/procnote_0.0.4_x64-setup.exe" `
+            -OutFile $legacyInstaller
+          ./scripts/validate-windows-package.ps1 `
+            -InstallerPath $installer.FullName `
+            -MsiPath $msi.FullName `
+            -LegacyInstallerPath $legacyInstaller
