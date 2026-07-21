@@ -212,7 +212,7 @@ if ($LASTEXITCODE -ne 0) {
 $gui = Join-Path $extractDir "procnote.exe"
 $launcher = Join-Path $extractDir "bin\procnote.exe"
 $pathUpdater = Join-Path $extractDir "installer\update-user-path.ps1"
-$sourceLauncher = Join-Path $PWD "src-tauri\launchers\bin\procnote-launcher.exe"
+$sourceLauncher = Join-Path $PWD "src-tauri\launchers\bin\procnote.exe"
 $sourcePathUpdater = Join-Path $PWD "src-tauri\nsis\update-user-path.ps1"
 
 $metadataJson = & cargo metadata --no-deps --format-version 1 | Out-String
@@ -245,6 +245,9 @@ if (Test-Path (Join-Path $extractDir "cli")) {
 if (Get-ChildItem $extractDir -Recurse -Filter "procnote.cmd" -File) {
     throw "Obsolete command-script launcher is still packaged"
 }
+if (Get-ChildItem $extractDir -Recurse -Filter "procnote-launcher.exe" -File) {
+    throw "NSIS still contains the internal launcher filename"
+}
 if ((Get-FileHash $sourceLauncher).Hash -ne (Get-FileHash $launcher).Hash) {
     throw "Packaged launcher differs from its freshly built source file"
 }
@@ -275,6 +278,9 @@ if ($msiLauncherMatches.Count -ne 1) {
 }
 if (Get-ChildItem $msiExtractDir -Recurse -Filter "procnote.cmd" -File) {
     throw "MSI still contains the obsolete command-script launcher"
+}
+if (Get-ChildItem $msiExtractDir -Recurse -Filter "procnote-launcher.exe" -File) {
+    throw "MSI still contains the internal launcher filename"
 }
 if ($msiPathUpdaterMatches.Count -ne 1 -or
     -not $msiPathUpdaterMatches[0].FullName.EndsWith("\installer\update-user-path.ps1", [System.StringComparison]::OrdinalIgnoreCase)) {

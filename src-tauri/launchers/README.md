@@ -20,9 +20,12 @@ The launcher resolves symlinks and locates the GUI from the package layout:
 - Linux packages name the GUI `procnote-gui` and install the launcher as
   `/usr/bin/procnote`.
 
-`scripts/prepare-launcher.mjs` builds the launcher for Tauri's target and stages
-it under the ignored `src-tauri/launchers/bin/` directory before Tauri compiles
-and bundles the app. `scripts/tauri.mjs` injects the matching
+`scripts/prepare-launcher.mjs` builds the launcher for Tauri's target and copies
+Cargo's `procnote-launcher[.exe]` artifact into the ignored
+`src-tauri/launchers/bin/` directory as the public `procnote[.exe]` filename.
+Bundle mappings preserve that basename instead of requesting a rename because
+the Tauri WiX bundler preserves a resource's source filename. `scripts/tauri.mjs`
+injects the matching
 `tauri.bundle.*.conf.json` extension for desktop builds, which places the staged
 binary at the paths above. Keeping generated-resource paths out of Tauri's
 automatically loaded platform configuration allows direct `cargo check` and

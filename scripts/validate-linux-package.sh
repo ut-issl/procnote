@@ -7,7 +7,7 @@ if [ "$#" -ne 1 ]; then
 fi
 
 deb=$1
-source_launcher=src-tauri/launchers/bin/procnote-launcher
+source_launcher=src-tauri/launchers/bin/procnote
 extract_dir=$(mktemp -d)
 trap 'rm -rf "$extract_dir"' EXIT HUP INT TERM
 
@@ -50,6 +50,11 @@ if ldd "$launcher" | grep -F 'not found' >/dev/null; then
 fi
 if ldd "$launcher" | grep -F 'libwebkit' >/dev/null || ldd "$launcher" | grep -F 'libgtk' >/dev/null; then
   printf 'terminal launcher unexpectedly links GUI libraries\n' >&2
+  exit 1
+fi
+
+if [ -n "$(find "$extract_dir" -type f -name 'procnote-launcher' -print -quit)" ]; then
+  printf 'internal launcher filename is still packaged in the Debian package\n' >&2
   exit 1
 fi
 

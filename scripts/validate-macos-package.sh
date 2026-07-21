@@ -15,7 +15,7 @@ case $expected_arch in
     exit 2
     ;;
 esac
-source_launcher=src-tauri/launchers/bin/procnote-launcher
+source_launcher=src-tauri/launchers/bin/procnote
 mount_dir=$(mktemp -d)
 attached=false
 
@@ -76,6 +76,10 @@ fi
 
 if [ -e "$app/Contents/Resources/cli/procnote" ] || [ -e "$app/Contents/Resources/cli/procnote.exe" ]; then
   printf 'legacy CLI executable is still packaged in the DMG\n' >&2
+  exit 1
+fi
+if [ -n "$(find "$app" -type f -name 'procnote-launcher' -print -quit)" ]; then
+  printf 'internal launcher filename is still packaged in the DMG\n' >&2
   exit 1
 fi
 

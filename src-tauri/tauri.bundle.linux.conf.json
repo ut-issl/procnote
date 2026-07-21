@@ -3,12 +3,12 @@
     "linux": {
       "deb": {
         "files": {
-          "/usr/bin/procnote": "launchers/bin/procnote-launcher"
+          "/usr/bin/procnote": "launchers/bin/procnote"
         }
       },
       "rpm": {
         "files": {
-          "/usr/bin/procnote": "launchers/bin/procnote-launcher"
+          "/usr/bin/procnote": "launchers/bin/procnote"
         }
       }
     }

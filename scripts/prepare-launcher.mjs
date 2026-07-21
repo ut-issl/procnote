@@ -99,15 +99,16 @@ if (profile === "release") {
 run("cargo", cargoArguments, { stdio: "inherit" });
 
 const metadata = JSON.parse(run("cargo", ["metadata", "--format-version", "1", "--no-deps"]));
-const executableName = `procnote-launcher${target.executableSuffix}`;
-const builtLauncher = join(metadata.target_directory, target.triple, profile, executableName);
+const cargoExecutableName = `procnote-launcher${target.executableSuffix}`;
+const builtLauncher = join(metadata.target_directory, target.triple, profile, cargoExecutableName);
 if (!existsSync(builtLauncher)) {
   throw new Error(`Cargo did not produce the launcher at ${builtLauncher}`);
 }
 
 rmSync(stagedDirectory, { recursive: true, force: true });
 mkdirSync(stagedDirectory, { recursive: true });
-const stagedLauncher = join(stagedDirectory, executableName);
+const stagedExecutableName = `procnote${target.executableSuffix}`;
+const stagedLauncher = join(stagedDirectory, stagedExecutableName);
 copyFileSync(builtLauncher, stagedLauncher);
 if (target.executableSuffix.length === 0) {
   chmodSync(stagedLauncher, 0o755);

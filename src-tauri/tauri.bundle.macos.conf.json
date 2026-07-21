@@ -1,7 +1,7 @@
 {
   "bundle": {
     "resources": {
-      "launchers/bin/procnote-launcher": "bin/procnote"
+      "launchers/bin/procnote": "bin/procnote"
     }
   }
 }
