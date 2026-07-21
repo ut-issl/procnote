@@ -120,3 +120,27 @@ fn run_with_workspace(workspace: &Path) {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use clap::Parser;
+
+    use super::Args;
+
+    #[test]
+    fn accepts_launcher_workspace_after_option_terminator() {
+        let args = Args::try_parse_from(["procnote", "--", "workspace with spaces"])
+            .expect("parse launcher arguments");
+
+        assert_eq!(args.workspace, PathBuf::from("workspace with spaces"));
+    }
+
+    #[test]
+    fn defaults_workspace_to_current_directory() {
+        let args = Args::try_parse_from(["procnote"]).expect("parse default arguments");
+
+        assert_eq!(args.workspace, PathBuf::from("."));
+    }
+}

@@ -1,0 +1,16 @@
+{
+  "bundle": {
+    "linux": {
+      "deb": {
+        "files": {
+          "/usr/bin/procnote": "launchers/bin/procnote-launcher"
+        }
+      },
+      "rpm": {
+        "files": {
+          "/usr/bin/procnote": "launchers/bin/procnote-launcher"
+        }
+      }
+    }
+  }
+}

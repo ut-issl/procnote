@@ -10,6 +10,7 @@ node_modules
 
 # Rust
 /target
+/src-tauri/launchers/bin/
 
 # Runtime data (execution logs inside each procedure directory)
 .executions

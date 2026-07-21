@@ -14,6 +14,7 @@
   1. **`crates/procnote-core/`** — Pure Rust domain logic. No Tauri dependency. Contains event types, execution state machine, and template parser.
   2. **`src-tauri/`** — Tauri shell. Bridges core to desktop via IPC commands. Owns serialization DTOs (`ExecutionSummary`, `StepSummary`, etc.) and filesystem I/O.
   3. **`src/`** — SvelteKit + Svelte 5 frontend. Uses runes (`$state`, `$derived`, `$props`), not stores.
+- **`crates/procnote-launcher/`** is a Tauri-free console adapter outside those domain layers. It owns `procnote [WORKSPACE]`, prints help/version synchronously, and detaches the packaged GUI. It must never depend on `procnote-tauri`, Tauri, or GUI/dialog libraries.
 
 ### Core domain (`procnote-core`)
 

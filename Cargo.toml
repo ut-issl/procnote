@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/procnote-core", "src-tauri"]
+members = ["crates/procnote-core", "crates/procnote-launcher", "src-tauri"]
 
 [workspace.package]
 version = "0.0.5"

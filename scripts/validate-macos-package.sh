@@ -15,7 +15,7 @@ case $expected_arch in
     exit 2
     ;;
 esac
-source_launcher=src-tauri/launchers/macos/procnote
+source_launcher=src-tauri/launchers/bin/procnote-launcher
 mount_dir=$(mktemp -d)
 attached=false
 
@@ -44,14 +44,34 @@ if [ ! -x "$launcher" ]; then
 fi
 
 cmp "$source_launcher" "$launcher"
-sh -n "$launcher"
-actual_arch=$(lipo -archs "$gui")
-if [ "$actual_arch" != "$expected_arch" ]; then
-  printf 'unexpected GUI architecture: expected %s, got %s\n' "$expected_arch" "$actual_arch" >&2
+gui_arch=$(lipo -archs "$gui")
+launcher_arch=$(lipo -archs "$launcher")
+if [ "$gui_arch" != "$expected_arch" ]; then
+  printf 'unexpected GUI architecture: expected %s, got %s\n' "$expected_arch" "$gui_arch" >&2
   exit 1
 fi
+if [ "$launcher_arch" != "$expected_arch" ]; then
+  printf 'unexpected launcher architecture: expected %s, got %s\n' "$expected_arch" "$launcher_arch" >&2
+  exit 1
+fi
+
+if otool -L "$launcher" | grep -F 'WebKit' >/dev/null; then
+  printf 'terminal launcher unexpectedly links WebKit\n' >&2
+  exit 1
+fi
+
 if [ "$(uname -m)" = "$expected_arch" ]; then
-  "$gui" --version | grep -F 'procnote ' >/dev/null
+  launcher_version=$("$launcher" --version)
+  gui_version=$("$gui" --version)
+  if [ "$launcher_version" != "$gui_version" ]; then
+    printf 'launcher and GUI versions differ: %s != %s\n' "$launcher_version" "$gui_version" >&2
+    exit 1
+  fi
+  printf '%s\n' "$launcher_version" | grep -F 'procnote ' >/dev/null
+
+  launcher_help=$("$launcher" --help)
+  printf '%s\n' "$launcher_help" | grep -F 'Usage: procnote [WORKSPACE]' >/dev/null
+  printf '%s\n' "$launcher_help" | grep -F -- '--version' >/dev/null
 fi
 
 if [ -e "$app/Contents/Resources/cli/procnote" ] || [ -e "$app/Contents/Resources/cli/procnote.exe" ]; then

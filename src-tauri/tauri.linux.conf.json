@@ -1,17 +1,3 @@
 {
-  "mainBinaryName": "procnote-gui",
-  "bundle": {
-    "linux": {
-      "deb": {
-        "files": {
-          "/usr/bin/procnote": "launchers/linux/procnote"
-        }
-      },
-      "rpm": {
-        "files": {
-          "/usr/bin/procnote": "launchers/linux/procnote"
-        }
-      }
-    }
-  }
+  "mainBinaryName": "procnote-gui"
 }

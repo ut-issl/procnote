@@ -178,9 +178,11 @@ The `.deb` package installs both the desktop application and `/usr/bin/procnote`
 ```sh
 procnote .
 procnote /path/to/workspace
+procnote --help
+procnote --version
 ```
 
-The launcher starts the desktop application with the requested workspace and immediately returns control to the terminal.
+Workspace commands start the desktop application and immediately return control to the terminal. Help, version, and argument errors are printed synchronously without starting the GUI.
 
 ## Development
 
@@ -210,5 +212,7 @@ Three layers with strict dependency direction:
 1. **`crates/procnote-core/`** -- Pure Rust domain logic (events, state machine, template parser). No Tauri dependency.
 2. **`src-tauri/`** -- Tauri shell. Bridges core to desktop via IPC commands. Owns serialization DTOs and filesystem I/O.
 3. **`src/`** -- SvelteKit + Svelte 5 frontend.
+
+**`crates/procnote-launcher/`** is a separate, Tauri-free console adapter. It handles the public terminal interface and starts the packaged GUI; it does not participate in the domain dependency layers above.
 
 Executions are stored as append-only JSONL event logs under `.executions/`.

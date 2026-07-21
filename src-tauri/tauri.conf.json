@@ -6,7 +6,7 @@
     "frontendDist": "../build",
     "devUrl": "http://localhost:5180",
     "beforeDevCommand": "pnpm dev",
-    "beforeBuildCommand": "pnpm build"
+    "beforeBuildCommand": "pnpm build && pnpm run build:launcher"
   },
   "app": {
     "windows": [

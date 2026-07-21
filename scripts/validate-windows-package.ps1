@@ -119,6 +119,77 @@ function Invoke-Process {
     }
 }
 
+function Invoke-CapturedProcess {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath,
+        [string[]]$ArgumentList = @(),
+        [int]$TimeoutMilliseconds = 30000
+    )
+
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $FilePath
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    foreach ($argument in $ArgumentList) {
+        $startInfo.ArgumentList.Add($argument)
+    }
+
+    $process = [System.Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    try {
+        if (-not $process.Start()) {
+            throw "Failed to start captured process: $FilePath"
+        }
+        $stdout = $process.StandardOutput.ReadToEndAsync()
+        $stderr = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit($TimeoutMilliseconds)) {
+            $process.Kill($true)
+            throw "Process did not exit within $TimeoutMilliseconds ms: $FilePath"
+        }
+
+        return [pscustomobject]@{
+            ExitCode = $process.ExitCode
+            Stdout = $stdout.GetAwaiter().GetResult()
+            Stderr = $stderr.GetAwaiter().GetResult()
+        }
+    }
+    finally {
+        $process.Dispose()
+    }
+}
+
+function Assert-NoRedistributableRuntime {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$BinaryPath,
+        [Parameter(Mandatory = $true)]
+        [string]$Description,
+        [Parameter(Mandatory = $true)]
+        [string]$DumpbinPath
+    )
+
+    $dependencies = (& $DumpbinPath /dependents $BinaryPath | Out-String).ToUpperInvariant()
+    # UCRTBASE.DLL and API-MS-WIN-CRT-* are Windows components and are expected.
+    $redistributableRuntimePrefixes = @(
+        "VCRUNTIME",
+        "MSVCR1",
+        "MSVCP",
+        "CONCRT",
+        "VCAMP",
+        "VCOMP"
+    )
+    foreach ($runtimePrefix in $redistributableRuntimePrefixes) {
+        if ($dependencies.Contains($runtimePrefix)) {
+            throw "$Description dynamically imports a Visual C++ Redistributable library: $runtimePrefix"
+        }
+    }
+
+    return $dependencies
+}
+
 $installer = (Resolve-Path $InstallerPath).Path
 $msi = (Resolve-Path $MsiPath).Path
 $legacyInstaller = if ([string]::IsNullOrWhiteSpace($LegacyInstallerPath)) {
@@ -139,20 +210,31 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $gui = Join-Path $extractDir "procnote.exe"
-$launcher = Join-Path $extractDir "bin\procnote.cmd"
+$launcher = Join-Path $extractDir "bin\procnote.exe"
 $pathUpdater = Join-Path $extractDir "installer\update-user-path.ps1"
-$sourceLauncher = Join-Path $PWD "src-tauri\launchers\windows\procnote.cmd"
+$sourceLauncher = Join-Path $PWD "src-tauri\launchers\bin\procnote-launcher.exe"
 $sourcePathUpdater = Join-Path $PWD "src-tauri\nsis\update-user-path.ps1"
+
+$metadataJson = & cargo metadata --no-deps --format-version 1 | Out-String
+if ($LASTEXITCODE -ne 0) {
+    throw "Could not read Cargo package metadata"
+}
+$metadata = $metadataJson | ConvertFrom-Json
+$launcherPackages = @($metadata.packages | Where-Object { $_.name -eq "procnote-launcher" })
+if ($launcherPackages.Count -ne 1) {
+    throw "Expected exactly one procnote-launcher package in Cargo metadata"
+}
+$expectedVersionOutput = "procnote $($launcherPackages[0].version)"
 
 if (-not (Test-Path $gui -PathType Leaf)) {
     throw "Packaged GUI executable is missing: $gui"
 }
-$nsisGuiMatches = @(Get-ChildItem $extractDir -Recurse -Filter "procnote.exe" -File)
-if ($nsisGuiMatches.Count -ne 1) {
-    throw "NSIS must contain exactly one GUI executable; found $($nsisGuiMatches.Count)"
-}
 if (-not (Test-Path $launcher -PathType Leaf)) {
     throw "Packaged terminal launcher is missing: $launcher"
+}
+$nsisExecutables = @(Get-ChildItem $extractDir -Recurse -Filter "procnote.exe" -File)
+if ($nsisExecutables.Count -ne 2) {
+    throw "NSIS must contain one GUI and one console launcher; found $($nsisExecutables.Count) procnote executables"
 }
 if (-not (Test-Path $pathUpdater -PathType Leaf)) {
     throw "Packaged PATH updater is missing: $pathUpdater"
@@ -160,8 +242,11 @@ if (-not (Test-Path $pathUpdater -PathType Leaf)) {
 if (Test-Path (Join-Path $extractDir "cli")) {
     throw "Legacy CLI directory is still packaged"
 }
+if (Get-ChildItem $extractDir -Recurse -Filter "procnote.cmd" -File) {
+    throw "Obsolete command-script launcher is still packaged"
+}
 if ((Get-FileHash $sourceLauncher).Hash -ne (Get-FileHash $launcher).Hash) {
-    throw "Packaged launcher differs from its source file"
+    throw "Packaged launcher differs from its freshly built source file"
 }
 if ((Get-FileHash $sourcePathUpdater).Hash -ne (Get-FileHash $pathUpdater).Hash) {
     throw "Packaged PATH updater differs from its source file"
@@ -174,15 +259,22 @@ Invoke-Process `
     -ArgumentList @("/a", "`"$msi`"", "/qn", "/norestart", "TARGETDIR=`"$msiExtractDir`"") `
     -Description "MSI administrative extraction"
 
-$msiGuiMatches = @(Get-ChildItem $msiExtractDir -Recurse -Filter "procnote.exe" -File)
-$msiLauncherMatches = @(Get-ChildItem $msiExtractDir -Recurse -Filter "procnote.cmd" -File)
+$msiExecutables = @(Get-ChildItem $msiExtractDir -Recurse -Filter "procnote.exe" -File)
+$msiLauncherMatches = @($msiExecutables | Where-Object {
+        $_.FullName.EndsWith("\bin\procnote.exe", [System.StringComparison]::OrdinalIgnoreCase)
+    })
+$msiGuiMatches = @($msiExecutables | Where-Object {
+        -not $_.FullName.EndsWith("\bin\procnote.exe", [System.StringComparison]::OrdinalIgnoreCase)
+    })
 $msiPathUpdaterMatches = @(Get-ChildItem $msiExtractDir -Recurse -Filter "update-user-path.ps1" -File)
 if ($msiGuiMatches.Count -ne 1) {
     throw "MSI must contain exactly one GUI executable; found $($msiGuiMatches.Count)"
 }
-if ($msiLauncherMatches.Count -ne 1 -or
-    -not $msiLauncherMatches[0].FullName.EndsWith("\bin\procnote.cmd", [System.StringComparison]::OrdinalIgnoreCase)) {
-    throw "MSI does not contain the terminal launcher under its bin directory"
+if ($msiLauncherMatches.Count -ne 1) {
+    throw "MSI does not contain exactly one console launcher under its bin directory"
+}
+if (Get-ChildItem $msiExtractDir -Recurse -Filter "procnote.cmd" -File) {
+    throw "MSI still contains the obsolete command-script launcher"
 }
 if ($msiPathUpdaterMatches.Count -ne 1 -or
     -not $msiPathUpdaterMatches[0].FullName.EndsWith("\installer\update-user-path.ps1", [System.StringComparison]::OrdinalIgnoreCase)) {
@@ -192,7 +284,7 @@ if ((Get-FileHash $gui).Hash -ne (Get-FileHash $msiGuiMatches[0].FullName).Hash)
     throw "MSI and NSIS contain different GUI executables"
 }
 if ((Get-FileHash $sourceLauncher).Hash -ne (Get-FileHash $msiLauncherMatches[0].FullName).Hash) {
-    throw "MSI launcher differs from its source file"
+    throw "MSI launcher differs from its freshly built source file"
 }
 if ((Get-FileHash $sourcePathUpdater).Hash -ne (Get-FileHash $msiPathUpdaterMatches[0].FullName).Hash) {
     throw "MSI PATH updater differs from its source file"
@@ -217,29 +309,29 @@ if (Test-Path $vswhere) {
 $dumpbinRoots = if ([string]::IsNullOrWhiteSpace($visualStudioRoot)) { @() } else { @(Join-Path $visualStudioRoot "VC\Tools\MSVC") }
 $dumpbin = Find-Executable -Name "dumpbin.exe" -SearchRoots $dumpbinRoots
 
-$headers = (& $dumpbin /headers $gui | Out-String).ToLowerInvariant()
-if (-not $headers.Contains("machine (x64)")) {
+$guiHeaders = (& $dumpbin /headers $gui | Out-String).ToLowerInvariant()
+if (-not $guiHeaders.Contains("machine (x64)")) {
     throw "Packaged GUI is not an x64 executable"
 }
-if (-not $headers.Contains("subsystem (windows gui)")) {
-    throw "Packaged executable does not use the Windows GUI subsystem"
+if (-not $guiHeaders.Contains("subsystem (windows gui)")) {
+    throw "Packaged GUI does not use the Windows GUI subsystem"
 }
 
-$dependencies = (& $dumpbin /dependents $gui | Out-String).ToUpperInvariant()
-# UCRTBASE.DLL and API-MS-WIN-CRT-* are Windows components and are expected:
-# Tauri statically links the versioned VC runtime while dynamically linking UCRT.
-$redistributableRuntimePrefixes = @(
-    "VCRUNTIME",
-    "MSVCR1",
-    "MSVCP",
-    "CONCRT",
-    "VCAMP",
-    "VCOMP"
-)
-foreach ($runtimePrefix in $redistributableRuntimePrefixes) {
-    if ($dependencies.Contains($runtimePrefix)) {
-        throw "Packaged GUI dynamically imports a Visual C++ Redistributable library: $runtimePrefix"
-    }
+$launcherHeaders = (& $dumpbin /headers $launcher | Out-String).ToLowerInvariant()
+if (-not $launcherHeaders.Contains("machine (x64)")) {
+    throw "Packaged launcher is not an x64 executable"
+}
+if (-not $launcherHeaders.Contains("subsystem (windows cui)")) {
+    throw "Packaged launcher does not use the Windows console subsystem"
+}
+
+$null = Assert-NoRedistributableRuntime -BinaryPath $gui -Description "Packaged GUI" -DumpbinPath $dumpbin
+$launcherDependencies = Assert-NoRedistributableRuntime `
+    -BinaryPath $launcher `
+    -Description "Packaged launcher" `
+    -DumpbinPath $dumpbin
+if ($launcherDependencies.Contains("COMCTL32.DLL")) {
+    throw "Console launcher unexpectedly imports the Common Controls GUI library"
 }
 
 $process = Start-Process -FilePath $gui -ArgumentList "--version" -PassThru
@@ -251,17 +343,37 @@ if ($process.ExitCode -ne 0) {
     throw "Packaged GUI failed --version with exit code $($process.ExitCode)"
 }
 
-$wrapperProcess = Start-Process -FilePath $env:ComSpec -ArgumentList @("/d", "/c", "call `"$launcher`" --version") -PassThru -Wait
-if ($wrapperProcess.ExitCode -ne 0) {
-    throw "Packaged launcher failed with exit code $($wrapperProcess.ExitCode)"
+$versionResult = Invoke-CapturedProcess -FilePath $launcher -ArgumentList @("--version")
+if ($versionResult.ExitCode -ne 0 -or
+    $versionResult.Stdout.Trim() -cne $expectedVersionOutput -or
+    -not [string]::IsNullOrEmpty($versionResult.Stderr)) {
+    throw "Packaged launcher produced unexpected --version output: $($versionResult.Stdout) $($versionResult.Stderr)"
 }
-Get-Process -Name "procnote" -ErrorAction SilentlyContinue | Wait-Process -Timeout 30
+
+$helpResult = Invoke-CapturedProcess -FilePath $launcher -ArgumentList @("--help")
+if ($helpResult.ExitCode -ne 0 -or
+    -not $helpResult.Stdout.Contains("Usage: procnote [WORKSPACE]") -or
+    -not $helpResult.Stdout.Contains("--version") -or
+    -not [string]::IsNullOrEmpty($helpResult.Stderr)) {
+    throw "Packaged launcher produced unexpected --help output: $($helpResult.Stdout) $($helpResult.Stderr)"
+}
+
+$invalidResult = Invoke-CapturedProcess -FilePath $launcher -ArgumentList @("--not-a-procnote-option")
+if ($invalidResult.ExitCode -ne 2 -or
+    -not $invalidResult.Stderr.Contains("unexpected argument '--not-a-procnote-option'") -or
+    -not [string]::IsNullOrEmpty($invalidResult.Stdout)) {
+    throw "Packaged launcher did not report an invalid argument in the foreground"
+}
+
+if (Get-Process -Name "procnote" -ErrorAction SilentlyContinue) {
+    throw "A procnote process remained after terminal-only launcher commands"
+}
 
 # Exercise the real NSIS hooks against controlled user-PATH entries. When the
 # v0.0.4 installer is supplied, this performs an actual silent upgrade; otherwise
 # it creates the legacy directory layout directly.
 $installDir = Join-Path $env:LOCALAPPDATA "procnote"
-$installedLauncher = Join-Path $installDir "bin\procnote.cmd"
+$installedLauncher = Join-Path $installDir "bin\procnote.exe"
 $installedPathUpdater = Join-Path $installDir "installer\update-user-path.ps1"
 $uninstaller = Join-Path $installDir "uninstall.exe"
 $legacyDir = Join-Path $installDir "cli"
@@ -332,7 +444,7 @@ try {
         throw "NSIS installation did not remove the legacy CLI directory"
     }
     if ((Get-FileHash $sourceLauncher).Hash -ne (Get-FileHash $installedLauncher).Hash) {
-        throw "Installed launcher differs from its source file"
+        throw "Installed launcher differs from its freshly built source file"
     }
     if ((Get-FileHash $sourcePathUpdater).Hash -ne (Get-FileHash $installedPathUpdater).Hash) {
         throw "Installed PATH updater differs from its source file"
@@ -343,6 +455,30 @@ try {
         $installedPath.Kind -ne [Microsoft.Win32.RegistryValueKind]::ExpandString -or
         $installedPath.Value -cne $expectedInstalledPath) {
         throw "NSIS installation produced an unexpected user PATH: $($installedPath.Value)"
+    }
+
+    $originalProcessPath = $env:Path
+    try {
+        $env:Path = [Environment]::ExpandEnvironmentVariables([string]$installedPath.Value)
+        $resolvedCommands = @(Get-Command "procnote" -CommandType Application -ErrorAction Stop)
+        if ($resolvedCommands.Count -ne 1 -or
+            -not [string]::Equals(
+                $resolvedCommands[0].Source,
+                $installedLauncher,
+                [System.StringComparison]::OrdinalIgnoreCase
+            )) {
+            throw "A fresh terminal PATH did not resolve the installed launcher: $($resolvedCommands.Source)"
+        }
+
+        $installedVersionResult = Invoke-CapturedProcess -FilePath $resolvedCommands[0].Source -ArgumentList @("--version")
+        if ($installedVersionResult.ExitCode -ne 0 -or
+            $installedVersionResult.Stdout.Trim() -cne $expectedVersionOutput -or
+            -not [string]::IsNullOrEmpty($installedVersionResult.Stderr)) {
+            throw "Installed launcher produced unexpected --version output"
+        }
+    }
+    finally {
+        $env:Path = $originalProcessPath
     }
 
     if (-not (Test-Path $uninstaller -PathType Leaf)) {

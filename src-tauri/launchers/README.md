@@ -1,19 +1,34 @@
-# Terminal launchers
+# Terminal launcher
 
-`procnote` has one compiled desktop executable. These scripts expose a
-VS Code-style `procnote <workspace>` command without building a second copy of
-the Tauri application.
+`procnote` ships one Tauri desktop executable and one small, Tauri-free console
+launcher. The launcher owns the public `procnote [WORKSPACE]` interface:
 
-- Windows bundles `windows/procnote.cmd` as `bin/procnote.cmd`; the NSIS hook
-  uses `nsis/update-user-path.ps1` to add that directory to the user's PATH
+- `--help`, `--version`, and argument errors are handled synchronously in the
+  terminal by `crates/procnote-launcher`.
+- A valid workspace starts the GUI in a detached process session/group with
+  null standard streams, then immediately returns control to the terminal.
+- The GUI inherits the caller's working directory and environment, and receives
+  the workspace as one OS-native argument without shell interpolation.
+
+The launcher resolves symlinks and locates the GUI from the package layout:
+
+- Windows installs it as `bin/procnote.exe` beside the root `procnote.exe` GUI.
+  The NSIS hook uses `nsis/update-user-path.ps1` to add `bin` to the user's PATH
   without NSIS's string-length limit.
-- macOS bundles `macos/procnote` inside the app. The Homebrew cask links this
-  script, and DMG users can link it manually.
-- Linux packages rename the bundled GUI to `procnote-gui` and install
-  `linux/procnote` as `/usr/bin/procnote`.
+- macOS bundles it as `Contents/Resources/bin/procnote`; the Homebrew cask links
+  this executable, and DMG users can link it manually.
+- Linux packages name the GUI `procnote-gui` and install the launcher as
+  `/usr/bin/procnote`.
 
-Each launcher preserves the caller's working directory and environment,
-forwards arguments unchanged, detaches the GUI process, and returns control to
-the terminal. Do not replace these launchers with a separately built Tauri
-binary: Cargo build-script resource and linker settings are package-scoped, so
-a second package can silently lose the GUI manifest or runtime configuration.
+`scripts/prepare-launcher.mjs` builds the launcher for Tauri's target and stages
+it under the ignored `src-tauri/launchers/bin/` directory before Tauri compiles
+and bundles the app. `scripts/tauri.mjs` injects the matching
+`tauri.bundle.*.conf.json` extension for desktop builds, which places the staged
+binary at the paths above. Keeping generated-resource paths out of Tauri's
+automatically loaded platform configuration allows direct `cargo check` and
+`cargo test` runs to work from a clean checkout.
+
+The launcher must never depend on `procnote-tauri`, Tauri, or GUI/dialog
+libraries. This keeps it a normal console executable and ensures the package has
+exactly one Tauri application receiving Tauri's package-scoped manifest,
+resource, linker, and runtime settings.
