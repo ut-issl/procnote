@@ -145,7 +145,7 @@ Connect PSU to DUT J1 connector. Set voltage to 5.0V. Enable output.
 ### macOS (Homebrew)
 
 ```sh
-brew install --cask shunichironomura/tap/procnote
+brew install --cask ut-issl/tap/procnote
 ```
 
 This installs the app to `/Applications/` and creates a `procnote` CLI command in your PATH.
@@ -162,7 +162,7 @@ This installs the app to `/Applications/` and creates a `procnote` CLI command i
 ### Windows / Linux
 
 > [!NOTE]
-> Windows and Linux distribution is not well organized yet. Download installers manually from the [Releases page](https://github.com/shunichironomura/procnote/releases).
+> Windows and Linux distribution is not well organized yet. Download installers manually from the [Releases page](https://github.com/ut-issl/procnote/releases).
 >
 > Available artifacts:
 >
