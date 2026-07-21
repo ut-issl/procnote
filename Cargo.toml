@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/procnote-cli", "crates/procnote-core", "src-tauri"]
 
 [workspace.package]
-version = "0.0.3"
+version = "0.0.4"
 description = "Event-sourced desktop app for tracking step-by-step procedures"
 readme = "README.md"
 repository = "https://github.com/shunichironomura/procnote"
