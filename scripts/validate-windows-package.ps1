@@ -161,6 +161,38 @@ function Invoke-CapturedProcess {
     }
 }
 
+function Get-CanonicalBundleBinaryHash {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$BinaryPath,
+        [Parameter(Mandatory = $true)]
+        [ValidateSet("NSS", "MSI")]
+        [string]$BundleType
+    )
+
+    $markerPrefix = "__TAURI_BUNDLE_TYPE_VAR_"
+    $expectedMarker = "$markerPrefix$BundleType"
+    $canonicalMarker = "${markerPrefix}UNK"
+    $bytes = [System.IO.File]::ReadAllBytes($BinaryPath)
+    $text = [System.Text.Encoding]::ASCII.GetString($bytes)
+    $markerIndex = $text.IndexOf($expectedMarker, [System.StringComparison]::Ordinal)
+    if ($markerIndex -lt 0 -or
+        $markerIndex -ne $text.LastIndexOf($expectedMarker, [System.StringComparison]::Ordinal)) {
+        throw "$BinaryPath does not contain exactly one $expectedMarker marker"
+    }
+
+    $canonicalBytes = [System.Text.Encoding]::ASCII.GetBytes($canonicalMarker)
+    [System.Array]::Copy($canonicalBytes, 0, $bytes, $markerIndex, $canonicalBytes.Length)
+
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        return [System.Convert]::ToHexString($sha256.ComputeHash($bytes))
+    }
+    finally {
+        $sha256.Dispose()
+    }
+}
+
 function Assert-NoRedistributableRuntime {
     param(
         [Parameter(Mandatory = $true)]
@@ -286,8 +318,13 @@ if ($msiPathUpdaterMatches.Count -ne 1 -or
     -not $msiPathUpdaterMatches[0].FullName.EndsWith("\installer\update-user-path.ps1", [System.StringComparison]::OrdinalIgnoreCase)) {
     throw "MSI does not contain the packaged PATH updater under its installer directory"
 }
-if ((Get-FileHash $gui).Hash -ne (Get-FileHash $msiGuiMatches[0].FullName).Hash) {
-    throw "MSI and NSIS contain different GUI executables"
+# Tauri deliberately patches the main binary with its package type before
+# creating each installer. Compare canonicalized binaries so NSS/MSI is the
+# only accepted difference between the two GUI executables.
+$nsisGuiHash = Get-CanonicalBundleBinaryHash -BinaryPath $gui -BundleType "NSS"
+$msiGuiHash = Get-CanonicalBundleBinaryHash -BinaryPath $msiGuiMatches[0].FullName -BundleType "MSI"
+if ($nsisGuiHash -cne $msiGuiHash) {
+    throw "MSI and NSIS GUI executables differ beyond their Tauri bundle-type markers"
 }
 if ((Get-FileHash $sourceLauncher).Hash -ne (Get-FileHash $msiLauncherMatches[0].FullName).Hash) {
     throw "MSI launcher differs from its freshly built source file"
