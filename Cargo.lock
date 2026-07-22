@@ -3134,15 +3134,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "procnote-cli"
-version = "0.0.3"
-dependencies = [
- "procnote-tauri",
-]
-
-[[package]]
 name = "procnote-core"
-version = "0.0.3"
+version = "0.0.5"
 dependencies = [
  "chrono",
  "log",
@@ -3158,8 +3151,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "procnote-launcher"
+version = "0.0.5"
+dependencies = [
+ "clap",
+ "libc",
+ "tempfile",
+ "thiserror 2.0.19",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "procnote-tauri"
-version = "0.0.3"
+version = "0.0.5"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",

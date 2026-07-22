@@ -161,16 +161,16 @@ pub(super) fn sync_dir(path: &Path) -> Result<(), std::io::Error> {
 }
 
 #[cfg(windows)]
-pub(super) fn sync_dir(path: &Path) -> Result<(), std::io::Error> {
-    use std::os::windows::fs::OpenOptionsExt;
-
-    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
-
-    std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
-        .open(path)?
-        .sync_all()
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "keeps the directory durability API uniform across platforms"
+)]
+pub(super) fn sync_dir(_path: &Path) -> Result<(), std::io::Error> {
+    // Windows has no supported equivalent of POSIX directory fsync. Calling
+    // File::sync_all on a read-only directory handle uses FlushFileBuffers,
+    // which requires write access and returns ERROR_ACCESS_DENIED. Actual files
+    // continue to use File::sync_all at their durable write points.
+    Ok(())
 }
 
 #[cfg(test)]
@@ -186,6 +186,13 @@ mod tests {
             version: SUPPORTED_VERSION,
             tool_version: "test".to_string(),
         }
+    }
+
+    #[test]
+    fn syncing_existing_directory_succeeds() {
+        let dir = tempfile::tempdir().unwrap();
+
+        sync_dir(dir.path()).unwrap();
     }
 
     #[test]

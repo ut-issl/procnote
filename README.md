@@ -148,7 +148,11 @@ Connect PSU to DUT J1 connector. Set voltage to 5.0V. Enable output.
 brew install --cask ut-issl/tap/procnote
 ```
 
-This installs the app to `/Applications/` and creates a `procnote` CLI command in your PATH.
+Homebrew installs the app to `/Applications/` and links its terminal launcher into your PATH. If you install the DMG manually, create the link yourself:
+
+```sh
+sudo ln -sf "/Applications/procnote.app/Contents/Resources/bin/procnote" /usr/local/bin/procnote
+```
 
 > [!NOTE]
 > The macOS builds are not currently code-signed or notarized. After installing, you need to remove the quarantine attribute:
@@ -159,15 +163,26 @@ This installs the app to `/Applications/` and creates a `procnote` CLI command i
 >
 > Without this, macOS will show a "damaged and can't be opened" error.
 
-### Windows / Linux
+### Windows
 
-> [!NOTE]
-> Windows and Linux distribution is not well organized yet. Download installers manually from the [Releases page](https://github.com/ut-issl/procnote/releases).
->
-> Available artifacts:
->
-> - **Windows:** `.msi` and `.exe` installers
-> - **Linux:** `.deb` package and `.AppImage`
+Download the NSIS `.exe` installer from the [Releases page](https://github.com/ut-issl/procnote/releases). It installs the terminal launcher and adds its directory to your user PATH. Open a new terminal after installation.
+
+The `.msi` installer also contains the launcher, but its `bin` directory must currently be added to PATH manually.
+
+### Linux
+
+The `.deb` package installs both the desktop application and `/usr/bin/procnote`. AppImage users must install their own PATH entry or detached launcher for the downloaded AppImage.
+
+### Launch from a terminal
+
+```sh
+procnote .
+procnote /path/to/workspace
+procnote --help
+procnote --version
+```
+
+Workspace commands start the desktop application and immediately return control to the terminal. Help, version, and argument errors are printed synchronously without starting the GUI.
 
 ## Development
 
@@ -197,5 +212,7 @@ Three layers with strict dependency direction:
 1. **`crates/procnote-core/`** -- Pure Rust domain logic (events, state machine, template parser). No Tauri dependency.
 2. **`src-tauri/`** -- Tauri shell. Bridges core to desktop via IPC commands. Owns serialization DTOs and filesystem I/O.
 3. **`src/`** -- SvelteKit + Svelte 5 frontend.
+
+**`crates/procnote-launcher/`** is a separate, Tauri-free console adapter. It handles the public terminal interface and starts the packaged GUI; it does not participate in the domain dependency layers above.
 
 Executions are stored as append-only JSONL event logs under `.executions/`.

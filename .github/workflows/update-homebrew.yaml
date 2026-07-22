@@ -91,7 +91,7 @@ jobs:
                 depends_on :macos
 
                 app "procnote.app"
-                binary "\#{appdir}/procnote.app/Contents/MacOS/procnote"
+                binary "\#{appdir}/procnote.app/Contents/Resources/bin/procnote"
 
                 uninstall quit: "com.github.shunichironomura.procnote"
 

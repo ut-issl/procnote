@@ -79,4 +79,4 @@ pre-commit:
 # Clean build artifacts
 clean:
     cargo clean
-    rm -rf build .svelte-kit node_modules/.vite
+    rm -rf build .svelte-kit node_modules/.vite src-tauri/launchers/bin

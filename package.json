@@ -11,7 +11,9 @@
   "scripts": {
     "dev": "vp dev",
     "build": "vp build",
+    "build:launcher": "node scripts/prepare-launcher.mjs",
     "preview": "vp preview",
+    "tauri": "node scripts/tauri.mjs",
     "prepare": "svelte-kit sync || echo ''",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",

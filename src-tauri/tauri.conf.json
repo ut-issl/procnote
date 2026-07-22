@@ -6,7 +6,7 @@
     "frontendDist": "../build",
     "devUrl": "http://localhost:5180",
     "beforeDevCommand": "pnpm dev",
-    "beforeBuildCommand": "pnpm build"
+    "beforeBuildCommand": "pnpm build && pnpm run build:launcher"
   },
   "app": {
     "windows": [
@@ -33,9 +33,6 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": {
-      "resources/cli/*": "cli/"
-    },
     "windows": {
       "nsis": {
         "installerHooks": "nsis/hooks.nsh"

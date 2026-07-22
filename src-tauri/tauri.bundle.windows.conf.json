@@ -1,0 +1,8 @@
+{
+  "bundle": {
+    "resources": {
+      "launchers/bin/procnote.exe": "bin/procnote.exe",
+      "nsis/update-user-path.ps1": "installer/update-user-path.ps1"
+    }
+  }
+}

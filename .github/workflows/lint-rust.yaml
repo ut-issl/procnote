@@ -55,6 +55,18 @@ jobs:
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - run: cargo test --workspace
 
+  test-windows:
+    name: cargo test (Windows persistence)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Install Rust toolchain
+        run: rustup toolchain install --no-self-update
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - run: "cargo test --package procnote-tauri persistence::"
+
   doc:
     name: cargo doc
     runs-on: ubuntu-latest
@@ -103,7 +115,7 @@ jobs:
       - uses: crate-ci/typos@bee27e3a4fd1ea2111cf90ab89cd076c870fce14 # v1.48.0
 
   collect-lint-rust:
-    needs: [clippy, fmt, test, doc, check-types, typos]
+    needs: [clippy, fmt, test, test-windows, doc, check-types, typos]
     runs-on: ubuntu-latest
     steps:
       - run: echo "All Rust checks passed!"
