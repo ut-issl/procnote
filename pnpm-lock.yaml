@@ -37,10 +37,10 @@ importers:
         version: 11.11.1
       marked:
         specifier: ^18.0.0
-        version: 18.0.6
+        version: 18.0.7
       marked-highlight:
         specifier: ^2.2.3
-        version: 2.2.4(marked@18.0.6)
+        version: 2.2.4(marked@18.0.7)
     devDependencies:
       '@sveltejs/adapter-static':
         specifier: 3.0.10
@@ -1026,8 +1026,8 @@ packages:
     peerDependencies:
       marked: '>=4 <19'
 
-  marked@18.0.6:
-    resolution: {integrity: sha512-MrV5puXBfuiy6wl6DLaq3BtIJQAJToAd5zt/ZKhRfGRAuFPALE7/4Y7jnxRQoEgK/pBgurGqLyAuRgZ2xOjr6w==}
+  marked@18.0.7:
+    resolution: {integrity: sha512-iDVQ5ldaiKXn6b2JroX5kgRfmwgqolW7NpaEzTl1k/2Zh1njIEN9yniyLV/mOvWwtsE8OGgkjsCYvijuPk1dtA==}
     engines: {node: '>= 20'}
     hasBin: true
 
@@ -1868,11 +1868,11 @@ snapshots:
     dependencies:
       '@jridgewell/sourcemap-codec': 1.5.5
 
-  marked-highlight@2.2.4(marked@18.0.6):
+  marked-highlight@2.2.4(marked@18.0.7):
     dependencies:
-      marked: 18.0.6
+      marked: 18.0.7
 
-  marked@18.0.6: {}
+  marked@18.0.7: {}
 
   mri@1.2.0: {}
 
