@@ -35,18 +35,20 @@ struct Envelope {
 
 #[derive(Debug, thiserror::Error)]
 pub enum DropPointCryptoError {
-    #[error("envelope JSON is invalid: {0}")]
-    EnvelopeJson(#[from] serde_json::Error),
+    #[error("envelope JSON is invalid")]
+    EnvelopeJson,
     #[error("unsupported envelope protocol_version {0}")]
     UnsupportedProtocol(u32),
-    #[error("unsupported envelope key_agreement {0}")]
-    UnsupportedKeyAgreement(String),
+    #[error("unsupported envelope key_agreement")]
+    UnsupportedKeyAgreement,
     #[error("envelope field {field} is invalid: {reason}")]
     InvalidEnvelopeField { field: &'static str, reason: String },
     #[error("X25519 shared secret is all zero")]
     AllZeroSharedSecret,
     #[error("HKDF expansion failed")]
     Hkdf,
+    #[error("encrypted payload is too short to contain an AES-GCM tag")]
+    EncryptedPayloadTooShort,
     #[error("AES-GCM decryption failed for {0}")]
     Decrypt(&'static str),
     #[error("decrypted manifest is invalid: {0}")]
@@ -70,8 +72,12 @@ pub fn decrypt_bundle(
     envelope_json: &[u8],
     encrypted_payload: &[u8],
 ) -> Result<Vec<RecoveredFile>, DropPointCryptoError> {
-    let envelope: Envelope = serde_json::from_slice(envelope_json)?;
+    let envelope: Envelope =
+        serde_json::from_slice(envelope_json).map_err(|_| DropPointCryptoError::EnvelopeJson)?;
     validate_envelope_header(&envelope)?;
+    if encrypted_payload.len() < AES_GCM_TAG_BYTES {
+        return Err(DropPointCryptoError::EncryptedPayloadTooShort);
+    }
 
     let sender_public_key = decode_field_32(
         "sender_ephemeral_public_key",
@@ -98,20 +104,20 @@ pub fn decrypt_bundle(
         &sender_public_key,
         &recipient_public,
     )?;
-    let manifest_json = decrypt_aes_gcm(
+    let manifest_json = Zeroizing::new(decrypt_aes_gcm(
         &metadata_key,
         &metadata_nonce,
         AAD_METADATA,
         &encrypted_metadata,
         "metadata",
-    )?;
-    let payload_plaintext = decrypt_aes_gcm(
+    )?);
+    let payload_plaintext = Zeroizing::new(decrypt_aes_gcm(
         &payload_key,
         &payload_nonce,
         AAD_PAYLOAD,
         encrypted_payload,
         "payload",
-    )?;
+    )?);
 
     Ok(split_payload(&manifest_json, &payload_plaintext)?)
 }
@@ -123,9 +129,7 @@ fn validate_envelope_header(envelope: &Envelope) -> Result<(), DropPointCryptoEr
         ));
     }
     if envelope.key_agreement != KEY_AGREEMENT {
-        return Err(DropPointCryptoError::UnsupportedKeyAgreement(
-            envelope.key_agreement.clone(),
-        ));
+        return Err(DropPointCryptoError::UnsupportedKeyAgreement);
     }
     Ok(())
 }
@@ -189,18 +193,27 @@ fn decode_base64url_field(
     field: &'static str,
     value: &str,
 ) -> Result<Vec<u8>, DropPointCryptoError> {
-    if value.is_empty() || value.contains('=') {
-        return Err(DropPointCryptoError::InvalidEnvelopeField {
-            field,
-            reason: "base64url value must be non-empty and unpadded".to_string(),
-        });
+    decode_base64url(value)
+        .map_err(|reason| DropPointCryptoError::InvalidEnvelopeField { field, reason })
+}
+
+pub fn decode_base64url(value: &str) -> Result<Vec<u8>, String> {
+    if value.is_empty()
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err(
+            "base64url value must use the non-empty unpadded URL-safe alphabet".to_string(),
+        );
     }
-    URL_SAFE_NO_PAD
+    let decoded = URL_SAFE_NO_PAD
         .decode(value)
-        .map_err(|e| DropPointCryptoError::InvalidEnvelopeField {
-            field,
-            reason: e.to_string(),
-        })
+        .map_err(|_| "base64url value is malformed".to_string())?;
+    if URL_SAFE_NO_PAD.encode(&decoded) != value {
+        return Err("base64url value is not canonical".to_string());
+    }
+    Ok(decoded)
 }
 
 fn derive_keys(
@@ -246,7 +259,21 @@ fn decrypt_aes_gcm(
 #[cfg(test)]
 #[expect(clippy::unwrap_used, reason = "unwrap is acceptable in tests")]
 mod tests {
+    use serde::Deserialize;
+
     use super::*;
+
+    #[derive(Deserialize)]
+    struct ParsingFixture {
+        base64url: Vec<Base64Fixture>,
+    }
+
+    #[derive(Deserialize)]
+    struct Base64Fixture {
+        value: String,
+        valid: bool,
+        decoded_hex: Option<String>,
+    }
 
     const RECIPIENT_PRIVATE_KEY: &str = "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA";
     const SINGLE_ENVELOPE_JSON: &str = concat!(
@@ -304,6 +331,164 @@ mod tests {
         assert!(matches!(
             decrypt_bundle(&private_key(), SINGLE_ENVELOPE_JSON.as_bytes(), &payload),
             Err(DropPointCryptoError::Decrypt("payload"))
+        ));
+    }
+
+    #[test]
+    fn matches_normative_base64url_fixture() {
+        let fixture: ParsingFixture = serde_json::from_str(include_str!(
+            "../../testdata/drop_point/protocol-parsing-policy.json"
+        ))
+        .unwrap();
+        for case in fixture.base64url {
+            let decoded = decode_base64url(&case.value);
+            assert_eq!(
+                decoded.is_ok(),
+                case.valid,
+                "unexpected result for {:?}",
+                case.value
+            );
+            if let Some(expected_hex) = case.decoded_hex {
+                let actual_hex = decoded
+                    .unwrap()
+                    .iter()
+                    .fold(String::new(), |mut output, byte| {
+                        use std::fmt::Write as _;
+                        write!(output, "{byte:02x}").unwrap();
+                        output
+                    });
+                assert_eq!(actual_hex, expected_hex);
+            }
+        }
+    }
+
+    #[test]
+    fn rejects_duplicate_unknown_and_wrongly_typed_envelope_fields() {
+        let duplicate = SINGLE_ENVELOPE_JSON.replacen(
+            r#"{"protocol_version":2,"#,
+            r#"{"protocol_version":2,"protocol_version":2,"#,
+            1,
+        );
+        let unknown = SINGLE_ENVELOPE_JSON.replacen(
+            r#"{"protocol_version":2,"#,
+            r#"{"extra":0,"protocol_version":2,"#,
+            1,
+        );
+        let boolean = SINGLE_ENVELOPE_JSON.replacen(
+            r#""protocol_version":2"#,
+            r#""protocol_version":true"#,
+            1,
+        );
+        let payload = decode_test_b64(SINGLE_ENCRYPTED_PAYLOAD);
+        for envelope in [&duplicate, &unknown, &boolean] {
+            assert!(decrypt_bundle(&private_key(), envelope.as_bytes(), &payload).is_err());
+        }
+    }
+
+    #[test]
+    fn rejects_tampered_metadata_nonce_key_and_low_order_input() {
+        let payload = decode_test_b64(SINGLE_ENCRYPTED_PAYLOAD);
+
+        let mut envelope: serde_json::Value = serde_json::from_str(SINGLE_ENVELOPE_JSON).unwrap();
+        envelope["metadata_nonce"] = serde_json::Value::String(encode_base64url(&[7; 12]));
+        assert!(matches!(
+            decrypt_bundle(
+                &private_key(),
+                serde_json::to_vec(&envelope).unwrap().as_slice(),
+                &payload
+            ),
+            Err(DropPointCryptoError::Decrypt("metadata"))
+        ));
+
+        assert!(decrypt_bundle(&[42; 32], SINGLE_ENVELOPE_JSON.as_bytes(), &payload).is_err());
+
+        envelope["sender_ephemeral_public_key"] =
+            serde_json::Value::String(encode_base64url(&[0; 32]));
+        assert!(matches!(
+            decrypt_bundle(
+                &private_key(),
+                serde_json::to_vec(&envelope).unwrap().as_slice(),
+                &payload
+            ),
+            Err(DropPointCryptoError::AllZeroSharedSecret)
+        ));
+    }
+
+    #[test]
+    fn rejects_tampered_metadata_payload_nonce_and_sender_key() {
+        let payload = decode_test_b64(SINGLE_ENCRYPTED_PAYLOAD);
+        let mut envelope: serde_json::Value = serde_json::from_str(SINGLE_ENVELOPE_JSON).unwrap();
+
+        let mut metadata = decode_test_b64(envelope["encrypted_metadata"].as_str().unwrap());
+        let last = metadata.len() - 1;
+        metadata[last] ^= 1;
+        envelope["encrypted_metadata"] = serde_json::Value::String(encode_base64url(&metadata));
+        assert!(matches!(
+            decrypt_bundle(
+                &private_key(),
+                serde_json::to_vec(&envelope).unwrap().as_slice(),
+                &payload
+            ),
+            Err(DropPointCryptoError::Decrypt("metadata"))
+        ));
+
+        envelope = serde_json::from_str(SINGLE_ENVELOPE_JSON).unwrap();
+        envelope["payload_nonce"] = serde_json::Value::String(encode_base64url(&[9; 12]));
+        assert!(matches!(
+            decrypt_bundle(
+                &private_key(),
+                serde_json::to_vec(&envelope).unwrap().as_slice(),
+                &payload
+            ),
+            Err(DropPointCryptoError::Decrypt("payload"))
+        ));
+
+        envelope = serde_json::from_str(SINGLE_ENVELOPE_JSON).unwrap();
+        envelope["sender_ephemeral_public_key"] =
+            serde_json::Value::String(encode_base64url(&[42; 32]));
+        assert!(
+            decrypt_bundle(
+                &private_key(),
+                serde_json::to_vec(&envelope).unwrap().as_slice(),
+                &payload
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn rejects_another_low_order_x25519_input() {
+        let payload = decode_test_b64(SINGLE_ENCRYPTED_PAYLOAD);
+        let mut low_order = [0; 32];
+        low_order[0] = 1;
+        let mut envelope: serde_json::Value = serde_json::from_str(SINGLE_ENVELOPE_JSON).unwrap();
+        envelope["sender_ephemeral_public_key"] =
+            serde_json::Value::String(encode_base64url(&low_order));
+        assert!(matches!(
+            decrypt_bundle(
+                &private_key(),
+                serde_json::to_vec(&envelope).unwrap().as_slice(),
+                &payload
+            ),
+            Err(DropPointCryptoError::AllZeroSharedSecret)
+        ));
+    }
+
+    #[test]
+    fn generates_a_fresh_raw_key_pair_per_call() {
+        let (first_private, first_public) = generate_recipient_key_pair();
+        let (second_private, second_public) = generate_recipient_key_pair();
+        assert_eq!(first_private.len(), X25519_KEY_BYTES);
+        assert_eq!(first_public.len(), X25519_KEY_BYTES);
+        assert_ne!(*first_private, *second_private);
+        assert_ne!(first_public, second_public);
+    }
+
+    #[test]
+    fn rejects_short_encrypted_payload_before_decryption() {
+        assert!(matches!(
+            decrypt_bundle(&private_key(), SINGLE_ENVELOPE_JSON.as_bytes(), &[0; 15]),
+            Err(DropPointCryptoError::EncryptedPayloadTooShort)
         ));
     }
 }
