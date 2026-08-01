@@ -166,6 +166,10 @@ fn atomic_replace(source: &Path, destination: &Path) -> Result<(), String> {
 }
 
 #[cfg(windows)]
+#[expect(
+    unsafe_code,
+    reason = "std::fs::rename does not expose MOVEFILE_WRITE_THROUGH on Windows"
+)]
 fn atomic_replace(source: &Path, destination: &Path) -> Result<(), String> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Storage::FileSystem::{
