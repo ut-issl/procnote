@@ -394,8 +394,8 @@ packages:
   '@standard-schema/spec@1.1.0':
     resolution: {integrity: sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==}
 
-  '@sveltejs/acorn-typescript@1.0.12':
-    resolution: {integrity: sha512-J1jNYG23QWd67UfrQSFHtjhV37r9mVi0gdc12A3MWPldOjRK35Xk+um+qACPVjgw3AleiqoyEAhok8Wm3q46NA==}
+  '@sveltejs/acorn-typescript@1.0.13':
+    resolution: {integrity: sha512-wgKggnhZVL9Bfx1OaKKTrYY9BFRk6C8UAkQNUcIv1+llzYrIqy+RZm5HPKzn0NpEBvTVhTqB4kQyllZywsRBRQ==}
     peerDependencies:
       acorn: ^8.9.0
 
@@ -523,8 +523,8 @@ packages:
     resolution: {integrity: sha512-o4PXJQidqJl82ckFaXUeoAW+XysPLauYI43Abki5hABd853iMhitooc6znOnczgbTYmEP6U6/y1ZyKAIsvMKGg==}
     engines: {node: '>=18'}
 
-  '@testing-library/user-event@14.6.3':
-    resolution: {integrity: sha512-6dBq67jT8lE+JTE8Exm02Kt6ze43hz1jdiSpSJwtTZiT1xQQ6b7nZYTTQ9njdArdU8XklOwaDp/AbT/eYSKF4g==}
+  '@testing-library/user-event@14.6.4':
+    resolution: {integrity: sha512-QCGwP6QrjypBLwyj5cuyfVamkaIEy/XGY+1VDehbtbQqOggYmTFpFOdWR5mPz14vX8vXLMVjDHlRNBcClyO9ew==}
     engines: {node: '>=12', npm: '>=6'}
     peerDependencies:
       '@testing-library/dom': '>=7.21.4'
@@ -894,8 +894,8 @@ packages:
   esm-env@1.2.2:
     resolution: {integrity: sha512-Epxrv+Nr/CaL4ZcFGPJIYLWFom+YeV1DqMLHJoEd9SYRxNbaFruBwfEX/kkHUJf55j2+TUbmDcmuilbP1TmXHA==}
 
-  esrap@2.3.2:
-    resolution: {integrity: sha512-40GyiEJevYKXzYTHtZkFqAgTjLOuFcaXMao8TPyOlnWTlkHDlvZ6mPMJaJyOqVwrVCgomEG1WhJd81w0X+IcCw==}
+  esrap@2.3.4:
+    resolution: {integrity: sha512-CHnJXZDfBeOAjLIGNy/0BEsmDu5+irHgUXRW9pGptxCbO3uyjJ98crilzFgiBqizW94UodjX3GAPLg/dhEnUfA==}
     peerDependencies:
       '@typescript-eslint/types': ^8.2.0
     peerDependenciesMeta:
@@ -1021,8 +1021,8 @@ packages:
   magic-string@0.30.21:
     resolution: {integrity: sha512-vd2F4YUyEXKGcLHoq+TEyCjxueSeHnFxyyjNp80yg0XV4vUhnDer/lvvlqM/arB5bXQN5K2/3oinyCRyx8T2CQ==}
 
-  magic-string@1.1.0:
-    resolution: {integrity: sha512-kS3VHe0nEPST2saQV4Rbkchcd3UBRkVTQHo1D3h/ZTwFDhai/mfKkmtPAtD129EOI7K3HlHIsFOt0WrI2/oU9g==}
+  magic-string@1.2.0:
+    resolution: {integrity: sha512-ptco+HFxTLgjafSLim2LojBSwfg5feBjd+SqyiwdGkzC38UPdZy3zgrHMI2CoTf5fJL38tbHMYWVzIH8BxGqJw==}
 
   marked-highlight@2.2.4:
     resolution: {integrity: sha512-PZxisNMJDduSjc0q6uvjsnqqHCXc9s0eyzxDO9sB1eNGJnd/H1/Fu+z6g/liC1dfJdFW4SftMwMlLvsBhUPrqQ==}
@@ -1437,7 +1437,7 @@ snapshots:
 
   '@standard-schema/spec@1.1.0': {}
 
-  '@sveltejs/acorn-typescript@1.0.12(acorn@8.18.0)':
+  '@sveltejs/acorn-typescript@1.0.13(acorn@8.18.0)':
     dependencies:
       acorn: 8.18.0
 
@@ -1448,7 +1448,7 @@ snapshots:
   '@sveltejs/kit@2.70.2(@sveltejs/vite-plugin-svelte@7.3.0(@voidzero-dev/vite-plus-core@0.2.9(typescript@6.0.3))(svelte@5.56.9))(@voidzero-dev/vite-plus-core@0.2.9(typescript@6.0.3))(svelte@5.56.9)(typescript@6.0.3)':
     dependencies:
       '@standard-schema/spec': 1.1.0
-      '@sveltejs/acorn-typescript': 1.0.12(acorn@8.18.0)
+      '@sveltejs/acorn-typescript': 1.0.13(acorn@8.18.0)
       '@sveltejs/vite-plugin-svelte': 7.3.0(@voidzero-dev/vite-plus-core@0.2.9(typescript@6.0.3))(svelte@5.56.9)
       '@types/cookie': 0.6.0
       acorn: 8.18.0
@@ -1470,7 +1470,7 @@ snapshots:
   '@sveltejs/vite-plugin-svelte@7.3.0(@voidzero-dev/vite-plus-core@0.2.9(typescript@6.0.3))(svelte@5.56.9)':
     dependencies:
       deepmerge: 4.3.1
-      magic-string: 1.1.0
+      magic-string: 1.2.0
       obug: 2.1.4
       svelte: 5.56.9
       vite: '@voidzero-dev/vite-plus-core@0.2.9(typescript@6.0.3)'
@@ -1548,7 +1548,7 @@ snapshots:
       picocolors: 1.1.1
       pretty-format: 27.5.1
 
-  '@testing-library/user-event@14.6.3(@testing-library/dom@10.4.1)':
+  '@testing-library/user-event@14.6.4(@testing-library/dom@10.4.1)':
     dependencies:
       '@testing-library/dom': 10.4.1
 
@@ -1570,7 +1570,7 @@ snapshots:
   '@vitest/browser-preview@4.1.10(@voidzero-dev/vite-plus-core@0.2.9(typescript@6.0.3))(vitest@4.1.10)':
     dependencies:
       '@testing-library/dom': 10.4.1
-      '@testing-library/user-event': 14.6.3(@testing-library/dom@10.4.1)
+      '@testing-library/user-event': 14.6.4(@testing-library/dom@10.4.1)
       '@vitest/browser': 4.1.10(@voidzero-dev/vite-plus-core@0.2.9(typescript@6.0.3))(vitest@4.1.10)
       vitest: 4.1.10(@vitest/browser-preview@4.1.10)(@voidzero-dev/vite-plus-core@0.2.9(typescript@6.0.3))
     transitivePeerDependencies:
@@ -1795,7 +1795,7 @@ snapshots:
 
   esm-env@1.2.2: {}
 
-  esrap@2.3.2:
+  esrap@2.3.4:
     dependencies:
       '@jridgewell/sourcemap-codec': 1.5.5
 
@@ -1879,7 +1879,7 @@ snapshots:
     dependencies:
       '@jridgewell/sourcemap-codec': 1.5.5
 
-  magic-string@1.1.0:
+  magic-string@1.2.0:
     dependencies:
       '@jridgewell/sourcemap-codec': 1.5.5
 
@@ -2017,7 +2017,7 @@ snapshots:
     dependencies:
       '@jridgewell/remapping': 2.3.5
       '@jridgewell/sourcemap-codec': 1.5.5
-      '@sveltejs/acorn-typescript': 1.0.12(acorn@8.18.0)
+      '@sveltejs/acorn-typescript': 1.0.13(acorn@8.18.0)
       '@types/estree': 1.0.9
       '@types/trusted-types': 2.0.7
       acorn: 8.18.0
@@ -2026,7 +2026,7 @@ snapshots:
       clsx: 2.1.1
       devalue: 5.9.0
       esm-env: 1.2.2
-      esrap: 2.3.2
+      esrap: 2.3.4
       is-reference: 3.0.3
       locate-character: 3.0.0
       magic-string: 0.30.21
