@@ -668,7 +668,7 @@ fn render_qr_svg(value: &str) -> Result<String, String> {
 #[cfg(test)]
 #[expect(clippy::unwrap_used, reason = "unwrap is acceptable in tests")]
 mod tests {
-    use std::io::{Read as _, Write as _};
+    use std::io::Write as _;
     use std::net::{TcpListener, TcpStream};
     use std::sync::mpsc;
     use std::thread;

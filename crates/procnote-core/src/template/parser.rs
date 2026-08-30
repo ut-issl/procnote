@@ -278,7 +278,7 @@ fn is_pure_task_list(
             .all(|item_index| direct_item_has_marker(events, item_index))
 }
 
-fn direct_item_has_marker(events: &[MarkdownEvent<'_>], item_start_index: usize) -> bool {
+const fn direct_item_has_marker(events: &[MarkdownEvent<'_>], item_start_index: usize) -> bool {
     let mut item_depth = 1usize;
     let mut index = item_start_index + 1;
     while index < events.len() {
