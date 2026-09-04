@@ -28,7 +28,7 @@ importers:
         version: 2.9.1
       '@tauri-apps/plugin-opener':
         specifier: ^2.5.3
-        version: 2.5.4
+        version: 2.5.5
       dompurify:
         specifier: ^3.3.1
         version: 3.4.14
@@ -516,8 +516,8 @@ packages:
   '@tauri-apps/plugin-log@2.9.1':
     resolution: {integrity: sha512-8dYNEQOgZcIEqeFtHAsOIGLoptm+j94270Jf2MrGS/zbsYNd4C8DKyOdeYggAyE3ugwr12mTefIfC8lVVEhdlg==}
 
-  '@tauri-apps/plugin-opener@2.5.4':
-    resolution: {integrity: sha512-1HnPkb+AmgO29HBazm4uPLKB+r7zzcTBW1d0fyYp1uP+jwtpoiNDGKMMzz58SFp49nOIrxdE3aUJtT57lfO9CQ==}
+  '@tauri-apps/plugin-opener@2.5.5':
+    resolution: {integrity: sha512-xvzGai5aQds8j8R8RsUK/lW6pGG50YgOYIPLzvkqmkwAj7dfySOD7sGtejRzvVdMmv1EQfKVEFh1MvmDp8QR0g==}
 
   '@testing-library/dom@10.4.1':
     resolution: {integrity: sha512-o4PXJQidqJl82ckFaXUeoAW+XysPLauYI43Abki5hABd853iMhitooc6znOnczgbTYmEP6U6/y1ZyKAIsvMKGg==}
@@ -1533,7 +1533,7 @@ snapshots:
     dependencies:
       '@tauri-apps/api': 2.11.1
 
-  '@tauri-apps/plugin-opener@2.5.4':
+  '@tauri-apps/plugin-opener@2.5.5':
     dependencies:
       '@tauri-apps/api': 2.11.1
 
