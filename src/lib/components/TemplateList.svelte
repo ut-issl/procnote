@@ -1,5 +1,5 @@
 <script lang="ts">
-    import type { TemplateSummary } from "$lib/types";
+    import type { TemplateSummary } from "#lib/types/index.js";
 
     let {
         templates,

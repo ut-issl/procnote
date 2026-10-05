@@ -1,6 +1,6 @@
 <script lang="ts">
-    import type { StepContent } from "$lib/types";
-    import { isNonComposingEnter } from "$lib/utils/keyboard";
+    import type { StepContent } from "#lib/types/index.js";
+    import { isNonComposingEnter } from "#lib/utils/keyboard.js";
     import Modal from "./Modal.svelte";
 
     let {

@@ -1,6 +1,6 @@
 <script lang="ts">
-    import type { StepContentSummary } from "$lib/types";
-    import { formatTimestamp } from "$lib/utils/format";
+    import type { StepContentSummary } from "#lib/types/index.js";
+    import { formatTimestamp } from "#lib/utils/format.js";
 
     type CheckboxContent = Extract<StepContentSummary, { type: "Checkbox" }>;
 

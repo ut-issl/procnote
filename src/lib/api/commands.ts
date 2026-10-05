@@ -6,7 +6,7 @@ import type {
   ExecutionAction,
   ExecutionSummary,
   TemplateSummary,
-} from "$lib/types";
+} from "#lib/types/index.js";
 
 export async function listTemplates(): Promise<TemplateSummary[]> {
   return invoke("list_templates");

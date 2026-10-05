@@ -7,8 +7,8 @@
         AttachmentSource,
         AttachmentState,
         InputDefinition,
-    } from "$lib/types";
-    import { formatTimestamp } from "$lib/utils/format";
+    } from "#lib/types/index.js";
+    import { formatTimestamp } from "#lib/utils/format.js";
     import { confirm as confirmDialog } from "@tauri-apps/plugin-dialog";
     import { warn } from "@tauri-apps/plugin-log";
     import Modal from "./Modal.svelte";
