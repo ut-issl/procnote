@@ -1,7 +1,7 @@
 <script lang="ts">
-    import type { InputDefinition, InputState } from "$lib/types";
-    import { formatTimestamp } from "$lib/utils/format";
-    import { isNonComposingEnter } from "$lib/utils/keyboard";
+    import type { InputDefinition, InputState } from "#lib/types/index.js";
+    import { formatTimestamp } from "#lib/utils/format.js";
+    import { isNonComposingEnter } from "#lib/utils/keyboard.js";
     import TrashIcon from "./TrashIcon.svelte";
 
     let {

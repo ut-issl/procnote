@@ -64,7 +64,7 @@
 </script>
 
 <script lang="ts">
-    import * as api from "$lib/api/commands";
+    import * as api from "#lib/api/commands.js";
     import { warn } from "@tauri-apps/plugin-log";
     import { openUrl } from "@tauri-apps/plugin-opener";
     import type {
@@ -74,9 +74,9 @@
         ExecutionAction,
         ExecutionSummary,
         StepSummary,
-    } from "$lib/types";
-    import { formatTimestamp } from "$lib/utils/format";
-    import { isNonComposingEnter } from "$lib/utils/keyboard";
+    } from "#lib/types/index.js";
+    import { formatTimestamp } from "#lib/utils/format.js";
+    import { isNonComposingEnter } from "#lib/utils/keyboard.js";
     import AttachmentField from "./AttachmentField.svelte";
     import CheckboxItem from "./CheckboxItem.svelte";
     import InputField from "./InputField.svelte";

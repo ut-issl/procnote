@@ -1,6 +1,6 @@
 import { debug, error as logError } from "@tauri-apps/plugin-log";
-import * as api from "$lib/api/commands";
-import type { ExecutionAction, ExecutionSummary } from "$lib/types";
+import * as api from "#lib/api/commands.js";
+import type { ExecutionAction, ExecutionSummary } from "#lib/types/index.js";
 
 class ExecutionStore {
   summary: ExecutionSummary | null = $state(null);

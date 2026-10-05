@@ -2,11 +2,11 @@
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { warn } from '@tauri-apps/plugin-log';
-	import type { TemplateSummary, ExecutionSummary } from '$lib/types';
-	import * as api from '$lib/api/commands';
-	import { executionStore } from '$lib/stores/execution.svelte';
-	import { formatTimestamp } from '$lib/utils/format';
-	import TemplateList from '$lib/components/TemplateList.svelte';
+	import type { TemplateSummary, ExecutionSummary } from '#lib/types/index.js';
+	import * as api from '#lib/api/commands.js';
+	import { executionStore } from '#lib/stores/execution.svelte.js';
+	import { formatTimestamp } from '#lib/utils/format.js';
+	import TemplateList from '#lib/components/TemplateList.svelte';
 
 	let templates: TemplateSummary[] = $state([]);
 	let executions: ExecutionSummary[] = $state([]);

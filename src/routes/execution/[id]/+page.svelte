@@ -1,14 +1,14 @@
 <script lang="ts">
     import { page } from "$app/state";
     import { goto } from "$app/navigation";
-    import { executionStore } from "$lib/stores/execution.svelte";
-    import * as api from "$lib/api/commands";
-    import type { ExecutionAction, ExecutionSummary, StepContent } from "$lib/types";
-    import { formatTimestamp } from "$lib/utils/format";
-    import { isNonComposingEnter } from "$lib/utils/keyboard";
-    import StepCard from "$lib/components/StepCard.svelte";
-    import AddStepDialog from "$lib/components/AddStepDialog.svelte";
-    import Modal from "$lib/components/Modal.svelte";
+    import { executionStore } from "#lib/stores/execution.svelte.js";
+    import * as api from "#lib/api/commands.js";
+    import type { ExecutionAction, ExecutionSummary, StepContent } from "#lib/types/index.js";
+    import { formatTimestamp } from "#lib/utils/format.js";
+    import { isNonComposingEnter } from "#lib/utils/keyboard.js";
+    import StepCard from "#lib/components/StepCard.svelte";
+    import AddStepDialog from "#lib/components/AddStepDialog.svelte";
+    import Modal from "#lib/components/Modal.svelte";
 
     let showAddStepDialog = $state(false);
     let showCompleteDialog = $state(false);
