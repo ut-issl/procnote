@@ -16,7 +16,7 @@ fn version_is_printed_without_starting_the_gui() {
         String::from_utf8(output.stdout).expect("version output is UTF-8"),
         format!("procnote {}\n", env!("CARGO_PKG_VERSION"))
     );
-    assert!(output.stderr.is_empty());
+    assert_eq!(output.stderr, b"");
 }
 
 #[test]
@@ -30,7 +30,7 @@ fn help_is_printed_without_starting_the_gui() {
     assert!(output.status.success());
     assert!(stdout.contains("Usage: procnote [WORKSPACE]"));
     assert!(stdout.contains("--version"));
-    assert!(output.stderr.is_empty());
+    assert_eq!(output.stderr, b"");
 }
 
 #[test]
@@ -43,7 +43,7 @@ fn invalid_options_fail_in_the_foreground() {
 
     assert_eq!(output.status.code(), Some(2));
     assert!(stderr.contains("unexpected argument '--not-a-procnote-option'"));
-    assert!(output.stdout.is_empty());
+    assert_eq!(output.stdout, b"");
 }
 
 #[cfg(unix)]
@@ -92,8 +92,8 @@ fn packaged_launcher_detaches_gui_and_preserves_process_context() {
         .expect("run packaged launcher");
 
     assert!(launcher_output.status.success());
-    assert!(launcher_output.stdout.is_empty());
-    assert!(launcher_output.stderr.is_empty());
+    assert_eq!(launcher_output.stdout, b"");
+    assert_eq!(launcher_output.stderr, b"");
     assert!(
         (0..100).any(|_| {
             if gui_output.is_file() {
