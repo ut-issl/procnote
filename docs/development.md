@@ -22,7 +22,7 @@ pnpm install
 just dev
 ```
 
-This starts the Tauri dev server with the `procedures/` directory in the project root as the workspace. Hot-reloading is enabled for both the Rust backend and the Svelte frontend.
+This starts the Tauri dev server with the `procedures/` directory in the project root as the workspace. Hot-reloading is enabled for both the Rust backend and the React frontend.
 
 ## Architecture
 
@@ -30,11 +30,13 @@ Procnote is a three-layer application:
 
 | Layer           | Location                | Purpose                                                         |
 | --------------- | ----------------------- | --------------------------------------------------------------- |
-| **Core**        | `crates/procnote-core/` | Pure Rust domain logic (events, state machine, template parser) |
-| **Tauri shell** | `src-tauri/`            | Bridges core to desktop via IPC commands, filesystem I/O        |
-| **Frontend**    | `src/`                  | SvelteKit + Svelte 5 UI                                         |
+| **Core**        | `crates/procnote-core/`   | Pure Rust domain logic (events, state machine, template parser) |
+| **App**         | `crates/procnote-app/`    | Tauri-free DTOs, action handling, and filesystem I/O            |
+| **Tauri shell** | `src-tauri/`              | Exposes the app layer to the desktop via IPC commands           |
+| **API server**  | `crates/procnote-server/` | Exposes the app layer over HTTP for browsers                    |
+| **Frontend**    | `src/`                    | React + Vite SPA UI, shared by the desktop app and browsers     |
 
-Dependency direction is strictly one-way: Frontend -> Tauri shell -> Core.
+Dependency direction is strictly one-way: Frontend -> Tauri shell / API server -> App -> Core.
 
 ## Common Commands
 
@@ -43,10 +45,13 @@ Dependency direction is strictly one-way: Frontend -> Tauri shell -> Core.
 cargo test --workspace
 
 # TypeScript type checking
-npx svelte-check
+pnpm check
+
+# Frontend tests
+pnpm test
 
 # Frontend linting and formatting
-pnpm biome check .
+pnpm run vp:check
 
 # Regenerate TypeScript types from Rust
 cargo test --workspace export_bindings_

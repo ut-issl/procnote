@@ -9,7 +9,6 @@
   },
   "type": "module",
   "imports": {
-    "#lib": "./src/lib/index.js",
     "#lib/*": "./src/lib/*"
   },
   "scripts": {
@@ -18,11 +17,10 @@
     "build:launcher": "node scripts/prepare-launcher.mjs",
     "preview": "vp preview",
     "tauri": "node scripts/tauri.mjs",
-    "prepare": "svelte-kit sync || echo ''",
-    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
-    "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
+    "check": "tsc --noEmit",
     "vp:check": "vp check",
-    "vp:fix": "vp check --fix"
+    "vp:fix": "vp check --fix",
+    "test": "vp test run"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.10.1",
@@ -32,15 +30,16 @@
     "dompurify": "^3.3.1",
     "highlight.js": "^11.11.1",
     "marked": "^18.0.0",
-    "marked-highlight": "^2.2.3"
+    "marked-highlight": "^2.2.3",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "react-router": "^8.4.0"
   },
   "devDependencies": {
-    "@sveltejs/adapter-static": "4.0.0",
-    "@sveltejs/kit": "3.0.1",
-    "@sveltejs/vite-plugin-svelte": "7.3.1",
     "@tauri-apps/cli": "2.12.2",
-    "svelte": "5.57.2",
-    "svelte-check": "4.7.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
     "typescript": "6.0.3",
     "vite": "catalog:",
     "vite-plus": "catalog:"

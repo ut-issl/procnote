@@ -32,7 +32,7 @@ build-frontend:
 
 # --- Check & Lint ---
 
-# Run all linters (fmt, clippy, vp, svelte-check, type bindings)
+# Run all linters (fmt, clippy, vp, tsc, type bindings)
 lint: check-fmt check-clippy check-vp check-frontend check-types
 
 # Check Rust formatting
@@ -47,7 +47,7 @@ check-clippy:
 check-vp:
     pnpm run vp:check
 
-# Run svelte-check
+# Type-check the frontend
 check-frontend:
     pnpm check
 
@@ -72,11 +72,15 @@ check-types:
 # --- Test ---
 
 # Run all tests
-test: test-rust
+test: test-rust test-frontend
 
 # Run Rust tests
 test-rust:
     cargo test --workspace
+
+# Run frontend tests
+test-frontend:
+    pnpm test
 
 # --- Utility ---
 
@@ -87,4 +91,4 @@ pre-commit:
 # Clean build artifacts
 clean:
     cargo clean
-    rm -rf build .svelte-kit node_modules/.vite src-tauri/launchers/bin
+    rm -rf build node_modules/.vite src-tauri/launchers/bin
