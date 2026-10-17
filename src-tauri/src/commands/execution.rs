@@ -464,12 +464,11 @@ fn infer_attachment_content_type(filename: &str) -> String {
 }
 
 /// Open the native file picker and grant the selected files for one attachment action.
+///
+/// This must be an async command: synchronous commands run on the main thread,
+/// and the blocking dialog would wait there for the main thread to show it.
 #[tauri::command]
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "Tauri command handlers require owned parameters"
-)]
-pub fn pick_attachment_sources(
+pub async fn pick_attachment_sources(
     app: AppHandle,
     state: State<'_, AppState>,
     title: String,
