@@ -67,6 +67,7 @@ async fn fixture() -> Fixture {
             team_domain: team_domain.clone(),
             audience: AUD.to_string(),
         }),
+        collab: None,
     })
     .unwrap();
     Fixture {

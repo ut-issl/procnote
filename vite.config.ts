@@ -14,7 +14,11 @@ export default defineConfig({
   server: {
     port: 5180,
     strictPort: true,
-    // Browser mode talks to procnote-server (`just dev-server`).
-    proxy: { "/api": { target: "http://127.0.0.1:5181", ws: true } },
+    // Browser mode talks to procnote-server (`just dev-server`) and, for
+    // collaborative template editing, the collab service (`just dev-collab`).
+    proxy: {
+      "/api": { target: "http://127.0.0.1:5181", ws: true },
+      "/collab": { target: "ws://127.0.0.1:5182", ws: true },
+    },
   },
 });

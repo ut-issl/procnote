@@ -8,6 +8,7 @@ use object_store::ObjectStore;
 use procnote_app::persistence::execution_store::ExecutionStore;
 use procnote_app::repository::ExecutionRepository;
 use procnote_server::access::AccessConfig;
+use procnote_server::collab::{CollabConfig, CollabTemplates};
 use procnote_server::postgres::PostgresStore;
 use procnote_server::transfer::attachment_store;
 use procnote_server::{Auth, ServerConfig, router};
@@ -57,6 +58,13 @@ struct Args {
     /// `AWS_DEFAULT_REGION=auto`, `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`.
     #[arg(long, requires = "database_url")]
     attachment_bucket: Option<String>,
+    /// Secret shared with the collab service (`collab/`). Enables
+    /// collaborative template editing; needs --database-url.
+    #[arg(long, env = "PROCNOTE_COLLAB_SECRET", requires = "database_url")]
+    collab_secret: Option<String>,
+    /// Internal URL of the collab service.
+    #[arg(long, default_value = "http://127.0.0.1:5182")]
+    collab_url: String,
 }
 
 impl Args {
@@ -123,13 +131,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     })?;
     let upload_dir =
         std::env::temp_dir().join(format!("procnote-uploads-{}", uuid::Uuid::new_v4()));
-    let executions: Box<dyn ExecutionRepository> =
+    let (executions, collab): (Box<dyn ExecutionRepository>, _) =
         match (&args.database_url, args.attachment_store()?) {
             (Some(url), Some(attachments)) => {
                 log::info!("storing executions in PostgreSQL");
-                Box::new(PostgresStore::connect(url, attachments).await?)
+                let store = PostgresStore::connect(url, attachments).await?;
+                let collab = args.collab_secret.clone().map(|secret| {
+                    log::info!("collaborative template editing via {}", args.collab_url);
+                    CollabTemplates::new(
+                        store.pool(),
+                        CollabConfig {
+                            secret,
+                            service_url: args.collab_url.clone(),
+                        },
+                    )
+                });
+                (Box::new(store), collab)
             }
-            _ => Box::new(ExecutionStore::new(procedures_dir.clone())),
+            _ => (Box::new(ExecutionStore::new(procedures_dir.clone())), None),
         };
     let app = router(ServerConfig {
         procedures_dir: procedures_dir.clone(),
@@ -138,6 +157,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         static_dir: args.static_dir,
         state_dir: args.state_dir.unwrap_or_else(default_state_dir),
         auth,
+        collab,
     })?;
 
     let listener = tokio::net::TcpListener::bind(args.listen).await?;

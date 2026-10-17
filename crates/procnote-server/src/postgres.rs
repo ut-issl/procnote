@@ -56,6 +56,12 @@ impl PostgresStore {
         })
     }
 
+    /// The connection pool, for other tables in the same database.
+    #[must_use]
+    pub fn pool(&self) -> PgPool {
+        self.pool.clone()
+    }
+
     async fn records(
         &self,
         executor: impl sqlx::PgExecutor<'_>,
