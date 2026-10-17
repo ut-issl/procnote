@@ -326,3 +326,63 @@ async fn attachments_recorded_offline_arrive_with_their_upload() {
     .await;
     assert_eq!(status, StatusCode::OK);
 }
+
+#[tokio::test]
+async fn a_conflicting_attachment_keeps_its_content() {
+    let fixture = fixture();
+    let (mut device, lines) = Device::start();
+    let (_, created) = create(&fixture, &device, &lines).await;
+    let content = "photo taken late";
+    let sha256 = procnote_app::attachment::sha256_hex(content.as_bytes());
+    let record = AttachmentRecord {
+        filename: "late.txt".to_string(),
+        path: format!("attachments/{}-late.txt", &sha256[..7]),
+        content_type: "text/plain".to_string(),
+        sha256,
+    };
+    let add = device.record(
+        device
+            .state
+            .add_attachments_event("step-0", "evidence", vec![record.clone()])
+            .unwrap(),
+    );
+    // Completed on the server before the attachment arrives.
+    call(
+        &fixture.app,
+        json_request(
+            "POST",
+            &format!("/api/executions/{}/actions", device.id()),
+            &json!({ "action": { "action": "complete", "status": "pass" } }),
+        ),
+    )
+    .await;
+    let boundary = "sync-test-boundary";
+    let (_, uploaded) = call(
+        &fixture.app,
+        Request::post("/api/uploads")
+            .header(
+                header::CONTENT_TYPE,
+                format!("multipart/form-data; boundary={boundary}"),
+            )
+            .body(Body::from(format!(
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"late.txt\"\r\n\r\n{content}\r\n--{boundary}--\r\n"
+            )))
+            .unwrap(),
+    )
+    .await;
+
+    let pushed = push(
+        &fixture,
+        &device,
+        &[add],
+        &[uploaded[0]["path"].as_str().unwrap()],
+    )
+    .await;
+
+    assert_eq!(outcomes(&pushed), ["conflict"]);
+    let execution_dir = std::path::PathBuf::from(created["execution_dir"].as_str().unwrap());
+    assert_eq!(
+        std::fs::read_to_string(execution_dir.join(&record.path)).unwrap(),
+        content
+    );
+}

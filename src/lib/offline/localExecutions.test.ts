@@ -14,6 +14,10 @@ const TEMPLATE: ProcedureTemplate = {
       content: [
         { type: "Checkbox", text: "First", checked: false },
         { type: "Checkbox", text: "Second", checked: false },
+        {
+          type: "InputBlock",
+          inputs: [{ id: "photo", label: "Photo", type: "attachment", options: [] }],
+        },
       ],
     },
   ],
@@ -29,6 +33,7 @@ const realCore = {
   summarize: core.summarize,
   decide: core.decide,
   start: core.start,
+  attachmentRecord: core.attachmentRecord,
 };
 
 function memoryStore(): KeyValueStore {
@@ -37,6 +42,9 @@ function memoryStore(): KeyValueStore {
     get: async <T>(key: string) => structuredClone(values.get(key)) as T | undefined,
     set: async (key, value) => {
       values.set(key, structuredClone(value));
+    },
+    del: async (key) => {
+      values.delete(key);
     },
     entries: async <T>() =>
       [...values.entries()].map(([k, v]) => [k, structuredClone(v)] as [string, T]),
@@ -52,6 +60,9 @@ class FakeServer implements SyncServer {
   logs = new Map<string, EventRecord[]>();
   conflicts: EventRecord[] = [];
   reachable = true;
+  /** Uploaded content by upload token, and stored content by SHA-256. */
+  uploads = new Map<string, { name: string; text: string }>();
+  stored = new Map<string, string>();
 
   #check() {
     if (!this.reachable) throw new TypeError("Failed to fetch");
@@ -64,12 +75,37 @@ class FakeServer implements SyncServer {
     return { records: structuredClone(log.slice(after)), count: log.length };
   }
 
-  async pushEvents(id: string, events: EventRecord[]): Promise<{ results: PushResult[] }> {
+  async uploadFiles(files: { name: string; blob: Blob }[]) {
+    this.#check();
+    const sources = [];
+    for (const file of files) {
+      const token = crypto.randomUUID();
+      this.uploads.set(token, { name: file.name, text: await file.blob.text() });
+      sources.push({ filename: file.name, path: token, content_type: "" });
+    }
+    return sources;
+  }
+
+  async pushEvents(
+    id: string,
+    events: EventRecord[],
+    uploads: string[],
+  ): Promise<{ results: PushResult[] }> {
     this.#check();
     const log = this.logs.get(id) ?? [];
+    const uploaded = uploads.map((token) => this.uploads.get(token));
     const results = events.map((record): PushResult => {
       const eventId = record.event_id ?? null;
       if (!eventId) return { event_id: null, outcome: "rejected", reason: "no event_id" };
+      if (record.type === "attachments_added") {
+        for (const file of record.attachments) {
+          const content = uploaded.find((u) => u?.name === file.filename);
+          if (!content && !this.stored.has(file.sha256)) {
+            return { event_id: eventId, outcome: "rejected", reason: "content missing" };
+          }
+          if (content) this.stored.set(file.sha256, content.text);
+        }
+      }
       const known = [...log, ...this.conflicts].some((r) => r.event_id === eventId);
       if (known) return { event_id: eventId, outcome: "duplicate" };
       try {
@@ -152,7 +188,9 @@ const check = (index: number, checked = true) => ({
   checked,
 });
 const checked = (summary: ExecutionSummary) =>
-  summary.steps[0]?.content.map((item) => item.type === "Checkbox" && item.checked);
+  summary.steps[0]?.content
+    .filter((item) => item.type === "Checkbox")
+    .map((item) => item.type === "Checkbox" && item.checked);
 
 describe("local-first executions", () => {
   test("start offline from a kept template, record, and sync when back", async () => {
@@ -219,7 +257,7 @@ describe("local-first executions", () => {
 
     // Push the same events again, as after a response that never arrived.
     const event = server.logs.get(id)?.at(-1) as EventRecord;
-    const again = await server.pushEvents(id, [event]);
+    const again = await server.pushEvents(id, [event], []);
 
     expect(again.results[0]?.outcome).toBe("duplicate");
     expect(server.logs.get(id)?.length).toBe(before);
@@ -246,5 +284,35 @@ describe("local-first executions", () => {
     server.reachable = false;
 
     await expect(local.getExecutionState("unknown")).rejects.toBeInstanceOf(TypeError);
+  });
+
+  test("files attached offline are kept here and sent with their events", async () => {
+    const { server, local } = setup();
+    await local.keepTemplates([PATH]);
+    server.reachable = false;
+    const { execution_id: id } = await local.startExecution(PATH, meta());
+    const sources = await local.keepFiles([new File(["bench reading"], "bench.png")]);
+    const attached = await local.recordAction(
+      id,
+      { action: "add_attachments", step_id: "step-0", input_id: "photo", files: sources },
+      meta(),
+    );
+    const input = attached.steps[0]?.content[2];
+    const path = input?.type === "InputBlock" ? input.inputs[0]?.attachments[0]?.path : undefined;
+
+    expect(sources[0]?.path.startsWith("local:")).toBe(true);
+    expect(path?.startsWith("attachments/")).toBe(true);
+    expect(path?.endsWith("-bench.png")).toBe(true);
+    expect((await local.preview(id, path as string))?.startsWith("data:image/png;base64,")).toBe(
+      true,
+    );
+
+    server.reachable = true;
+    await local.sync(id);
+
+    expect(await local.waitingCount()).toBe(0);
+    expect([...server.stored.values()]).toEqual(["bench reading"]);
+    // The server has it now; previews come from there.
+    expect(await local.preview(id, path as string)).toBeUndefined();
   });
 });

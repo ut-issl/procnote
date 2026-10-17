@@ -110,7 +110,7 @@ impl PostgresStore {
         }
 
         let decision = decide(&state)?;
-        if decision.events.is_empty() {
+        if decision.events.is_empty() && decision.files.is_empty() {
             return Ok(stored(state));
         }
         apply_decision(&mut state, &decision)?;

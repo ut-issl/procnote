@@ -6,10 +6,11 @@
 //
 // What the server refuses later because the execution had moved on is kept
 // there as a conflict (see procnote_app::sync), not dropped here.
-import type { PushResult } from "#lib/api/commands.js";
+import { type PushResult, UnreachableError } from "#lib/api/commands.js";
 import type {
   ActionMeta,
   AttachmentRecord,
+  AttachmentSource,
   Event,
   EventRecord,
   ExecutionAction,
@@ -22,6 +23,7 @@ import type { ExecutionApi } from "#lib/stores/execution.js";
 export interface KeyValueStore {
   get<T>(key: string): Promise<T | undefined>;
   set(key: string, value: unknown): Promise<void>;
+  del(key: string): Promise<void>;
   entries<T>(): Promise<[string, T][]>;
 }
 
@@ -31,7 +33,12 @@ export interface SyncServer {
     executionId: string,
     after: number,
   ): Promise<{ records: EventRecord[]; count: number }>;
-  pushEvents(executionId: string, events: EventRecord[]): Promise<{ results: PushResult[] }>;
+  pushEvents(
+    executionId: string,
+    events: EventRecord[],
+    uploads: string[],
+  ): Promise<{ results: PushResult[] }>;
+  uploadFiles(files: { name: string; blob: Blob }[]): Promise<AttachmentSource[]>;
   registerExecution(
     executionId: string,
     procedure: string,
@@ -48,6 +55,14 @@ export interface Core {
   summarize(records: EventRecord[]): ExecutionSummary;
   decide(records: EventRecord[], action: ExecutionAction, files?: AttachmentRecord[]): Event[];
   start(template: ProcedureTemplate): Event[];
+  attachmentRecord(filename: string, sha256: string): AttachmentRecord;
+}
+
+/** A file attached on this device, kept until the server has its content. */
+interface KeptFile {
+  name: string;
+  type: string;
+  data: ArrayBuffer;
 }
 
 /** An execution as kept on this device. */
@@ -66,14 +81,35 @@ export interface LocalExecution {
   unregistered?: { procedure: string; template: ProcedureTemplate };
 }
 
-/** A network failure: the server could not be reached (not a refusal). */
+/**
+ * The server could not be reached (not a refusal): the request helper's
+ * `UnreachableError`, or a `fetch` that failed outright.
+ */
 export function isUnreachable(error: unknown): boolean {
-  return error instanceof TypeError;
+  return error instanceof UnreachableError || error instanceof TypeError;
 }
 
 const EXECUTION_KEY = "execution:";
 const TEMPLATE_KEY = "template:";
 const SHARED_TEMPLATE_KEY = "shared-template:";
+const FILE_KEY = "file:";
+/** The path of an attachment source kept on this device: `local:{sha256}`. */
+const LOCAL_FILE = "local:";
+
+function sha256Hex(data: ArrayBuffer): Promise<string> {
+  return crypto.subtle
+    .digest("SHA-256", data)
+    .then((digest) =>
+      [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join(""),
+    );
+}
+
+/** The attachment records an event adds. */
+function attachmentsOf(record: EventRecord): AttachmentRecord[] {
+  return record.type === "attachments_added" ? record.attachments : [];
+}
+
+const PREVIEWABLE = ["image/png", "image/jpeg", "image/gif", "image/webp", "image/bmp"];
 
 function withMeta(events: Event[], meta: ActionMeta): EventRecord[] {
   return events.map((event, index) => ({
@@ -165,8 +201,14 @@ export class LocalExecutions implements ExecutionApi {
     action: ExecutionAction,
     meta: ActionMeta,
   ): Promise<ExecutionSummary> {
-    if (action.action === "add_attachment" || action.action === "add_attachments") {
-      // Files are uploaded first, so attaching needs the server for now.
+    const sources =
+      action.action === "add_attachments"
+        ? action.files
+        : action.action === "add_attachment"
+          ? [action]
+          : [];
+    if (sources.some((source) => !source.path.startsWith(LOCAL_FILE))) {
+      // Files already uploaded (by upload token) are attached on the server.
       const summary = await this.#online.recordAction(executionId, action, meta);
       await this.#exclusive(executionId, async () => {
         const kept = await this.#load(executionId);
@@ -175,9 +217,13 @@ export class LocalExecutions implements ExecutionApi {
       return summary;
     }
     await this.#core.ready();
+    const files = sources.map((source) =>
+      this.#core.attachmentRecord(source.filename, source.path.slice(LOCAL_FILE.length)),
+    );
+    await this.#core.ready();
     const local = await this.#exclusive(executionId, async () => {
       const kept = (await this.#load(executionId)) ?? (await this.#fetch(executionId));
-      const events = this.#core.decide([...kept.records, ...kept.pending], action);
+      const events = this.#core.decide([...kept.records, ...kept.pending], action, files);
       const next = { ...kept, pending: [...kept.pending, ...withMeta(events, meta)] };
       await this.#save(next);
       return next;
@@ -279,11 +325,17 @@ export class LocalExecutions implements ExecutionApi {
       await this.#save(local);
     }
     if (local.pending.length > 0) {
-      const { results } = await this.#server.pushEvents(local.id, local.pending);
+      const uploads = await this.#uploadKeptFiles(local.pending);
+      const { results } = await this.#server.pushEvents(local.id, local.pending, uploads);
       const rejected = local.pending.flatMap((record, index) => {
         const result = results[index];
         return result?.outcome === "rejected" ? [{ record, reason: result.reason }] : [];
       });
+      // The server has the content of everything it took (conflicts included).
+      for (const record of local.pending) {
+        if (rejected.some((r) => r.record === record)) continue;
+        for (const file of attachmentsOf(record)) await this.#store.del(FILE_KEY + file.sha256);
+      }
       local = { ...local, pending: [], rejected: [...local.rejected, ...rejected] };
       await this.#save(local);
     }
@@ -307,6 +359,50 @@ export class LocalExecutions implements ExecutionApi {
     void this.sync(executionId).catch((error: unknown) => {
       if (!isUnreachable(error)) console.warn(`[sync] ${executionId}: ${String(error)}`);
     });
+  }
+
+  /** Upload the kept content of files the events attach; returns upload tokens. */
+  async #uploadKeptFiles(records: EventRecord[]): Promise<string[]> {
+    const files: { name: string; blob: Blob }[] = [];
+    const seen = new Set<string>();
+    for (const attachment of records.flatMap(attachmentsOf)) {
+      if (seen.has(attachment.sha256)) continue;
+      seen.add(attachment.sha256);
+      const kept = await this.#store.get<KeptFile>(FILE_KEY + attachment.sha256);
+      if (kept) files.push({ name: attachment.filename, blob: new Blob([kept.data]) });
+    }
+    if (files.length === 0) return [];
+    return (await this.#server.uploadFiles(files)).map((source) => source.path);
+  }
+
+  // --- Files attached on this device ---
+
+  /** Keep chosen files on this device; their sources refer to them as `local:{sha256}`. */
+  async keepFiles(files: File[]): Promise<AttachmentSource[]> {
+    const sources: AttachmentSource[] = [];
+    for (const file of files) {
+      const data = await file.arrayBuffer();
+      const sha256 = await sha256Hex(data);
+      const kept: KeptFile = { name: file.name, type: file.type, data };
+      await this.#store.set(FILE_KEY + sha256, kept);
+      sources.push({ filename: file.name, path: LOCAL_FILE + sha256, content_type: file.type });
+    }
+    return sources;
+  }
+
+  /**
+   * A data URL previewing an attachment whose content is still only on this
+   * device, or undefined when the server has it (or it isn't an image).
+   */
+  async preview(executionId: string, path: string): Promise<string | null | undefined> {
+    const local = await this.#load(executionId);
+    const attachment = local?.pending.flatMap(attachmentsOf).find((a) => a.path === path);
+    if (!attachment) return undefined;
+    const kept = await this.#store.get<KeptFile>(FILE_KEY + attachment.sha256);
+    if (!kept) return undefined;
+    if (!PREVIEWABLE.includes(attachment.content_type)) return null;
+    const binary = [...new Uint8Array(kept.data)].map((b) => String.fromCharCode(b)).join("");
+    return `data:${attachment.content_type};base64,${btoa(binary)}`;
   }
 
   /** Sync every execution with something waiting; quietly gives up when unreachable. */

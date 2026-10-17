@@ -1,8 +1,9 @@
 // The browser's local-first recording, wired to IndexedDB, the server, and
 // the WebAssembly core. The desktop app records to its own files and has none.
-import { createStore, entries, get, set } from "idb-keyval";
+import { createStore, del, entries, get, set } from "idb-keyval";
 import * as commands from "#lib/api/commands.js";
 import { isDesktop } from "#lib/platform.js";
+import type { AttachmentSource } from "#lib/types/index.js";
 import * as core from "#lib/wasm/core.js";
 import { isUnreachable, type KeyValueStore, LocalExecutions } from "./localExecutions.js";
 
@@ -11,6 +12,7 @@ function indexedDbStore(): KeyValueStore {
   return {
     get: (key) => get(key, store),
     set: (key, value) => set(key, value, store),
+    del: (key) => del(key, store),
     entries: () => entries(store),
   };
 }
@@ -22,7 +24,23 @@ export const localExecutions: LocalExecutions | null = isDesktop
       summarize: core.summarize,
       decide: core.decide,
       start: core.start,
+      attachmentRecord: core.attachmentRecord,
     });
+
+/**
+ * Choose files to attach. In a browser they are kept on this device and sent
+ * with the events on sync, so attaching works offline.
+ */
+export async function pickAttachmentSources(title: string): Promise<AttachmentSource[]> {
+  if (!localExecutions) return commands.pickAttachmentSources(title);
+  return localExecutions.keepFiles(await commands.chooseBrowserFiles());
+}
+
+/** Preview an attachment, from this device while the server doesn't have it yet. */
+export async function attachmentPreview(executionId: string, path: string): Promise<string | null> {
+  const local = await localExecutions?.preview(executionId, path);
+  return local === undefined ? commands.getAttachmentPreviewDataUrl(executionId, path) : local;
+}
 
 /**
  * Fetch something from the server and keep it, or use what was kept when the
@@ -55,4 +73,16 @@ export function startSyncing(): void {
   syncAll();
   window.addEventListener("online", syncAll);
   window.setInterval(syncAll, 30_000);
+}
+
+/**
+ * Let the app itself load offline (static/sw.js). Only for the built app in a
+ * browser: the dev server reloads modules itself, and the desktop app has no
+ * network to lose.
+ */
+export function registerServiceWorker(): void {
+  if (isDesktop || !import.meta.env.PROD || !("serviceWorker" in navigator)) return;
+  void navigator.serviceWorker.register("/sw.js").catch((error: unknown) => {
+    console.warn(`[offline] service worker registration failed: ${String(error)}`);
+  });
 }
