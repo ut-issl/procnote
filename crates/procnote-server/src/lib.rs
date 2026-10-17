@@ -5,8 +5,10 @@
 //! run it only on a trusted network.
 
 mod live;
+mod upload_links;
 mod uploads;
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -16,7 +18,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
 use tower_http::services::{ServeDir, ServeFile};
 
@@ -26,6 +28,7 @@ use procnote_app::execution::{ExecutionSummary, infer_attachment_content_type};
 use procnote_app::template::TemplateSummary;
 use procnote_core::event::types::ExecutionId;
 use procnote_core::template::types::ProcedureTemplate;
+use upload_links::UploadLinks;
 use uploads::UploadStore;
 
 /// Largest accepted multipart upload request.
@@ -38,11 +41,15 @@ pub struct ServerConfig {
     pub upload_dir: PathBuf,
     /// Built frontend to serve for non-API paths, if any.
     pub static_dir: Option<PathBuf>,
+    /// Directory for server-owned state that must not live in the procedures
+    /// directory (upload link tokens).
+    pub state_dir: PathBuf,
 }
 
 struct AppState {
     procedures_dir: PathBuf,
     uploads: UploadStore,
+    links: UploadLinks,
     live: LiveUpdates,
 }
 
@@ -53,6 +60,7 @@ pub fn router(config: ServerConfig) -> std::io::Result<Router> {
     let state = Arc::new(AppState {
         procedures_dir: config.procedures_dir,
         uploads: UploadStore::new(config.upload_dir)?,
+        links: UploadLinks::new(config.state_dir.join("upload-links"))?,
         live: LiveUpdates::default(),
     });
 
@@ -63,6 +71,17 @@ pub fn router(config: ServerConfig) -> std::io::Result<Router> {
         .route("/executions/{id}", get(get_execution))
         .route("/executions/{id}/actions", post(record_action))
         .route("/executions/{id}/live", get(live_updates))
+        .route(
+            "/executions/{id}/upload-link",
+            get(get_upload_link)
+                .post(create_upload_link)
+                .delete(revoke_upload_link),
+        )
+        .route("/upload-links/{token}", get(upload_link_target))
+        .route(
+            "/upload-links/{token}/files",
+            post(upload_to_link).layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES)),
+        )
         .route(
             "/executions/{id}/attachment-preview",
             get(attachment_preview),
@@ -295,20 +314,34 @@ async fn attachment_preview(
     .map(Json)
 }
 
-/// Stage uploaded files and return references usable in attachment actions.
-///
-/// Every multipart field with a filename is treated as one file.
-async fn upload(
-    State(state): State<SharedState>,
+/// A file streamed from a multipart request into the upload staging area.
+struct StagedFile {
+    token: uuid::Uuid,
+    path: PathBuf,
+    filename: String,
+}
+
+/// Stream every file field of `multipart` into staging; other fields are
+/// returned as text by name.
+async fn stage_multipart(
+    state: &SharedState,
     mut multipart: Multipart,
-) -> Result<Json<Vec<AttachmentSource>>, ApiError> {
-    let mut sources = Vec::new();
+) -> Result<(Vec<StagedFile>, HashMap<String, String>), ApiError> {
+    let mut files = Vec::new();
+    let mut fields = HashMap::new();
     while let Some(mut field) = multipart
         .next_field()
         .await
         .map_err(|e| ApiError::bad_request(e.to_string()))?
     {
         let Some(filename) = field.file_name().map(str::to_string) else {
+            if let Some(name) = field.name().map(str::to_string) {
+                let text = field
+                    .text()
+                    .await
+                    .map_err(|e| ApiError::bad_request(e.to_string()))?;
+                fields.insert(name, text);
+            }
             continue;
         };
         let (token, path) = state
@@ -330,20 +363,162 @@ async fn upload(
         file.flush()
             .await
             .map_err(|e| ApiError::bad_request(e.to_string()))?;
-
         let staged_name = path
             .file_name()
             .and_then(|name| name.to_str())
             .unwrap_or(&filename)
             .to_string();
-        sources.push(AttachmentSource {
-            content_type: infer_attachment_content_type(&staged_name),
+        files.push(StagedFile {
+            token,
+            path,
             filename: staged_name,
-            path: token.to_string(),
         });
     }
-    if sources.is_empty() {
+    Ok((files, fields))
+}
+
+/// Stage uploaded files and return references usable in attachment actions.
+///
+/// Every multipart field with a filename is treated as one file.
+async fn upload(
+    State(state): State<SharedState>,
+    multipart: Multipart,
+) -> Result<Json<Vec<AttachmentSource>>, ApiError> {
+    let (files, _) = stage_multipart(&state, multipart).await?;
+    if files.is_empty() {
         return Err(ApiError::bad_request("no files in upload"));
     }
-    Ok(Json(sources))
+    Ok(Json(
+        files
+            .into_iter()
+            .map(|file| AttachmentSource {
+                content_type: infer_attachment_content_type(&file.filename),
+                filename: file.filename,
+                path: file.token.to_string(),
+            })
+            .collect(),
+    ))
+}
+
+// --- Upload links (migration plan §7.2) ---
+
+#[derive(Serialize)]
+struct UploadLinkResponse {
+    token: Option<String>,
+}
+
+async fn get_upload_link(
+    State(state): State<SharedState>,
+    Path(id): Path<ExecutionId>,
+) -> Result<Json<UploadLinkResponse>, ApiError> {
+    blocking(move || state.links.find(id))
+        .await
+        .map(|token| Json(UploadLinkResponse { token }))
+}
+
+/// Return the execution's upload link, creating it if needed.
+async fn create_upload_link(
+    State(state): State<SharedState>,
+    Path(id): Path<ExecutionId>,
+) -> Result<Json<UploadLinkResponse>, ApiError> {
+    blocking(move || {
+        let summary = procnote_app::execution::get_execution(&state.procedures_dir, id)?;
+        if summary.status != "active" {
+            return Err("upload links are only available for active executions".to_string());
+        }
+        state.links.get_or_create(id)
+    })
+    .await
+    .map(|token| Json(UploadLinkResponse { token: Some(token) }))
+}
+
+async fn revoke_upload_link(
+    State(state): State<SharedState>,
+    Path(id): Path<ExecutionId>,
+) -> Result<Json<UploadLinkResponse>, ApiError> {
+    blocking(move || state.links.revoke(id))
+        .await
+        .map(|()| Json(UploadLinkResponse { token: None }))
+}
+
+/// What a phone opening an upload link may see: the execution's name only.
+#[derive(Serialize)]
+struct UploadTarget {
+    name: String,
+    procedure_title: String,
+    active: bool,
+}
+
+fn resolve_link(state: &SharedState, token: &str) -> Result<ExecutionId, ApiError> {
+    state
+        .links
+        .resolve(token)
+        .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "this upload link is not valid"))
+}
+
+async fn upload_link_target(
+    State(state): State<SharedState>,
+    Path(token): Path<String>,
+) -> Result<Json<UploadTarget>, ApiError> {
+    let id = resolve_link(&state, &token)?;
+    blocking(move || procnote_app::execution::get_execution(&state.procedures_dir, id))
+        .await
+        .map(|summary| {
+            Json(UploadTarget {
+                name: summary.name.unwrap_or(summary.procedure_id),
+                procedure_title: summary.procedure_title,
+                active: summary.status == "active",
+            })
+        })
+}
+
+#[derive(Serialize)]
+struct UploadReceipt {
+    received: usize,
+    skipped: usize,
+}
+
+/// Receive files sent to an upload link into the execution's inbox.
+///
+/// Optional text fields `recorded_by` and `device` say who sent them.
+async fn upload_to_link(
+    State(state): State<SharedState>,
+    Path(token): Path<String>,
+    multipart: Multipart,
+) -> Result<Json<UploadReceipt>, ApiError> {
+    let id = resolve_link(&state, &token)?;
+    let (files, fields) = stage_multipart(&state, multipart).await?;
+    if files.is_empty() {
+        return Err(ApiError::bad_request("no files in upload"));
+    }
+    let meta = ActionMeta {
+        event_id: None,
+        recorded_by: fields.get("recorded_by").cloned(),
+        device: Some(
+            fields
+                .get("device")
+                .cloned()
+                .unwrap_or_else(|| "upload-link".to_string()),
+        ),
+    };
+    let total = files.len();
+    let live_state = state.clone();
+    let (summary, received) = blocking(move || {
+        let sources = files
+            .iter()
+            .map(|file| (file.path.clone(), file.filename.clone()))
+            .collect();
+        let result =
+            procnote_app::execution::receive_files(&state.procedures_dir, id, sources, meta);
+        for file in files {
+            state.uploads.discard(file.token);
+        }
+        result
+    })
+    .await?;
+    live_state.live.publish(id, summary.seq);
+    Ok(Json(UploadReceipt {
+        received,
+        skipped: total - received,
+    }))
 }

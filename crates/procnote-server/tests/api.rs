@@ -46,6 +46,7 @@ fn fixture(static_dir: Option<&Path>) -> Fixture {
         procedures_dir: procedures_dir.canonicalize().unwrap(),
         upload_dir: temp.path().join("uploads"),
         static_dir: static_dir.map(Path::to_path_buf),
+        state_dir: temp.path().join("state"),
     })
     .unwrap();
     Fixture {
@@ -367,4 +368,141 @@ async fn live_updates_close_for_unknown_executions() {
         message,
         None | Some(Ok(tokio_tungstenite::tungstenite::Message::Close(_)))
     ));
+}
+
+fn multipart(uri: &str, files: &[(&str, &str)], fields: &[(&str, &str)]) -> Request<Body> {
+    use std::fmt::Write as _;
+    let boundary = "procnote-test-boundary";
+    let mut body = String::new();
+    for (name, value) in fields {
+        write!(
+            body,
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n"
+        )
+        .unwrap();
+    }
+    for (filename, contents) in files {
+        write!(
+            body,
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\nContent-Type: text/plain\r\n\r\n{contents}\r\n"
+        )
+        .unwrap();
+    }
+    write!(body, "--{boundary}--\r\n").unwrap();
+    Request::post(uri)
+        .header(
+            header::CONTENT_TYPE,
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(Body::from(body))
+        .unwrap()
+}
+
+fn delete(uri: &str) -> Request<Body> {
+    Request::delete(uri).body(Body::empty()).unwrap()
+}
+
+#[tokio::test]
+async fn upload_link_receives_files_into_the_inbox_until_revoked() {
+    let fixture = fixture(None);
+    let id = start(&fixture).await;
+    let link_uri = format!("/api/executions/{id}/upload-link");
+
+    let (status, link) = send(&fixture.app, post_json(&link_uri, &json!({}))).await;
+    assert_eq!(status, StatusCode::OK, "{link}");
+    let token = link["token"].as_str().unwrap().to_string();
+    let (_, again) = send(&fixture.app, get(&link_uri)).await;
+    assert_eq!(again["token"], token.as_str());
+
+    let (status, target) = send(&fixture.app, get(&format!("/api/upload-links/{token}"))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(target["active"], true);
+    assert_eq!(target["procedure_title"], "API Test");
+    assert!(target.get("execution_dir").is_none(), "{target}");
+
+    let files_uri = format!("/api/upload-links/{token}/files");
+    let (status, receipt) = send(
+        &fixture.app,
+        multipart(
+            &files_uri,
+            &[("a.txt", "one"), ("b.txt", "two"), ("a-copy.txt", "one")],
+            &[("recorded_by", "Phone user")],
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{receipt}");
+    assert_eq!(receipt, json!({ "received": 2, "skipped": 1 }));
+
+    let (_, summary) = send(&fixture.app, get(&format!("/api/executions/{id}"))).await;
+    let inbox = summary["inbox"].as_array().unwrap();
+    assert_eq!(inbox.len(), 2);
+    let path = inbox[0]["path"].as_str().unwrap().to_string();
+    let log = std::fs::read_to_string(
+        Path::new(summary["execution_dir"].as_str().unwrap()).join("events.jsonl"),
+    )
+    .unwrap();
+    assert!(log.contains(r#""recorded_by":"Phone user""#), "{log}");
+    assert!(log.contains(r#""device":"upload-link""#), "{log}");
+
+    let (status, assigned) = send(
+        &fixture.app,
+        post_json(
+            &format!("/api/executions/{id}/actions"),
+            &json!({ "action": {
+                "action": "assign_attachment",
+                "step_id": "step-1",
+                "input_id": "evidence",
+                "path": path,
+            }}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{assigned}");
+    assert_eq!(assigned["inbox"].as_array().unwrap().len(), 1);
+
+    let (status, _) = send(&fixture.app, delete(&link_uri)).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = send(&fixture.app, get(&format!("/api/upload-links/{token}"))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = send(
+        &fixture.app,
+        multipart(&files_uri, &[("c.txt", "three")], &[]),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn finished_executions_take_no_uploads() {
+    let fixture = fixture(None);
+    let id = start(&fixture).await;
+    let link_uri = format!("/api/executions/{id}/upload-link");
+    let (_, link) = send(&fixture.app, post_json(&link_uri, &json!({}))).await;
+    let token = link["token"].as_str().unwrap().to_string();
+    send(
+        &fixture.app,
+        post_json(
+            &format!("/api/executions/{id}/actions"),
+            &json!({ "action": { "action": "complete", "status": "pass" } }),
+        ),
+    )
+    .await;
+
+    let (status, target) = send(&fixture.app, get(&format!("/api/upload-links/{token}"))).await;
+    assert_eq!(
+        (status, target["active"].clone()),
+        (StatusCode::OK, json!(false))
+    );
+    let (status, _) = send(
+        &fixture.app,
+        multipart(
+            &format!("/api/upload-links/{token}/files"),
+            &[("a.txt", "x")],
+            &[],
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _) = send(&fixture.app, post_json(&link_uri, &json!({}))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 }

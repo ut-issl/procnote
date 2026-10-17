@@ -5,4 +5,4 @@ import type { Step } from "./Step";
 /**
  * A complete procedure template parsed from a Markdown file.
  */
-export type ProcedureTemplate = { metadata: ProcedureMetadata, steps: Array<Step>, };
+export type ProcedureTemplate = { metadata: ProcedureMetadata; steps: Array<Step> };

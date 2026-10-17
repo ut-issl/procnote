@@ -33,6 +33,8 @@ export type ExecutionAction =
   | { action: "remove_attachment_file"; step_id: string; input_id: string; path: string }
   | { action: "clear_attachments"; step_id: string; input_id: string }
   | { action: "remove_attachment"; step_id: string; input_id: string; reason: string }
+  | { action: "assign_attachment"; step_id: string; input_id: string; path: string }
+  | { action: "unassign_attachment"; step_id: string; input_id: string; path: string }
   | { action: "complete"; status: CompletionStatus }
   | { action: "abort"; reason: string }
   | { action: "rename_execution"; name: string }

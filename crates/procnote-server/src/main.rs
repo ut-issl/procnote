@@ -22,6 +22,18 @@ struct Args {
     /// Built frontend directory to serve (e.g. `build/`).
     #[arg(long)]
     static_dir: Option<PathBuf>,
+    /// Directory for server state such as upload links. Defaults to
+    /// `$XDG_STATE_HOME/procnote-server` or `~/.local/state/procnote-server`.
+    #[arg(long)]
+    state_dir: Option<PathBuf>,
+}
+
+fn default_state_dir() -> PathBuf {
+    let base = std::env::var_os("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/state")))
+        .unwrap_or_else(std::env::temp_dir);
+    base.join("procnote-server")
 }
 
 #[tokio::main]
@@ -41,6 +53,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         procedures_dir: procedures_dir.clone(),
         upload_dir,
         static_dir: args.static_dir,
+        state_dir: args.state_dir.unwrap_or_else(default_state_dir),
     })?;
 
     let listener = tokio::net::TcpListener::bind(args.listen).await?;
