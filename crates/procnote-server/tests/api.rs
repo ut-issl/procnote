@@ -8,6 +8,7 @@ use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
+use procnote_app::persistence::execution_store::ExecutionStore;
 use procnote_server::{Auth, ServerConfig, router};
 
 const TEMPLATE: &str = r"---
@@ -43,6 +44,7 @@ fn fixture(static_dir: Option<&Path>) -> Fixture {
     let template_path = api_test_dir.join("template.md");
     std::fs::write(&template_path, TEMPLATE).unwrap();
     let app = router(ServerConfig {
+        executions: Box::new(ExecutionStore::new(procedures_dir.canonicalize().unwrap())),
         procedures_dir: procedures_dir.canonicalize().unwrap(),
         upload_dir: temp.path().join("uploads"),
         static_dir: static_dir.map(Path::to_path_buf),

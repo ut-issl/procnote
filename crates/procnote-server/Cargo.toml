@@ -11,7 +11,8 @@ categories.workspace = true
 
 [dependencies]
 axum = { workspace = true, features = ["multipart", "ws"] }
-clap.workspace = true
+chrono.workspace = true
+clap = { workspace = true, features = ["env"] }
 env_logger.workspace = true
 jsonwebtoken.workspace = true
 log.workspace = true
@@ -20,6 +21,7 @@ procnote-core = { path = "../procnote-core" }
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sqlx.workspace = true
 tokio = { workspace = true, features = [
   "fs",
   "io-util",
