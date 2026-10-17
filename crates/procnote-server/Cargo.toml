@@ -16,6 +16,7 @@ clap = { workspace = true, features = ["env"] }
 env_logger.workspace = true
 jsonwebtoken.workspace = true
 log.workspace = true
+object_store.workspace = true
 procnote-app = { path = "../procnote-app" }
 procnote-core = { path = "../procnote-core" }
 reqwest.workspace = true
