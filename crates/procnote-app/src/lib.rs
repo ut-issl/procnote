@@ -8,4 +8,5 @@ pub mod action;
 pub mod execution;
 pub mod path_security;
 pub mod persistence;
+pub mod repository;
 pub mod template;

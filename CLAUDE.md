@@ -32,7 +32,8 @@
 
 - Operations take `procedures_dir: &Path` explicitly. Each procedure is a subdirectory containing `template.md` and `.executions/`.
 - `summarize()` converts `ExecutionState` + raw events into `ExecutionSummary` DTO for the frontend, building timestamp maps from the replayed event stream.
-- Every `record_action` call re-reads and replays the full event log from disk (no in-memory cache, by design).
+- Execution storage is behind the `ExecutionRepository` trait (`repository.rs`); `ExecutionStore` is the filesystem implementation. What to record is decided by pure functions there (`decide_action`, `decide_receive`), and `record` applies the decision atomically, skipping retried `event_id`s.
+- Every `record_action` call re-reads and replays the full event log from storage (no in-memory cache, by design).
 - Attachments are stored as `attachments/{sha256_7}-{filename}` inside the execution directory.
 
 ### Tauri shell (`src-tauri`)

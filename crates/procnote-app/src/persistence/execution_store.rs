@@ -1,5 +1,5 @@
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 use procnote_core::event::SUPPORTED_VERSION;
@@ -7,11 +7,13 @@ use procnote_core::event::types::{AttachmentRecord, Event, EventMeta, EventRecor
 use procnote_core::execution::ExecutionState;
 use procnote_core::snapshot::render_execution_markdown;
 
-use crate::action::{AttachmentSource, ExecutionAction};
-use crate::execution::infer_attachment_content_type;
-use crate::persistence::attachment_store::{AttachmentStore, PendingStoredAttachment};
+use crate::persistence::attachment_store::AttachmentStore;
 use crate::persistence::event_log::{EventLog, sync_dir};
+use crate::repository::{
+    Decide, ExecutionRepository, NewExecution, StoredExecution, apply_decision,
+};
 
+/// Executions stored as directories under each procedure's `.executions/`.
 pub struct ExecutionStore {
     procedures_dir: PathBuf,
 }
@@ -28,29 +30,40 @@ pub struct InstalledAttachmentSource {
     pub sha256: String,
 }
 
-impl ExecutionStore {
-    #[must_use]
-    pub const fn new(procedures_dir: PathBuf) -> Self {
-        Self { procedures_dir }
+impl ExecutionRepository for ExecutionStore {
+    fn list(&self) -> Result<Vec<StoredExecution>, String> {
+        Ok(self
+            .execution_dirs()?
+            .into_iter()
+            .filter_map(|dir| match read_state(&dir) {
+                Ok(state) => Some(stored(state, &dir)),
+                Err(e) => {
+                    log::warn!("skipping unreadable execution {}: {e}", dir.display());
+                    None
+                }
+            })
+            .collect())
+    }
+
+    fn load(&self, execution_id: ExecutionId) -> Result<StoredExecution, String> {
+        let execution_dir = self.existing_dir(execution_id)?;
+        Ok(stored(read_state(&execution_dir)?, &execution_dir))
     }
 
     /// Create an execution directory and publish it atomically after its core
     /// files have been durably written.
-    pub fn create_execution(
-        &self,
-        template_path: &Path,
-        state: ExecutionState,
-        initial_events: Vec<Event>,
-        tool_version: String,
-        meta: &EventMeta,
-    ) -> Result<RecordedExecution, String> {
-        let (Some(execution_id), Some(started_at)) = (state.execution_id, state.started_at) else {
+    fn create(&self, new: NewExecution) -> Result<StoredExecution, String> {
+        let (Some(execution_id), Some(started_at)) = (new.state.execution_id, new.state.started_at)
+        else {
             return Err("execution state has not been started".to_string());
         };
-        let procedure_dir = template_path
-            .parent()
-            .ok_or("template_path has no parent directory")?;
-        let executions_dir = procedure_dir.join(".executions");
+        if Path::new(&new.procedure)
+            .components()
+            .ne([Component::Normal(new.procedure.as_ref())])
+        {
+            return Err(format!("invalid procedure name: {}", new.procedure));
+        }
+        let executions_dir = self.procedures_dir.join(&new.procedure).join(".executions");
         std::fs::create_dir_all(&executions_dir).map_err(|e| e.to_string())?;
         sync_dir(&executions_dir).map_err(|e| e.to_string())?;
 
@@ -72,52 +85,98 @@ impl ExecutionStore {
         std::fs::create_dir(&temp_dir).map_err(|e| e.to_string())?;
         sync_dir(&executions_dir).map_err(|e| e.to_string())?;
 
-        let template_snapshot = temp_dir.join("template.md");
-        copy_file_durable(template_path, &template_snapshot).map_err(|e| e.to_string())?;
+        write_file_durable(
+            &temp_dir.join("template.md"),
+            new.template_source.as_bytes(),
+        )
+        .map_err(|e| e.to_string())?;
 
         let log_meta = Event::LogMeta {
             at: Utc::now(),
             version: SUPPORTED_VERSION,
-            tool_version,
+            tool_version: new.tool_version,
         };
         let mut events = vec![EventRecord::from(log_meta)];
-        events.extend(initial_events.into_iter().map(|event| EventRecord {
+        events.extend(new.initial_events.into_iter().map(|event| EventRecord {
             event,
-            meta: meta.clone(),
+            meta: new.meta.clone(),
         }));
         EventLog::new(temp_dir.join("events.jsonl"))
             .create_with_events_durable(&events)
             .map_err(|e| e.to_string())?;
-        write_execution_snapshot_durable(&temp_dir, &state)?;
+        write_execution_snapshot_durable(&temp_dir, &new.state)?;
 
         sync_dir(&temp_dir).map_err(|e| e.to_string())?;
         std::fs::rename(&temp_dir, &final_dir).map_err(|e| e.to_string())?;
         sync_dir(&executions_dir).map_err(|e| e.to_string())?;
 
-        Ok(RecordedExecution {
-            state,
-            execution_dir: final_dir,
-        })
+        Ok(stored(new.state, &final_dir))
     }
 
-    /// Record an action as a single log transaction.
-    ///
-    /// The full read/replay/validate/append sequence runs under the event log's
-    /// exclusive lock. The command layer should treat the durable append inside
-    /// this method as the commit point.
-    ///
-    /// When `meta.event_id` is already in the log, the request is a retry of
-    /// an action that was recorded: nothing is appended and the current state
-    /// is returned.
-    pub fn record_action(
+    /// The full read/replay/validate/append sequence runs under the event
+    /// log's exclusive lock; the durable append is the commit point.
+    fn record(
         &self,
         execution_id: ExecutionId,
-        action: ExecutionAction,
-        meta: EventMeta,
-    ) -> Result<RecordedExecution, String> {
-        self.with_log_transaction(execution_id, meta, |state, execution_dir| {
-            build_event_for_action(state, execution_dir, action)
-        })
+        meta: &EventMeta,
+        decide: &mut Decide<'_>,
+    ) -> Result<StoredExecution, String> {
+        let execution_dir = self.existing_dir(execution_id)?;
+        let event_log = EventLog::new(execution_dir.join("events.jsonl"));
+        let transaction_log = event_log.clone();
+
+        event_log
+            .with_exclusive_lock(|| {
+                let records = transaction_log.read_records().map_err(|e| e.to_string())?;
+                let events: Vec<Event> = records.iter().map(|r| r.event.clone()).collect();
+                let mut state = ExecutionState::from_events(&events).map_err(|e| e.to_string())?;
+
+                if is_retry(&records, meta) {
+                    return Ok(stored(state, &execution_dir));
+                }
+
+                let decision = decide(&state)?;
+                if decision.events.is_empty() {
+                    return Ok(stored(state, &execution_dir));
+                }
+                apply_decision(&mut state, &decision)?;
+                let attachments = AttachmentStore::new(execution_dir.clone());
+                decision
+                    .files
+                    .iter()
+                    .try_for_each(|file| attachments.store(file))?;
+                let appended: Vec<EventRecord> = decision
+                    .events
+                    .into_iter()
+                    .map(|event| EventRecord {
+                        event,
+                        meta: meta.clone(),
+                    })
+                    .collect();
+                transaction_log
+                    .append_batch_durable(&appended)
+                    .map_err(|e| e.to_string())?;
+                if let Err(e) = write_execution_snapshot_durable(&execution_dir, &state) {
+                    log::warn!(
+                        "failed to update execution snapshot for {execution_id} after appending events: {e}"
+                    );
+                }
+                Ok(stored(state, &execution_dir))
+            })
+            .map_err(|e| e.to_string())?
+    }
+
+    fn read_attachment(&self, execution_id: ExecutionId, path: &str) -> Result<Vec<u8>, String> {
+        let execution_dir = self.existing_dir(execution_id)?;
+        std::fs::read(resolve_attachment_file_path(&execution_dir, path)?)
+            .map_err(|e| e.to_string())
+    }
+}
+
+impl ExecutionStore {
+    #[must_use]
+    pub const fn new(procedures_dir: PathBuf) -> Self {
+        Self { procedures_dir }
     }
 
     /// Durably append the application record for an already-installed atomic
@@ -184,128 +243,55 @@ impl ExecutionStore {
             .map_err(|error| error.to_string())?
     }
 
-    /// Store files into the execution and receive them into its inbox.
-    ///
-    /// Each `(source, filename)` is copied under `attachments/`. A file whose
-    /// content is already in the execution is skipped. Returns the new state
-    /// and how many files were received.
-    pub fn receive_files(
-        &self,
-        execution_id: ExecutionId,
-        files: Vec<(PathBuf, String)>,
-        meta: &EventMeta,
-    ) -> Result<(RecordedExecution, usize), String> {
-        let execution_dir = find_execution_dir(&self.procedures_dir, execution_id)?
-            .ok_or_else(|| format!("Execution not found: {execution_id}"))?;
-        let event_log = EventLog::new(execution_dir.join("events.jsonl"));
-        let transaction_log = event_log.clone();
-        let store = AttachmentStore::new(execution_dir.clone());
-
-        event_log
-            .with_exclusive_lock(|| {
-                let events = transaction_log.read().map_err(|e| e.to_string())?;
-                let mut state = ExecutionState::from_events(&events).map_err(|e| e.to_string())?;
-                let mut received = 0;
-                for (source, filename) in files {
-                    let pending = store.prepare_copy(&source, &filename)?;
-                    if has_content(&state, &pending.stored.sha256)
-                        || state.has_attachment_path(&pending.stored.relative_path)
-                    {
-                        continue;
-                    }
-                    let record = attachment_record(&pending);
-                    let event = state
-                        .receive_attachment_event(record)
-                        .map_err(|e| e.to_string())?;
-                    store.commit_prepared(pending)?;
-                    state.apply(&event).map_err(|e| e.to_string())?;
-                    transaction_log
-                        .append_durable(&EventRecord {
-                            event,
-                            meta: meta.clone(),
-                        })
-                        .map_err(|e| e.to_string())?;
-                    received += 1;
-                }
-                if let Err(e) = write_execution_snapshot_durable(&execution_dir, &state) {
-                    log::warn!(
-                        "failed to update execution snapshot for {execution_id} after receiving files: {e}"
-                    );
-                }
-                Ok((
-                    RecordedExecution {
-                        state,
-                        execution_dir: execution_dir.clone(),
-                    },
-                    received,
-                ))
-            })
-            .map_err(|e| e.to_string())?
+    /// The directory of an execution whose event log exists.
+    fn existing_dir(&self, execution_id: ExecutionId) -> Result<PathBuf, String> {
+        find_execution_dir(&self.procedures_dir, execution_id)?
+            .filter(|dir| dir.join("events.jsonl").exists())
+            .ok_or_else(|| format!("Execution not found: {execution_id}"))
     }
 
-    fn with_log_transaction(
-        &self,
-        execution_id: ExecutionId,
-        meta: EventMeta,
-        build_action: impl FnOnce(&ExecutionState, &Path) -> Result<BuiltAction, String>,
-    ) -> Result<RecordedExecution, String> {
-        let execution_dir = find_execution_dir(&self.procedures_dir, execution_id)?
-            .ok_or_else(|| format!("Execution not found: {execution_id}"))?;
-        let log_path = execution_dir.join("events.jsonl");
-        if !log_path.exists() {
-            return Err(format!("Execution not found: {execution_id}"));
+    /// Every published execution directory that has an event log.
+    fn execution_dirs(&self) -> Result<Vec<PathBuf>, String> {
+        if !self.procedures_dir.exists() {
+            return Ok(Vec::new());
         }
-        let event_log = EventLog::new(log_path);
-        let transaction_log = event_log.clone();
-
-        event_log
-            .with_exclusive_lock(|| {
-                let records = transaction_log.read_records().map_err(|e| e.to_string())?;
-                let events: Vec<Event> = records.iter().map(|r| r.event.clone()).collect();
-                let mut state = ExecutionState::from_events(&events).map_err(|e| e.to_string())?;
-
-                if is_retry(&records, &meta) {
-                    return Ok(RecordedExecution {
-                        state,
-                        execution_dir,
-                    });
-                }
-
-                let built = build_action(&state, &execution_dir)?;
-                state.apply(&built.event).map_err(|e| e.to_string())?;
-                commit_pending_attachments(&execution_dir, built.pending_attachments)?;
-                transaction_log
-                    .append_durable(&EventRecord {
-                        event: built.event,
-                        meta,
-                    })
-                    .map_err(|e| e.to_string())?;
-                if let Err(e) = write_execution_snapshot_durable(&execution_dir, &state) {
+        let mut dirs = Vec::new();
+        let proc_entries = std::fs::read_dir(&self.procedures_dir).map_err(|e| e.to_string())?;
+        for proc_entry in proc_entries.flatten() {
+            let exec_base = proc_entry.path().join(".executions");
+            if !exec_base.is_dir() {
+                continue;
+            }
+            let entries = match std::fs::read_dir(&exec_base) {
+                Ok(entries) => entries,
+                Err(e) => {
                     log::warn!(
-                        "failed to update execution snapshot for {execution_id} after appending event: {e}"
+                        "skipping unreadable executions directory {}: {e}",
+                        exec_base.display()
                     );
+                    continue;
                 }
-                Ok(RecordedExecution {
-                    state,
-                    execution_dir,
-                })
-            })
-            .map_err(|e| e.to_string())?
+            };
+            dirs.extend(entries.flatten().map(|entry| entry.path()).filter(|path| {
+                path.is_dir() && !is_temp_execution_dir(path) && path.join("events.jsonl").exists()
+            }));
+        }
+        Ok(dirs)
     }
 }
 
-/// Whether the execution already holds a file with this content.
-fn has_content(state: &ExecutionState, sha256: &str) -> bool {
-    state
-        .inbox
-        .iter()
-        .chain(
-            state
-                .steps
-                .values()
-                .flat_map(|step| step.attachments.values().flatten()),
-        )
-        .any(|file| file.sha256 == sha256)
+fn stored(state: ExecutionState, execution_dir: &Path) -> StoredExecution {
+    StoredExecution {
+        state,
+        location: Some(execution_dir.display().to_string()),
+    }
+}
+
+fn read_state(execution_dir: &Path) -> Result<ExecutionState, String> {
+    let events = EventLog::new(execution_dir.join("events.jsonl"))
+        .read_locked()
+        .map_err(|e| e.to_string())?;
+    ExecutionState::from_events(&events).map_err(|e| e.to_string())
 }
 
 /// Whether `meta` carries an event ID that is already recorded.
@@ -317,188 +303,33 @@ fn is_retry(records: &[EventRecord], meta: &EventMeta) -> bool {
     })
 }
 
-struct BuiltAction {
-    event: Event,
-    pending_attachments: Vec<PendingStoredAttachment>,
-}
-
-impl BuiltAction {
-    const fn without_attachments(event: Event) -> Self {
-        Self {
-            event,
-            pending_attachments: Vec::new(),
-        }
-    }
-}
-
-#[expect(
-    clippy::too_many_lines,
-    reason = "central dispatch over all frontend execution actions"
-)]
-fn build_event_for_action(
-    state: &ExecutionState,
+fn resolve_attachment_file_path(
     execution_dir: &Path,
-    action: ExecutionAction,
-) -> Result<BuiltAction, String> {
-    let event = match action {
-        ExecutionAction::SkipStep { step_id, reason } => state
-            .skip_step_event(&step_id, &reason)
-            .map(BuiltAction::without_attachments)
-            .map_err(|e| e.to_string()),
-        ExecutionAction::UnskipStep { step_id, reason } => state
-            .unskip_step_event(&step_id, &reason)
-            .map(BuiltAction::without_attachments)
-            .map_err(|e| e.to_string()),
-        ExecutionAction::ToggleCheckbox {
-            step_id,
-            checkbox_id,
-            checked,
-        } => state
-            .toggle_checkbox_event(&step_id, &checkbox_id, checked)
-            .map(BuiltAction::without_attachments)
-            .map_err(|e| e.to_string()),
-        ExecutionAction::RecordInput {
-            step_id,
-            input_id,
-            value,
-            unit,
-        } => state
-            .record_input_event(&step_id, &input_id, &value, unit.as_deref())
-            .map(BuiltAction::without_attachments)
-            .map_err(|e| e.to_string()),
-        ExecutionAction::ClearInput {
-            step_id,
-            input_id,
-            reason,
-        } => state
-            .clear_input_event(&step_id, &input_id, &reason)
-            .map(BuiltAction::without_attachments)
-            .map_err(|e| e.to_string()),
-        ExecutionAction::AddNote { text, step_id } => state
-            .add_note_event(&text, step_id.as_deref())
-            .map(BuiltAction::without_attachments)
-            .map_err(|e| e.to_string()),
-        ExecutionAction::RemoveNote { note_id, reason } => state
-            .remove_note_event(&note_id, &reason)
-            .map(BuiltAction::without_attachments)
-            .map_err(|e| e.to_string()),
-        ExecutionAction::AddStep {
-            step_id,
-            heading,
-            content,
-            after_step_id,
-        } => state
-            .add_step_event(&step_id, &heading, content, after_step_id.as_deref())
-            .map(BuiltAction::without_attachments)
-            .map_err(|e| e.to_string()),
-        ExecutionAction::AddAttachment {
-            step_id,
-            input_id,
-            filename,
-            path,
-            content_type,
-        } => {
-            let prepared = prepare_attachment_sources(
-                execution_dir,
-                vec![AttachmentSource {
-                    filename,
-                    path,
-                    content_type,
-                }],
-            )?;
-            let attachments = prepared.iter().map(attachment_record).collect();
-            state
-                .add_attachments_event(&step_id, &input_id, attachments)
-                .map(|event| BuiltAction {
-                    event,
-                    pending_attachments: prepared,
-                })
-                .map_err(|e| e.to_string())
-        }
-        ExecutionAction::AddAttachments {
-            step_id,
-            input_id,
-            files,
-        } => {
-            let prepared = prepare_attachment_sources(execution_dir, files)?;
-            let attachments = prepared.iter().map(attachment_record).collect();
-            state
-                .add_attachments_event(&step_id, &input_id, attachments)
-                .map(|event| BuiltAction {
-                    event,
-                    pending_attachments: prepared,
-                })
-                .map_err(|e| e.to_string())
-        }
-        ExecutionAction::RemoveAttachmentFile {
-            step_id,
-            input_id,
-            path,
-        } => state
-            .remove_attachment_file_event(&step_id, &input_id, &path)
-            .map(BuiltAction::without_attachments)
-            .map_err(|e| e.to_string()),
-        ExecutionAction::ClearAttachments { step_id, input_id } => state
-            .clear_attachments_event(&step_id, &input_id)
-            .map(BuiltAction::without_attachments)
-            .map_err(|e| e.to_string()),
-        ExecutionAction::RemoveAttachment {
-            step_id,
-            input_id,
-            reason,
-        } => state
-            .remove_attachment_event(&step_id, &input_id, &reason)
-            .map(BuiltAction::without_attachments)
-            .map_err(|e| e.to_string()),
-        ExecutionAction::AssignAttachment {
-            step_id,
-            input_id,
-            path,
-        } => state
-            .assign_attachment_event(&step_id, &input_id, &path)
-            .map(BuiltAction::without_attachments)
-            .map_err(|e| e.to_string()),
-        ExecutionAction::UnassignAttachment {
-            step_id,
-            input_id,
-            path,
-        } => state
-            .unassign_attachment_event(&step_id, &input_id, &path)
-            .map(BuiltAction::without_attachments)
-            .map_err(|e| e.to_string()),
-        ExecutionAction::Complete { status } => state
-            .complete_event(status)
-            .map(BuiltAction::without_attachments)
-            .map_err(|e| e.to_string()),
-        ExecutionAction::Abort { reason } => state
-            .abort_event(&reason)
-            .map(BuiltAction::without_attachments)
-            .map_err(|e| e.to_string()),
-        ExecutionAction::RenameExecution { name } => state
-            .rename_event(&name)
-            .map(BuiltAction::without_attachments)
-            .map_err(|e| e.to_string()),
-        ExecutionAction::ReopenExecution { reason } => state
-            .reopen_event(&reason)
-            .map(BuiltAction::without_attachments)
-            .map_err(|e| e.to_string()),
-    }?;
-    Ok(event)
-}
-
-fn prepare_attachment_sources(
-    execution_dir: &Path,
-    sources: Vec<AttachmentSource>,
-) -> Result<Vec<PendingStoredAttachment>, String> {
-    if sources.is_empty() {
-        return Err("at least one attachment file is required".to_string());
+    relative_path: &str,
+) -> Result<PathBuf, String> {
+    let relative = Path::new(relative_path);
+    if relative.is_absolute()
+        || relative
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(format!("invalid attachment path: {relative_path}"));
     }
 
-    let store = AttachmentStore::new(execution_dir.to_path_buf());
-    sources
-        .into_iter()
-        .map(|source| store.prepare_copy(Path::new(&source.path), &source.filename))
-        .collect()
+    let attachments_dir = execution_dir
+        .join("attachments")
+        .canonicalize()
+        .map_err(|e| e.to_string())?;
+    let file_path = execution_dir
+        .join(relative)
+        .canonicalize()
+        .map_err(|e| e.to_string())?;
+
+    if !file_path.starts_with(&attachments_dir) {
+        return Err("attachment path escapes the attachments directory".to_string());
+    }
+
+    Ok(file_path)
 }
 
 fn validate_installed_attachment_sources(
@@ -534,25 +365,6 @@ fn validate_installed_attachment_sources(
             })
         })
         .collect()
-}
-
-fn attachment_record(pending: &PendingStoredAttachment) -> AttachmentRecord {
-    AttachmentRecord {
-        filename: pending.stored.filename.clone(),
-        path: pending.stored.relative_path.clone(),
-        content_type: infer_attachment_content_type(&pending.stored.filename),
-        sha256: pending.stored.sha256.clone(),
-    }
-}
-
-fn commit_pending_attachments(
-    execution_dir: &Path,
-    pending: Vec<PendingStoredAttachment>,
-) -> Result<(), String> {
-    let store = AttachmentStore::new(execution_dir.to_path_buf());
-    pending
-        .into_iter()
-        .try_for_each(|attachment| store.commit_prepared(attachment).map(|_| ()))
 }
 
 /// Find the execution directory by scanning all procedure subdirectories.
@@ -654,18 +466,6 @@ fn write_file_durable(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     file.sync_all()
 }
 
-fn copy_file_durable(source: &Path, destination: &Path) -> std::io::Result<()> {
-    let bytes = std::fs::read(source)?;
-    let mut file = std::fs::OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(destination)?;
-    file.write_all(&bytes)?;
-    file.flush()?;
-    file.sync_all()?;
-    destination.parent().map_or(Ok(()), sync_dir)
-}
-
 /// Format the execution directory name as `{YYYYMMDD}T{HHMMSS}-{uuid_8}`.
 fn execution_dir_name(at: &DateTime<Utc>, execution_id: ExecutionId) -> String {
     format!(
@@ -679,7 +479,40 @@ fn execution_dir_name(at: &DateTime<Utc>, execution_id: ExecutionId) -> String {
 #[expect(clippy::unwrap_used, reason = "unwrap is acceptable in tests")]
 mod tests {
     use super::*;
+    use crate::action::ExecutionAction;
+    use crate::repository::{receive_files, record_action};
     use procnote_core::template::parse_template;
+
+    /// Start an execution of `source` in `procedure` (created under `root`).
+    fn create(
+        root: &Path,
+        procedure: &str,
+        source: &str,
+        meta: &EventMeta,
+    ) -> (ExecutionStore, ExecutionId, PathBuf) {
+        let procedure_dir = root.join(procedure);
+        std::fs::create_dir(&procedure_dir).unwrap();
+        std::fs::write(procedure_dir.join("template.md"), source).unwrap();
+        let mut state = ExecutionState::new();
+        let initial_events = state.start(&parse_template(source).unwrap()).unwrap();
+        let execution_id = state.execution_id.unwrap();
+        let store = ExecutionStore::new(root.to_path_buf());
+        let created = store
+            .create(NewExecution {
+                procedure: procedure.to_string(),
+                template_source: source.to_string(),
+                state,
+                initial_events,
+                tool_version: "test".to_string(),
+                meta: meta.clone(),
+            })
+            .unwrap();
+        (store, execution_id, dir_of(&created))
+    }
+
+    fn dir_of(stored: &StoredExecution) -> PathBuf {
+        PathBuf::from(stored.location.as_deref().unwrap())
+    }
 
     const TEMPLATE: &str = r"---
 id: snapshot-test
@@ -719,63 +552,24 @@ version: 1.0.0
     #[test]
     fn create_and_update_execution_snapshot_readme() {
         let temp = tempfile::tempdir().unwrap();
-        let procedure_dir = temp.path().join("snapshot-test");
-        std::fs::create_dir(&procedure_dir).unwrap();
-        let template_path = procedure_dir.join("template.md");
-        std::fs::write(&template_path, TEMPLATE).unwrap();
+        let (store, execution_id, execution_dir) = create(
+            temp.path(),
+            "snapshot-test",
+            TEMPLATE,
+            &EventMeta::default(),
+        );
 
-        let template = parse_template(TEMPLATE).unwrap();
-        let mut state = ExecutionState::new();
-        let events = state.start(&template).unwrap();
-        let execution_id = state.execution_id.unwrap();
-
-        let store = ExecutionStore::new(temp.path().to_path_buf());
-        let recorded = store
-            .create_execution(
-                &template_path,
-                state,
-                events,
-                "test".to_string(),
-                &EventMeta::default(),
-            )
-            .unwrap();
-
-        let readme_path = recorded.execution_dir.join("README.md");
+        let readme_path = execution_dir.join("README.md");
         let initial_readme = std::fs::read_to_string(&readme_path).unwrap();
         assert!(initial_readme.contains("# Snapshot Test"));
         assert!(initial_readme.contains("- [ ] Ready"));
         assert!(!initial_readme.contains("Event history"));
 
-        store
-            .record_action(
-                execution_id,
-                ExecutionAction::ToggleCheckbox {
-                    step_id: "step-0".to_string(),
-                    checkbox_id: "step-0/cb-0".to_string(),
-                    checked: true,
-                },
-                EventMeta::default(),
-            )
-            .unwrap();
+        record_action(&store, execution_id, toggle(), &EventMeta::default()).unwrap();
 
         let updated_readme = std::fs::read_to_string(readme_path).unwrap();
         assert!(updated_readme.contains("- [x] Ready"));
         assert!(updated_readme.contains("Toggled at:"));
-    }
-
-    fn create_snapshot_test_execution(root: &Path, meta: &EventMeta) -> ExecutionId {
-        let procedure_dir = root.join("snapshot-test");
-        std::fs::create_dir(&procedure_dir).unwrap();
-        let template_path = procedure_dir.join("template.md");
-        std::fs::write(&template_path, TEMPLATE).unwrap();
-        let template = parse_template(TEMPLATE).unwrap();
-        let mut state = ExecutionState::new();
-        let events = state.start(&template).unwrap();
-        let execution_id = state.execution_id.unwrap();
-        ExecutionStore::new(root.to_path_buf())
-            .create_execution(&template_path, state, events, "test".to_string(), meta)
-            .unwrap();
-        execution_id
     }
 
     fn toggle() -> ExecutionAction {
@@ -794,19 +588,17 @@ version: 1.0.0
             recorded_by: Some("starter".to_string()),
             device: Some("desk".to_string()),
         };
-        let execution_id = create_snapshot_test_execution(temp.path(), &starter);
-        let store = ExecutionStore::new(temp.path().to_path_buf());
+        let (store, execution_id, execution_dir) =
+            create(temp.path(), "snapshot-test", TEMPLATE, &starter);
         let toggler = EventMeta {
             event_id: Some(uuid::Uuid::new_v4()),
             recorded_by: Some("toggler".to_string()),
             device: Some("phone".to_string()),
         };
 
-        let recorded = store
-            .record_action(execution_id, toggle(), toggler.clone())
-            .unwrap();
+        record_action(&store, execution_id, toggle(), &toggler).unwrap();
 
-        let records = EventLog::new(recorded.execution_dir.join("events.jsonl"))
+        let records = EventLog::new(execution_dir.join("events.jsonl"))
             .read_records()
             .unwrap();
         assert_eq!(
@@ -821,17 +613,19 @@ version: 1.0.0
     #[test]
     fn a_retried_event_id_is_recorded_once() {
         let temp = tempfile::tempdir().unwrap();
-        let execution_id = create_snapshot_test_execution(temp.path(), &EventMeta::default());
-        let store = ExecutionStore::new(temp.path().to_path_buf());
+        let (store, execution_id, execution_dir) = create(
+            temp.path(),
+            "snapshot-test",
+            TEMPLATE,
+            &EventMeta::default(),
+        );
         let meta = EventMeta {
             event_id: Some(uuid::Uuid::new_v4()),
             ..EventMeta::default()
         };
 
-        store
-            .record_action(execution_id, toggle(), meta.clone())
-            .unwrap();
-        let retried = store.record_action(execution_id, toggle(), meta).unwrap();
+        record_action(&store, execution_id, toggle(), &meta).unwrap();
+        let retried = record_action(&store, execution_id, toggle(), &meta).unwrap();
 
         assert!(
             retried.state.steps["step-0"]
@@ -842,7 +636,7 @@ version: 1.0.0
                     procnote_core::execution::ExecutionStepContent::Checkbox(cb) if cb.checked
                 ))
         );
-        let toggles = EventLog::new(retried.execution_dir.join("events.jsonl"))
+        let toggles = EventLog::new(execution_dir.join("events.jsonl"))
             .read()
             .unwrap()
             .into_iter()
@@ -854,25 +648,12 @@ version: 1.0.0
     #[test]
     fn received_files_go_to_the_inbox_once_per_content_and_can_be_assigned() {
         let temporary = tempfile::tempdir().unwrap();
-        let procedure_dir = temporary.path().join("attachment-test");
-        std::fs::create_dir(&procedure_dir).unwrap();
-        let template_path = procedure_dir.join("template.md");
-        std::fs::write(&template_path, ATTACHMENT_TEMPLATE).unwrap();
-        let mut state = ExecutionState::new();
-        let events = state
-            .start(&parse_template(ATTACHMENT_TEMPLATE).unwrap())
-            .unwrap();
-        let execution_id = state.execution_id.unwrap();
-        let store = ExecutionStore::new(temporary.path().to_path_buf());
-        store
-            .create_execution(
-                &template_path,
-                state,
-                events,
-                "test".to_string(),
-                &EventMeta::default(),
-            )
-            .unwrap();
+        let (store, execution_id, execution_dir) = create(
+            temporary.path(),
+            "attachment-test",
+            ATTACHMENT_TEMPLATE,
+            &EventMeta::default(),
+        );
         let source = |name: &str, content: &str| {
             let path = temporary.path().join(name);
             std::fs::write(&path, content).unwrap();
@@ -883,20 +664,19 @@ version: 1.0.0
             ..EventMeta::default()
         };
 
-        let (recorded, received) = store
-            .receive_files(
-                execution_id,
-                vec![
-                    source("a.txt", "same"),
-                    source("b.txt", "same"),
-                    source("c.txt", "other"),
-                ],
-                &phone,
-            )
-            .unwrap();
-        let (_, again) = store
-            .receive_files(execution_id, vec![source("a.txt", "same")], &phone)
-            .unwrap();
+        let (recorded, received) = receive_files(
+            &store,
+            execution_id,
+            &[
+                source("a.txt", "same"),
+                source("b.txt", "same"),
+                source("c.txt", "other"),
+            ],
+            &phone,
+        )
+        .unwrap();
+        let (_, again) =
+            receive_files(&store, execution_id, &[source("a.txt", "same")], &phone).unwrap();
 
         assert_eq!((received, again), (2, 0));
         let inbox: Vec<&str> = recorded
@@ -906,24 +686,19 @@ version: 1.0.0
             .map(|f| f.filename.as_str())
             .collect();
         assert_eq!(inbox, ["a.txt", "c.txt"]);
-        assert!(
-            recorded
-                .execution_dir
-                .join(&recorded.state.inbox[0].path)
-                .is_file()
-        );
+        assert!(execution_dir.join(&recorded.state.inbox[0].path).is_file());
 
-        let assigned = store
-            .record_action(
-                execution_id,
-                ExecutionAction::AssignAttachment {
-                    step_id: "step-0".to_string(),
-                    input_id: "evidence".to_string(),
-                    path: recorded.state.inbox[0].path.clone(),
-                },
-                EventMeta::default(),
-            )
-            .unwrap();
+        let assigned = record_action(
+            &store,
+            execution_id,
+            ExecutionAction::AssignAttachment {
+                step_id: "step-0".to_string(),
+                input_id: "evidence".to_string(),
+                path: recorded.state.inbox[0].path.clone(),
+            },
+            &EventMeta::default(),
+        )
+        .unwrap();
         assert_eq!(assigned.state.inbox.len(), 1);
         assert_eq!(
             assigned.state.steps["step-0"].attachments["evidence"].len(),
@@ -934,25 +709,12 @@ version: 1.0.0
     #[test]
     fn installed_attachment_record_is_idempotent_after_restart_boundary() {
         let temporary = tempfile::tempdir().unwrap();
-        let procedure_dir = temporary.path().join("attachment-test");
-        std::fs::create_dir(&procedure_dir).unwrap();
-        let template_path = procedure_dir.join("template.md");
-        std::fs::write(&template_path, ATTACHMENT_TEMPLATE).unwrap();
-
-        let template = parse_template(ATTACHMENT_TEMPLATE).unwrap();
-        let mut state = ExecutionState::new();
-        let events = state.start(&template).unwrap();
-        let execution_id = state.execution_id.unwrap();
-        let store = ExecutionStore::new(temporary.path().to_path_buf());
-        let created = store
-            .create_execution(
-                &template_path,
-                state,
-                events,
-                "test".to_string(),
-                &EventMeta::default(),
-            )
-            .unwrap();
+        let (store, execution_id, execution_dir) = create(
+            temporary.path(),
+            "attachment-test",
+            ATTACHMENT_TEMPLATE,
+            &EventMeta::default(),
+        );
 
         let source = || InstalledAttachmentSource {
             filename: "scan.txt".to_string(),
@@ -971,7 +733,7 @@ version: 1.0.0
             replayed.state.steps["step-0"].attachments["evidence"].len(),
             1
         );
-        let events = EventLog::new(created.execution_dir.join("events.jsonl"))
+        let events = EventLog::new(execution_dir.join("events.jsonl"))
             .read()
             .unwrap();
         assert_eq!(

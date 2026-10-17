@@ -1,6 +1,6 @@
-use std::io::Read;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
+use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use serde::Serialize;
 use ts_rs::TS;
@@ -8,9 +8,8 @@ use ts_rs::TS;
 use crate::action::{ActionMeta, ExecutionAction};
 use crate::path_security::resolve_template_path;
 use crate::persistence::event_log::EventLog;
-use crate::persistence::execution_store::{
-    ExecutionStore, find_execution_dir, is_temp_execution_dir,
-};
+use crate::persistence::execution_store::find_execution_dir;
+use crate::repository::{self, ExecutionRepository, NewExecution, StoredExecution};
 use procnote_core::event::types::{CompletionStatus, ExecutionId};
 use procnote_core::execution::{
     ExecutionState, ExecutionStepContent, RecordedAttachment, StepStatus,
@@ -41,8 +40,9 @@ pub struct ExecutionSummary {
     pub steps: Vec<StepSummary>,
     /// Files received through the upload link and not yet assigned to an input.
     pub inbox: Vec<AttachmentState>,
-    /// Absolute path to the execution directory on disk.
-    pub execution_dir: String,
+    /// Absolute path to the execution directory, when stored on a filesystem.
+    #[ts(optional)]
+    pub execution_dir: Option<String>,
     /// Number of events recorded so far; a larger value is a newer state.
     #[ts(type = "number")]
     pub seq: u64,
@@ -167,7 +167,10 @@ fn datetime_string(value: Option<chrono::DateTime<chrono::Utc>>) -> Option<Strin
     value.map(|at| at.to_rfc3339())
 }
 
-pub fn summarize(state: &ExecutionState, execution_dir: &Path) -> Result<ExecutionSummary, String> {
+pub fn summarize(
+    state: &ExecutionState,
+    execution_dir: Option<&str>,
+) -> Result<ExecutionSummary, String> {
     let steps = state
         .step_order
         .iter()
@@ -265,7 +268,7 @@ pub fn summarize(state: &ExecutionState, execution_dir: &Path) -> Result<Executi
         updated_at: datetime_string(state.updated_at),
         steps,
         inbox: state.inbox.iter().map(attachment_state).collect(),
-        execution_dir: execution_dir.display().to_string(),
+        execution_dir: execution_dir.map(str::to_string),
         seq: state.applied_events,
     })
 }
@@ -317,80 +320,30 @@ fn preview_content_type(content_type: &str) -> Option<String> {
         .then_some(media_type)
 }
 
-fn resolve_attachment_file_path(
-    execution_dir: &Path,
-    relative_path: &str,
-) -> Result<PathBuf, String> {
-    let relative = Path::new(relative_path);
-    if relative.is_absolute()
-        || relative
-            .components()
-            .any(|component| !matches!(component, Component::Normal(_)))
-    {
-        return Err(format!("invalid attachment path: {relative_path}"));
-    }
-
-    let attachments_dir = execution_dir
-        .join("attachments")
-        .canonicalize()
-        .map_err(|e| e.to_string())?;
-    let file_path = execution_dir
-        .join(relative)
-        .canonicalize()
-        .map_err(|e| e.to_string())?;
-
-    if !file_path.starts_with(&attachments_dir) {
-        return Err("attachment path escapes the attachments directory".to_string());
-    }
-
-    Ok(file_path)
-}
-
-fn read_attachment_preview_data_url(
-    execution_dir: &Path,
-    attachment: &RecordedAttachment,
-) -> Result<Option<String>, String> {
-    let Some(content_type) = preview_content_type(&attachment.content_type) else {
-        return Ok(None);
-    };
-    let file_path = resolve_attachment_file_path(execution_dir, &attachment.path)?;
-    let mut input = std::fs::File::open(file_path).map_err(|e| e.to_string())?;
-    let mut base64_output = Vec::new();
-    {
-        let mut base64_writer =
-            base64::write::EncoderWriter::new(&mut base64_output, &BASE64_STANDARD);
-        let mut buffer = vec![0u8; 64 * 1024];
-        loop {
-            let read = input.read(&mut buffer).map_err(|e| e.to_string())?;
-            if read == 0 {
-                break;
-            }
-            std::io::Write::write_all(&mut base64_writer, &buffer[..read])
-                .map_err(|e| e.to_string())?;
-        }
-        base64_writer.finish().map_err(|e| e.to_string())?;
-    }
-    let encoded = String::from_utf8(base64_output).map_err(|e| e.to_string())?;
-    Ok(Some(format!("data:{content_type};base64,{encoded}")))
+fn preview_data_url(content_type: &str, bytes: &[u8]) -> String {
+    format!(
+        "data:{content_type};base64,{}",
+        BASE64_STANDARD.encode(bytes)
+    )
 }
 
 /// Get a data URL that can be used as an image thumbnail for an attachment.
 ///
 /// Returns `None` for attachments whose content type is not a safe image type.
 pub fn attachment_preview_data_url(
-    procedures_dir: &Path,
+    repository: &dyn ExecutionRepository,
     execution_id: ExecutionId,
     path: &str,
 ) -> Result<Option<String>, String> {
-    let (exec_state, log_path) = load_execution_from_disk(procedures_dir, execution_id)?;
-    let exec_dir = log_path
-        .parent()
-        .ok_or_else(|| "event log path has no parent".to_string())?;
-    let Some(attachment) = find_attachment(&exec_state, path) else {
+    let stored = repository.load(execution_id)?;
+    let Some(attachment) = find_attachment(&stored.state, path) else {
         return Err(format!("Attachment not found: {path}"));
     };
-
-    read_attachment_preview_data_url(exec_dir, attachment)
+    let Some(content_type) = preview_content_type(&attachment.content_type) else {
+        return Ok(None);
+    };
+    let bytes = repository.read_attachment(execution_id, &attachment.path)?;
+    Ok(Some(preview_data_url(&content_type, &bytes)))
 }
 
 /// Infer an attachment's content type from its filename extension.
@@ -415,140 +368,93 @@ pub fn infer_attachment_content_type(filename: &str) -> String {
     .to_string()
 }
 
+fn summary_of(stored: &StoredExecution) -> Result<ExecutionSummary, String> {
+    summarize(&stored.state, stored.location.as_deref())
+}
+
 /// Start a new execution from a template file under `procedures_dir`.
 ///
 /// `tool_version` is recorded in the event log's `LogMeta`.
 pub fn start_execution(
+    repository: &dyn ExecutionRepository,
     procedures_dir: &Path,
     template_path: &Path,
     tool_version: String,
     meta: ActionMeta,
 ) -> Result<ExecutionSummary, String> {
     let template_path = resolve_template_path(procedures_dir, template_path)?;
-    let source = std::fs::read_to_string(&template_path).map_err(|e| e.to_string())?;
-    let template = parse_template(&source).map_err(|e| e.to_string())?;
+    let procedure = template_path
+        .parent()
+        .and_then(Path::file_name)
+        .and_then(|name| name.to_str())
+        .ok_or("template path has no procedure directory")?
+        .to_string();
+    let template_source = std::fs::read_to_string(&template_path).map_err(|e| e.to_string())?;
+    let template = parse_template(&template_source).map_err(|e| e.to_string())?;
 
-    let mut exec_state = ExecutionState::new();
-    let events = exec_state.start(&template).map_err(|e| e.to_string())?;
+    let mut state = ExecutionState::new();
+    let initial_events = state.start(&template).map_err(|e| e.to_string())?;
 
-    let recorded = ExecutionStore::new(procedures_dir.to_path_buf()).create_execution(
-        &template_path,
-        exec_state,
-        events,
+    let stored = repository.create(NewExecution {
+        procedure,
+        template_source,
+        state,
+        initial_events,
         tool_version,
-        &meta.into_event_meta(),
-    )?;
-
-    summarize(&recorded.state, &recorded.execution_dir)
+        meta: meta.into_event_meta(),
+    })?;
+    summary_of(&stored)
 }
 
 /// Record an action on an active execution.
 ///
 /// Attachment sources in `action` must already be authorized by the caller.
 pub fn record_action(
-    procedures_dir: &Path,
+    repository: &dyn ExecutionRepository,
     execution_id: ExecutionId,
     action: ExecutionAction,
     meta: ActionMeta,
 ) -> Result<ExecutionSummary, String> {
     log::debug!("record_action: execution={execution_id}, action={action:?}, meta={meta:?}");
-    let recorded = ExecutionStore::new(procedures_dir.to_path_buf()).record_action(
-        execution_id,
-        action,
-        meta.into_event_meta(),
-    )?;
-    summarize(&recorded.state, &recorded.execution_dir)
+    let stored =
+        repository::record_action(repository, execution_id, action, &meta.into_event_meta())?;
+    summary_of(&stored)
 }
 
-/// Receive files into the execution's inbox (see [`ExecutionStore::receive_files`]).
+/// Receive files into the execution's inbox (see [`repository::receive_files`]).
 ///
 /// Returns the new summary and how many files were received; files whose
 /// content the execution already has are skipped.
 pub fn receive_files(
-    procedures_dir: &Path,
+    repository: &dyn ExecutionRepository,
     execution_id: ExecutionId,
-    files: Vec<(PathBuf, String)>,
+    files: &[(PathBuf, String)],
     meta: ActionMeta,
 ) -> Result<(ExecutionSummary, usize), String> {
-    let (recorded, received) = ExecutionStore::new(procedures_dir.to_path_buf()).receive_files(
-        execution_id,
-        files,
-        &meta.into_event_meta(),
-    )?;
-    Ok((
-        summarize(&recorded.state, &recorded.execution_dir)?,
-        received,
-    ))
+    let (stored, received) =
+        repository::receive_files(repository, execution_id, files, &meta.into_event_meta())?;
+    Ok((summary_of(&stored)?, received))
 }
 
 /// Get the current state of an execution.
 pub fn get_execution(
-    procedures_dir: &Path,
+    repository: &dyn ExecutionRepository,
     execution_id: ExecutionId,
 ) -> Result<ExecutionSummary, String> {
-    let (exec_state, log_path) = load_execution_from_disk(procedures_dir, execution_id)?;
-    let exec_dir = log_path
-        .parent()
-        .ok_or_else(|| "event log path has no parent".to_string())?;
-    summarize(&exec_state, exec_dir)
+    summary_of(&repository.load(execution_id)?)
 }
 
-/// List all executions by scanning each procedure's `.executions/` subdirectory.
-pub fn list_executions(procedures_dir: &Path) -> Result<Vec<ExecutionSummary>, String> {
-    let mut summaries = Vec::new();
-
-    if !procedures_dir.exists() {
-        return Ok(summaries);
-    }
-
-    let proc_entries = std::fs::read_dir(procedures_dir).map_err(|e| e.to_string())?;
-    for proc_entry in proc_entries {
-        let proc_entry = proc_entry.map_err(|e| e.to_string())?;
-        let exec_base = proc_entry.path().join(".executions");
-        if !exec_base.is_dir() {
-            continue;
-        }
-        let entries = match std::fs::read_dir(&exec_base) {
-            Ok(entries) => entries,
-            Err(e) => {
-                log::warn!(
-                    "Skipping unreadable executions directory {}: {e}",
-                    exec_base.display()
-                );
-                continue;
-            }
-        };
-        for entry in entries.flatten() {
-            let dir_path = entry.path();
-            if !dir_path.is_dir() || is_temp_execution_dir(&dir_path) {
-                continue;
-            }
-            let log_path = dir_path.join("events.jsonl");
-            if !log_path.exists() {
-                continue;
-            }
-            let events = match EventLog::new(log_path.clone()).read_locked() {
-                Ok(events) => events,
-                Err(e) => {
-                    log::warn!("Failed to read events from {}: {e}", log_path.display());
-                    continue;
-                }
-            };
-            let exec_state = match ExecutionState::from_events(&events) {
-                Ok(state) => state,
-                Err(e) => {
-                    log::warn!("Failed to replay events from {}: {e}", log_path.display());
-                    continue;
-                }
-            };
-            match summarize(&exec_state, &dir_path) {
-                Ok(summary) => summaries.push(summary),
-                Err(e) => {
-                    log::warn!("Failed to summarize execution {}: {e}", dir_path.display());
-                }
-            }
-        }
-    }
-
-    Ok(summaries)
+/// List all executions.
+pub fn list_executions(
+    repository: &dyn ExecutionRepository,
+) -> Result<Vec<ExecutionSummary>, String> {
+    Ok(repository
+        .list()?
+        .iter()
+        .filter_map(|stored| {
+            summary_of(stored)
+                .inspect_err(|e| log::warn!("Failed to summarize execution: {e}"))
+                .ok()
+        })
+        .collect())
 }
