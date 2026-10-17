@@ -121,6 +121,7 @@ pub fn router(config: ServerConfig) -> std::io::Result<Router> {
             "/collab/templates/{id}/executions",
             post(start_collab_execution),
         )
+        .route("/collab/templates/{id}/markdown", get(collab_markdown))
         .route("/executions", get(list_executions).post(start_execution))
         .route("/executions/{id}", get(get_execution))
         .route("/executions/{id}/actions", post(record_action))
@@ -366,26 +367,20 @@ async fn start_collab_execution(
     identity: Option<Extension<Identity>>,
     Json(request): Json<StartCollabExecutionRequest>,
 ) -> Result<Json<ExecutionSummary>, ApiError> {
-    let current = collab(&state)?
+    let template = collab(&state)?
         .current(id)
         .await
-        .map_err(|e| ApiError::new(StatusCode::BAD_GATEWAY, e))?;
-    if !current.issues.is_empty() {
-        return Err(ApiError::bad_request(format!(
-            "the template can't be executed yet: {}",
-            current.issues.join(" ")
-        )));
-    }
-    let procedure =
-        collab::procedure_name(&current.template.metadata.id).map_err(ApiError::bad_request)?;
-    let snapshot =
-        TemplateSnapshot::of_template(&current.template).map_err(ApiError::bad_request)?;
+        .map_err(|e| ApiError::new(StatusCode::BAD_GATEWAY, e))?
+        .usable()
+        .map_err(ApiError::bad_request)?;
+    let procedure = collab::procedure_name(&template.metadata.id).map_err(ApiError::bad_request)?;
+    let snapshot = TemplateSnapshot::of_template(&template).map_err(ApiError::bad_request)?;
     let meta = attribute(request.meta, identity);
     blocking(move || {
         procnote_app::execution::start_execution_of(
             state.executions.as_ref(),
             procedure,
-            &current.template,
+            &template,
             snapshot,
             env!("CARGO_PKG_VERSION").to_string(),
             meta,
@@ -393,6 +388,29 @@ async fn start_collab_execution(
     })
     .await
     .map(Json)
+}
+
+/// A shared template as procnote Markdown (`template.md`), e.g. to keep it in git.
+async fn collab_markdown(
+    State(state): State<SharedState>,
+    Path(id): Path<uuid::Uuid>,
+) -> Result<Response, ApiError> {
+    let template = collab(&state)?
+        .current(id)
+        .await
+        .map_err(|e| ApiError::new(StatusCode::BAD_GATEWAY, e))?
+        .usable()
+        .map_err(ApiError::bad_request)?;
+    let markdown = procnote_core::template::to_markdown(&template)
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    Ok((
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/markdown; charset=utf-8",
+        )],
+        markdown,
+    )
+        .into_response())
 }
 
 #[derive(Serialize)]

@@ -86,6 +86,20 @@ pub struct CurrentTemplate {
     pub issues: Vec<String>,
 }
 
+impl CurrentTemplate {
+    /// The template if it can be executed or exported, else why not.
+    pub fn usable(self) -> Result<ProcedureTemplate, String> {
+        if self.issues.is_empty() {
+            Ok(self.template)
+        } else {
+            Err(format!(
+                "the template isn't complete: {}",
+                self.issues.join(" ")
+            ))
+        }
+    }
+}
+
 /// The procedure name executions of a shared template are filed under: its
 /// procedure ID, which must be usable as a directory name.
 pub fn procedure_name(procedure_id: &str) -> Result<String, String> {

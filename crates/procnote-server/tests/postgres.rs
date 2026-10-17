@@ -649,3 +649,74 @@ async fn json_template_snapshots_are_kept_as_json() {
     assert_eq!(exported.template, snapshot);
     assert_eq!(exported.template.file_name(), "template.json");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn shared_templates_export_as_procnote_markdown() {
+    use procnote_server::collab::{CollabConfig, CollabTemplates};
+    use procnote_server::transfer::export_templates;
+
+    let Some(url) = database_url() else { return };
+    let temp = tempfile::tempdir().unwrap();
+    let store = store(&url).await;
+    let (service, _) = stub_collab_service(StatusCode::OK, &[]).await;
+    let (app, template_path) = collab_app(&temp, &store, service.clone());
+    let (_, created) = call(
+        &app,
+        "POST",
+        "/api/collab/templates",
+        Some(json!({ "template_path": template_path })),
+    )
+    .await;
+    let id = created["id"].as_str().unwrap();
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/api/collab/templates/{id}/markdown"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let markdown = String::from_utf8(
+        response
+            .into_body()
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes()
+            .to_vec(),
+    )
+    .unwrap();
+    assert_eq!(
+        parse_template(&markdown).unwrap(),
+        parse_template(TEMPLATE).unwrap()
+    );
+
+    // The stub describes every shared template in the (shared) database as
+    // the test template, so only this workspace's file is checked.
+    let out = temp.path().join("exported");
+    let target = out.join("postgres-test/template.md");
+    let collab = CollabTemplates::new(
+        store.pool(),
+        CollabConfig {
+            secret: "stub-secret".to_string(),
+            service_url: service,
+        },
+    );
+    let first = export_templates(&collab, &out, false).await.unwrap();
+    std::fs::write(&target, "edited by hand").unwrap();
+    let again = export_templates(&collab, &out, false).await.unwrap();
+    let kept = std::fs::read_to_string(&target).unwrap();
+    let replaced = export_templates(&collab, &out, true).await.unwrap();
+
+    assert!(first.transferred.contains(&target));
+    assert!(again.skipped.contains(&target));
+    assert_eq!(kept, "edited by hand");
+    assert!(replaced.transferred.contains(&target));
+    assert_eq!(
+        parse_template(&std::fs::read_to_string(&target).unwrap()).unwrap(),
+        parse_template(TEMPLATE).unwrap()
+    );
+}
