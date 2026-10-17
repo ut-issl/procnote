@@ -12,6 +12,8 @@ use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
+use object_store::local::LocalFileSystem;
+use object_store::memory::InMemory;
 use procnote_app::action::ExecutionAction;
 use procnote_app::execution::summarize;
 use procnote_app::repository::{ExecutionRepository, NewExecution, receive_files, record_action};
@@ -47,9 +49,9 @@ fn database_url() -> Option<String> {
     url
 }
 
-async fn store(url: &str, temp: &tempfile::TempDir) -> Arc<PostgresStore> {
+async fn store(url: &str) -> Arc<PostgresStore> {
     Arc::new(
-        PostgresStore::connect(url, temp.path().join("attachments"))
+        PostgresStore::connect(url, Arc::new(InMemory::new()))
             .await
             .unwrap(),
     )
@@ -88,8 +90,7 @@ fn toggle() -> ExecutionAction {
 #[tokio::test(flavor = "multi_thread")]
 async fn records_are_replayed_and_retries_are_recorded_once() {
     let Some(url) = database_url() else { return };
-    let temp = tempfile::tempdir().unwrap();
-    let store = store(&url, &temp).await;
+    let store = store(&url).await;
 
     let (id, retried, loaded, listed) = blocking(move || {
         let id = create(&store);
@@ -122,7 +123,7 @@ async fn records_are_replayed_and_retries_are_recorded_once() {
 async fn received_files_are_stored_once_per_content_and_readable() {
     let Some(url) = database_url() else { return };
     let temp = tempfile::tempdir().unwrap();
-    let store = store(&url, &temp).await;
+    let store = store(&url).await;
     let source = |name: &str, content: &str| {
         let path = temp.path().join(name);
         std::fs::write(&path, content).unwrap();
@@ -159,8 +160,7 @@ async fn received_files_are_stored_once_per_content_and_readable() {
 #[tokio::test(flavor = "multi_thread")]
 async fn concurrent_writers_are_serialized() {
     let Some(url) = database_url() else { return };
-    let temp = tempfile::tempdir().unwrap();
-    let store = store(&url, &temp).await;
+    let store = store(&url).await;
     let id = blocking({
         let store = store.clone();
         move || create(&store)
@@ -203,7 +203,10 @@ async fn the_api_runs_on_postgres_without_writing_to_the_workspace() {
     std::fs::create_dir_all(&procedure_dir).unwrap();
     std::fs::write(procedure_dir.join("template.md"), TEMPLATE).unwrap();
     let workspace: PathBuf = workspace.canonicalize().unwrap();
-    let executions = PostgresStore::connect(&url, temp.path().join("attachments"))
+    let attachment_dir = temp.path().join("attachments");
+    std::fs::create_dir(&attachment_dir).unwrap();
+    let attachments = LocalFileSystem::new_with_prefix(&attachment_dir).unwrap();
+    let executions = PostgresStore::connect(&url, Arc::new(attachments))
         .await
         .unwrap();
     let app = router(ServerConfig {
