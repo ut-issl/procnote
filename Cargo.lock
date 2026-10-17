@@ -3250,6 +3250,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "procnote-app"
+version = "0.0.5"
+dependencies = [
+ "base64 0.23.1",
+ "chrono",
+ "fs2",
+ "log",
+ "procnote-core",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tempfile",
+ "ts-rs",
+ "uuid",
+]
+
+[[package]]
 name = "procnote-core"
 version = "0.0.5"
 dependencies = [
@@ -3289,6 +3306,7 @@ dependencies = [
  "hkdf",
  "log",
  "mailparse",
+ "procnote-app",
  "procnote-core",
  "proptest",
  "qrcode",

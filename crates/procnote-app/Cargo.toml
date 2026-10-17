@@ -1,0 +1,28 @@
+[package]
+name = "procnote-app"
+edition = "2024"
+version.workspace = true
+description.workspace = true
+readme.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+base64.workspace = true
+chrono.workspace = true
+fs2.workspace = true
+log.workspace = true
+procnote-core = { path = "../procnote-core" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+ts-rs.workspace = true
+uuid.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
