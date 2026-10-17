@@ -65,8 +65,7 @@
 
 <script lang="ts">
     import * as api from "#lib/api/commands.js";
-    import { warn } from "@tauri-apps/plugin-log";
-    import { openUrl } from "@tauri-apps/plugin-opener";
+    import { logWarn, openExternalUrl } from "#lib/platform.js";
     import type {
         AttachmentDropPointSessionSummary,
         AttachmentDropPointStatus,
@@ -98,9 +97,9 @@
         if (!(anchor instanceof HTMLAnchorElement)) return;
         event.preventDefault();
         try {
-            await openUrl(anchor.href);
+            await openExternalUrl(anchor.href);
         } catch (e) {
-            await warn(`[StepCard] failed to open link ${anchor.href}: ${e}`);
+            await logWarn(`[StepCard] failed to open link ${anchor.href}: ${e}`);
         }
     }
 
