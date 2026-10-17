@@ -1,6 +1,7 @@
 import { logDebug, logError } from "#lib/platform.js";
 import * as commands from "#lib/api/commands.js";
-import type { ExecutionAction, ExecutionSummary } from "#lib/types/index.js";
+import { newActionMeta } from "#lib/operator.js";
+import type { ActionMeta, ExecutionAction, ExecutionSummary } from "#lib/types/index.js";
 
 export interface ExecutionStoreState {
   summary: ExecutionSummary | null;
@@ -10,9 +11,13 @@ export interface ExecutionStoreState {
 
 /** Backend operations the store needs; injectable for tests. */
 export interface ExecutionApi {
-  startExecution(templatePath: string): Promise<ExecutionSummary>;
+  startExecution(templatePath: string, meta: ActionMeta): Promise<ExecutionSummary>;
   getExecutionState(executionId: string): Promise<ExecutionSummary>;
-  recordAction(executionId: string, action: ExecutionAction): Promise<ExecutionSummary>;
+  recordAction(
+    executionId: string,
+    action: ExecutionAction,
+    meta: ActionMeta,
+  ): Promise<ExecutionSummary>;
 }
 
 export function isFinished(summary: ExecutionSummary | null): boolean {
@@ -32,9 +37,12 @@ export class ExecutionStore {
   #listeners = new Set<() => void>();
   #actionQueue: Promise<boolean> = Promise.resolve(true);
   readonly #api: ExecutionApi;
+  readonly #meta: () => ActionMeta;
 
-  constructor(api: ExecutionApi = commands) {
+  /** `meta` supplies who is acting, with a fresh event ID per call. */
+  constructor(api: ExecutionApi = commands, meta: () => ActionMeta = newActionMeta) {
     this.#api = api;
+    this.#meta = meta;
   }
 
   getState = (): ExecutionStoreState => this.#state;
@@ -50,7 +58,7 @@ export class ExecutionStore {
   }
 
   async start(templatePath: string): Promise<ExecutionSummary | null> {
-    return this.#fetchSummary(() => this.#api.startExecution(templatePath));
+    return this.#fetchSummary(() => this.#api.startExecution(templatePath, this.#meta()));
   }
 
   async load(executionId: string): Promise<ExecutionSummary | null> {
@@ -76,7 +84,7 @@ export class ExecutionStore {
       this.#set({ error: null });
       try {
         void logDebug(`[ExecutionStore] act: ${JSON.stringify(action)}`);
-        const result = await this.#api.recordAction(current.execution_id, action);
+        const result = await this.#api.recordAction(current.execution_id, action, this.#meta());
         void logDebug(
           `[ExecutionStore] act result: steps=${result.steps.length} status=${result.status}`,
         );

@@ -79,6 +79,14 @@ Every `events.jsonl` starts with:
 
 Each subsequent line is a JSON object with `"type"` discriminator, `"at"` timestamp, and variant-specific fields.
 
+A line may also carry these optional fields, common to every event type (`EventMeta`; added in a minor update, so older lines simply lack them):
+
+- `event_id`: client-generated UUID; a request repeating a recorded `event_id` is a retry and is not appended again
+- `recorded_by`: name of the operator who performed the action
+- `device`: stable identifier of the device it was performed on
+
+No event variant may define fields with these names.
+
 ### Error handling
 
 - **Valid JSON but unknown `"type"`**: Error -- the `tool_version` check should have caught this; if we reach here, it's a bug.

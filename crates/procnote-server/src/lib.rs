@@ -18,7 +18,7 @@ use serde::Deserialize;
 use tokio::io::AsyncWriteExt;
 use tower_http::services::{ServeDir, ServeFile};
 
-use procnote_app::action::{AttachmentSource, ExecutionAction};
+use procnote_app::action::{ActionMeta, AttachmentSource, ExecutionAction};
 use procnote_app::execution::{ExecutionSummary, infer_attachment_content_type};
 use procnote_app::template::TemplateSummary;
 use procnote_core::event::types::ExecutionId;
@@ -155,6 +155,8 @@ async fn get_template(
 #[derive(Deserialize)]
 struct StartExecutionRequest {
     template_path: String,
+    #[serde(default)]
+    meta: ActionMeta,
 }
 
 async fn start_execution(
@@ -166,6 +168,7 @@ async fn start_execution(
             &state.procedures_dir,
             std::path::Path::new(&request.template_path),
             env!("CARGO_PKG_VERSION").to_string(),
+            request.meta,
         )
     })
     .await
@@ -181,14 +184,24 @@ async fn get_execution(
         .map(Json)
 }
 
+/// An action plus who performed it; `meta` may be omitted.
+#[derive(Deserialize)]
+struct RecordActionRequest {
+    action: ExecutionAction,
+    #[serde(default)]
+    meta: ActionMeta,
+}
+
 async fn record_action(
     State(state): State<SharedState>,
     Path(id): Path<ExecutionId>,
-    Json(mut action): Json<ExecutionAction>,
+    Json(request): Json<RecordActionRequest>,
 ) -> Result<Json<ExecutionSummary>, ApiError> {
+    let RecordActionRequest { mut action, meta } = request;
     blocking(move || {
         let tokens = state.uploads.authorize(&mut action)?;
-        let result = procnote_app::execution::record_action(&state.procedures_dir, id, action);
+        let result =
+            procnote_app::execution::record_action(&state.procedures_dir, id, action, meta);
         // Uploads are single-use, like the desktop file picker's grants.
         for token in tokens {
             state.uploads.discard(token);

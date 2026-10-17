@@ -789,7 +789,7 @@ mod tests {
 
     use base64::Engine as _;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-    use procnote_core::event::types::Event;
+    use procnote_core::event::types::{Event, EventMeta};
     use procnote_core::execution::ExecutionState;
     use procnote_core::template::parse_template;
 
@@ -842,21 +842,13 @@ version: 1.0.0
         let mut execution_state = ExecutionState::new();
         let initial_events = execution_state.start(&template).unwrap();
         let execution_id = execution_state.execution_id.unwrap();
-        let started_at = initial_events
-            .iter()
-            .find_map(|event| match event {
-                Event::ExecutionStarted { at, .. } => Some(*at),
-                _ => None,
-            })
-            .unwrap();
         let recorded = ExecutionStore::new(workspace.clone())
             .create_execution(
                 &template_path,
                 execution_state,
                 initial_events,
-                started_at,
-                execution_id,
                 "test".to_string(),
+                &EventMeta::default(),
             )
             .unwrap();
 

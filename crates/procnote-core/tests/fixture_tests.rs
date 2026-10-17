@@ -66,3 +66,20 @@ fn v2_all_event_types_parses_successfully() {
     // Step note was recorded
     assert_eq!(state.steps["step-0"].notes.len(), 1);
 }
+
+#[test]
+fn fixtures_written_before_event_meta_read_with_empty_meta() {
+    for name in [
+        "v2_basic_execution.jsonl",
+        "v2_with_reversal_actions.jsonl",
+        "v2_all_event_types.jsonl",
+    ] {
+        let records = procnote_core::event::read_log_records(&fixture_path(name)).unwrap();
+        assert!(
+            records
+                .iter()
+                .all(|record| record.meta == procnote_core::event::EventMeta::default()),
+            "{name}"
+        );
+    }
+}

@@ -1,4 +1,5 @@
 import { Link, Route, Routes } from "react-router";
+import OperatorName from "#lib/components/OperatorName.js";
 import { scoped } from "#lib/utils/cx.js";
 import ExecutionPage from "./pages/ExecutionPage.js";
 import HomePage from "./pages/HomePage.js";
@@ -15,6 +16,7 @@ export default function App() {
           procnote
         </Link>
         <span className={c("app-subtitle")}>Procedure Execution</span>
+        <OperatorName />
       </header>
       <main className={c("app-main")}>
         <Routes>

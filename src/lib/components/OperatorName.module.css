@@ -1,0 +1,45 @@
+.operator {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  font: inherit;
+  font-size: 12px;
+  color: #c8c8dc;
+}
+
+.set {
+  padding: 2px 8px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: none;
+  cursor: pointer;
+}
+
+.set:hover {
+  border-color: #4a4a6a;
+}
+
+.label {
+  color: #8888aa;
+}
+
+.name {
+  font-weight: 600;
+  color: #e0e0e0;
+}
+
+.operator input {
+  padding: 2px 6px;
+  border: 1px solid #4a4a6a;
+  border-radius: 4px;
+  background: #24243e;
+  color: #e0e0e0;
+  font: inherit;
+  font-size: 12px;
+  width: 200px;
+}
+
+.missing input {
+  border-color: #ffb74d;
+}

@@ -158,12 +158,12 @@ async fn records_actions_and_reads_them_back() {
         &fixture.app,
         post_json(
             &format!("/api/executions/{id}/actions"),
-            &json!({
+            &json!({ "action": {
                 "action": "toggle_checkbox",
                 "step_id": "step-0",
                 "checkbox_id": "step-0/cb-0",
                 "checked": true,
-            }),
+            }}),
         ),
     )
     .await;
@@ -176,6 +176,46 @@ async fn records_actions_and_reads_them_back() {
 }
 
 #[tokio::test]
+async fn records_who_performed_an_action_and_ignores_retries() {
+    let fixture = fixture(None);
+    let id = start(&fixture).await;
+    let request = json!({
+        "action": {
+            "action": "toggle_checkbox",
+            "step_id": "step-0",
+            "checkbox_id": "step-0/cb-0",
+            "checked": true,
+        },
+        "meta": {
+            "event_id": "8d0b3a2e-6f0e-4a8e-9c1c-6c1b5b0c2f10",
+            "recorded_by": "Operator A",
+            "device": "browser-1",
+        },
+    });
+    let uri = format!("/api/executions/{id}/actions");
+
+    let (first, _) = send(&fixture.app, post_json(&uri, &request)).await;
+    let (retry, _) = send(&fixture.app, post_json(&uri, &request)).await;
+
+    assert_eq!((first, retry), (StatusCode::OK, StatusCode::OK));
+    let (_, summary) = send(&fixture.app, get(&format!("/api/executions/{id}"))).await;
+    let log = std::fs::read_to_string(
+        Path::new(summary["execution_dir"].as_str().unwrap()).join("events.jsonl"),
+    )
+    .unwrap();
+    let toggles: Vec<&str> = log
+        .lines()
+        .filter(|line| line.contains("checkbox_toggled"))
+        .collect();
+    assert_eq!(toggles.len(), 1, "{log}");
+    assert!(
+        toggles[0].contains(r#""recorded_by":"Operator A""#),
+        "{log}"
+    );
+    assert!(toggles[0].contains(r#""device":"browser-1""#), "{log}");
+}
+
+#[tokio::test]
 async fn invalid_actions_return_an_error_message() {
     let fixture = fixture(None);
     let id = start(&fixture).await;
@@ -184,7 +224,7 @@ async fn invalid_actions_return_an_error_message() {
         &fixture.app,
         post_json(
             &format!("/api/executions/{id}/actions"),
-            &json!({ "action": "skip_step", "step_id": "missing", "reason": "x" }),
+            &json!({ "action": { "action": "skip_step", "step_id": "missing", "reason": "x" } }),
         ),
     )
     .await;
@@ -200,12 +240,12 @@ async fn attaches_uploaded_files_once() {
 
     let (status, sources) = send(&fixture.app, multipart_upload("scan.txt", "hello")).await;
     assert_eq!(status, StatusCode::OK, "{sources}");
-    let attach = json!({
+    let attach = json!({ "action": {
         "action": "add_attachments",
         "step_id": "step-1",
         "input_id": "evidence",
         "files": sources,
-    });
+    }});
     let actions_uri = format!("/api/executions/{id}/actions");
 
     let (status, summary) = send(&fixture.app, post_json(&actions_uri, &attach)).await;
@@ -228,7 +268,7 @@ async fn rejects_attachments_by_server_path() {
         &fixture.app,
         post_json(
             &format!("/api/executions/{id}/actions"),
-            &json!({
+            &json!({ "action": {
                 "action": "add_attachments",
                 "step_id": "step-1",
                 "input_id": "evidence",
@@ -237,7 +277,7 @@ async fn rejects_attachments_by_server_path() {
                     "path": fixture.template_path,
                     "content_type": "text/plain",
                 }],
-            }),
+            }}),
         ),
     )
     .await;
