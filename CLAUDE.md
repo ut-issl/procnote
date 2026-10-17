@@ -23,6 +23,7 @@
 - `Event` enum (internally tagged `"type"` for JSON) — 13 variants covering execution lifecycle, step transitions, data capture, and revert markers.
 - `ExecutionState::apply()` is the single source of truth for state mutations.
 - `ExecutionState::from_events()` reconstructs state by replaying the event log in order; `LogMeta` is ignored by the state machine.
+- Each log line is an `EventRecord`: the event plus optional `EventMeta` (`event_id`, `recorded_by`, `device`) on the same JSON object. The state machine only sees the event; `ExecutionStore` uses `event_id` to ignore retried actions.
 - User-visible reversals are modeled as typed domain events (`InputCleared`, `StepUnskipped`, `ExecutionReopened`, etc.), not generic event-log reverts.
 - `ExecutionState::apply()` exhaustively handles every event variant, so new event types must define their state-machine behavior explicitly.
 - Procedure templates are Markdown files with YAML frontmatter, parsed by `template/parser.rs` using `pulldown-cmark`.

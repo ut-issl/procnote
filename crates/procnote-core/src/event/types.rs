@@ -16,6 +16,41 @@ pub struct AttachmentRecord {
 /// Unique identifier for an execution.
 pub type ExecutionId = Uuid;
 
+/// Who recorded an event, on which device, and an ID for deduplicating retries.
+///
+/// Stored on the same JSONL line as the event's own fields. Every field is
+/// optional so logs written before these fields existed read unchanged.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EventMeta {
+    /// Client-generated ID; a request carrying an already-recorded ID is a retry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_id: Option<Uuid>,
+    /// Name of the operator who performed the action.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recorded_by: Option<String>,
+    /// Stable identifier of the device the action was performed on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device: Option<String>,
+}
+
+/// One line of an event log: an event plus its [`EventMeta`].
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct EventRecord {
+    #[serde(flatten)]
+    pub event: Event,
+    #[serde(flatten)]
+    pub meta: EventMeta,
+}
+
+impl From<Event> for EventRecord {
+    fn from(event: Event) -> Self {
+        Self {
+            event,
+            meta: EventMeta::default(),
+        }
+    }
+}
+
 /// Completion status of an execution.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ts_rs::TS)]
 #[ts(export)]

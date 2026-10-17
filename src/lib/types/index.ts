@@ -1,5 +1,6 @@
 // Re-export generated types from ts-rs.
 // Regenerate with: cargo test --workspace export_bindings_
+export type { ActionMeta } from "./generated/ActionMeta";
 export type { AttachmentDropPointSessionSummary } from "./generated/AttachmentDropPointSessionSummary";
 export type { AttachmentDropPointStatus } from "./generated/AttachmentDropPointStatus";
 export type { AttachmentSource } from "./generated/AttachmentSource";
