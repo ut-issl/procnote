@@ -123,6 +123,7 @@ pub fn router(config: ServerConfig) -> std::io::Result<Router> {
             post(start_collab_execution),
         )
         .route("/collab/templates/{id}/markdown", get(collab_markdown))
+        .route("/collab/templates/{id}/template", get(collab_template))
         .route("/executions", get(list_executions).post(start_execution))
         .route(
             "/executions/{id}",
@@ -401,6 +402,21 @@ async fn start_collab_execution(
     })
     .await
     .map(Json)
+}
+
+/// A shared template as it is now, if it can be executed: what a device keeps
+/// to start executions of it offline.
+async fn collab_template(
+    State(state): State<SharedState>,
+    Path(id): Path<uuid::Uuid>,
+) -> Result<Json<ProcedureTemplate>, ApiError> {
+    collab(&state)?
+        .current(id)
+        .await
+        .map_err(|e| ApiError::new(StatusCode::BAD_GATEWAY, e))?
+        .usable()
+        .map(Json)
+        .map_err(ApiError::bad_request)
 }
 
 /// A shared template as procnote Markdown (`template.md`), e.g. to keep it in git.

@@ -1,5 +1,6 @@
 import { logDebug, logError } from "#lib/platform.js";
 import * as commands from "#lib/api/commands.js";
+import { localExecutions } from "#lib/offline/index.js";
 import { newActionMeta } from "#lib/operator.js";
 import type { ActionMeta, ExecutionAction, ExecutionSummary } from "#lib/types/index.js";
 
@@ -19,7 +20,16 @@ export interface ExecutionApi {
     action: ExecutionAction,
     meta: ActionMeta,
   ): Promise<ExecutionSummary>;
-  watchExecution(executionId: string, onSeq: (seq: number) => void): () => void;
+  /**
+   * Follow changes to an execution: `onSeq` with the server's sequence number,
+   * or `onSummary` with a new summary that replaces the held one even if its
+   * sequence is lower (a local-first API whose optimistic events were refused).
+   */
+  watchExecution(
+    executionId: string,
+    onSeq: (seq: number) => void,
+    onSummary?: (summary: ExecutionSummary) => void,
+  ): () => void;
 }
 
 export function isFinished(summary: ExecutionSummary | null): boolean {
@@ -124,10 +134,16 @@ export class ExecutionStore {
    * that stops following.
    */
   watch(executionId: string): () => void {
-    return this.#api.watchExecution(executionId, (seq) => {
-      const current = this.#state.summary;
-      if (current?.execution_id === executionId && seq > current.seq) void this.refresh();
-    });
+    return this.#api.watchExecution(
+      executionId,
+      (seq) => {
+        const current = this.#state.summary;
+        if (current?.execution_id === executionId && seq > current.seq) void this.refresh();
+      },
+      (summary) => {
+        if (this.#state.summary?.execution_id === executionId) this.#set({ summary });
+      },
+    );
   }
 
   async act(action: ExecutionAction): Promise<boolean> {
@@ -168,4 +184,5 @@ export class ExecutionStore {
   }
 }
 
-export const executionStore = new ExecutionStore();
+/** In a browser, recording is local-first (lib/offline); the desktop app talks to its backend. */
+export const executionStore = new ExecutionStore(localExecutions ?? commands);

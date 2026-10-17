@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
 import * as api from "#lib/api/commands.js";
 import TemplateList from "#lib/components/TemplateList.js";
+import { fetchOrKept, localExecutions } from "#lib/offline/index.js";
+import { isUnreachable } from "#lib/offline/localExecutions.js";
 import { logWarn } from "#lib/platform.js";
 import { executionStore } from "#lib/stores/execution.js";
 import { useExecutionStore } from "#lib/stores/useExecutionStore.js";
@@ -11,6 +13,22 @@ import { formatTimestamp } from "#lib/utils/format.js";
 import styles from "./HomePage.module.css";
 
 const c = scoped(styles);
+
+/**
+ * The server's executions plus those kept on this device that the server
+ * doesn't have yet; only the device's while the server can't be reached.
+ */
+async function listExecutions(): Promise<ExecutionSummary[]> {
+  const kept = (await localExecutions?.summaries()) ?? [];
+  try {
+    const listed = await api.listExecutions();
+    const known = new Set(listed.map((e) => e.execution_id));
+    return [...listed, ...kept.filter((e) => !known.has(e.execution_id))];
+  } catch (error) {
+    if (localExecutions && isUnreachable(error)) return kept;
+    throw error;
+  }
+}
 
 export default function HomePage() {
   const navigate = useNavigate();
@@ -27,8 +45,10 @@ export default function HomePage() {
     let cancelled = false;
     void (async () => {
       try {
-        const loaded = await api.listTemplates();
+        const loaded = await fetchOrKept("templates", api.listTemplates);
         if (!cancelled) setTemplates(loaded);
+        // Keep their contents, to start executions of them offline.
+        void localExecutions?.keepTemplates(loaded.map((t) => t.path)).catch(() => undefined);
       } catch (e) {
         if (!cancelled) setError(String(e));
       } finally {
@@ -36,14 +56,17 @@ export default function HomePage() {
       }
 
       try {
-        const loaded = await api.listCollabTemplates();
+        const loaded = await fetchOrKept("shared-templates", api.listCollabTemplates);
         if (!cancelled) setShared(loaded);
+        void localExecutions
+          ?.keepSharedTemplates((loaded ?? []).map((t) => t.id))
+          .catch(() => undefined);
       } catch (e) {
         void logWarn(`[home] listCollabTemplates failed: ${e}`);
       }
 
       try {
-        const loaded = await api.listExecutions();
+        const loaded = await listExecutions();
         if (!cancelled) setExecutions(loaded);
       } catch (e) {
         void logWarn(`[home] listExecutions failed: ${e}`);
