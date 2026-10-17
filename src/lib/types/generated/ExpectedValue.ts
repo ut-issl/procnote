@@ -3,4 +3,4 @@
 /**
  * Expected value for validation — either a range or an exact match.
  */
-export type ExpectedValue = { min: number; max: number } | string;
+export type ExpectedValue = { min: number, max: number, } | string;

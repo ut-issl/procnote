@@ -197,6 +197,29 @@ pub enum Event {
         input_id: String,
         reason: String,
     },
+    /// A file arrived through the execution's upload link. It waits in the
+    /// execution's inbox until it is assigned to an attachment input.
+    AttachmentReceived {
+        at: DateTime<Utc>,
+        execution_id: ExecutionId,
+        attachment: AttachmentRecord,
+    },
+    /// An inbox file was assigned to an attachment input.
+    AttachmentAssigned {
+        at: DateTime<Utc>,
+        execution_id: ExecutionId,
+        step_id: String,
+        input_id: String,
+        path: String,
+    },
+    /// An attached file was taken off its input and returned to the inbox.
+    AttachmentUnassigned {
+        at: DateTime<Utc>,
+        execution_id: ExecutionId,
+        step_id: String,
+        input_id: String,
+        path: String,
+    },
 
     // -- Name --
     ExecutionRenamed {
@@ -223,6 +246,10 @@ impl Event {
     /// This match is exhaustive — adding a new `Event` variant without
     /// updating this method will cause a compile error.
     #[must_use]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one arm per event variant, kept exhaustive on purpose"
+    )]
     pub fn description(&self) -> String {
         match self {
             Self::ExecutionStarted { procedure_id, .. } => {
@@ -307,6 +334,15 @@ impl Event {
                 input_id, reason, ..
             } => {
                 format!("Removed attachment {input_id}: {reason}")
+            }
+            Self::AttachmentReceived { attachment, .. } => {
+                format!("Received {} into the inbox", attachment.filename)
+            }
+            Self::AttachmentAssigned { input_id, path, .. } => {
+                format!("Assigned {path} to {input_id}")
+            }
+            Self::AttachmentUnassigned { input_id, path, .. } => {
+                format!("Returned {path} from {input_id} to the inbox")
             }
             Self::ExecutionRenamed { name, .. } => {
                 format!("Renamed execution to: {name}")
