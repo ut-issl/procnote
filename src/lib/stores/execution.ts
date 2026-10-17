@@ -18,6 +18,7 @@ export interface ExecutionApi {
     action: ExecutionAction,
     meta: ActionMeta,
   ): Promise<ExecutionSummary>;
+  watchExecution(executionId: string, onSeq: (seq: number) => void): () => void;
 }
 
 export function isFinished(summary: ExecutionSummary | null): boolean {
@@ -36,6 +37,8 @@ export class ExecutionStore {
   #state: ExecutionStoreState = { summary: null, loading: false, error: null };
   #listeners = new Set<() => void>();
   #actionQueue: Promise<boolean> = Promise.resolve(true);
+  #refreshing = false;
+  #refreshAgain = false;
   readonly #api: ExecutionApi;
   readonly #meta: () => ActionMeta;
 
@@ -77,6 +80,50 @@ export class ExecutionStore {
     }
   }
 
+  /**
+   * Take a summary from the backend unless it is older than the one held:
+   * responses can arrive out of order with live updates.
+   */
+  #accept(next: ExecutionSummary) {
+    const current = this.#state.summary;
+    if (current && current.execution_id === next.execution_id && next.seq < current.seq) return;
+    this.#set({ summary: next });
+  }
+
+  /** Refetch the current execution; overlapping requests are coalesced. */
+  async refresh(): Promise<void> {
+    if (this.#refreshing) {
+      this.#refreshAgain = true;
+      return;
+    }
+    this.#refreshing = true;
+    try {
+      do {
+        this.#refreshAgain = false;
+        const current = this.#state.summary;
+        if (!current) return;
+        try {
+          this.#accept(await this.#api.getExecutionState(current.execution_id));
+        } catch (e) {
+          void logError(`[ExecutionStore] refresh error: ${e}`);
+        }
+      } while (this.#refreshAgain);
+    } finally {
+      this.#refreshing = false;
+    }
+  }
+
+  /**
+   * Follow changes other clients make to `executionId`. Returns a function
+   * that stops following.
+   */
+  watch(executionId: string): () => void {
+    return this.#api.watchExecution(executionId, (seq) => {
+      const current = this.#state.summary;
+      if (current?.execution_id === executionId && seq > current.seq) void this.refresh();
+    });
+  }
+
   async act(action: ExecutionAction): Promise<boolean> {
     const run = async (): Promise<boolean> => {
       const current = this.#state.summary;
@@ -88,7 +135,7 @@ export class ExecutionStore {
         void logDebug(
           `[ExecutionStore] act result: steps=${result.steps.length} status=${result.status}`,
         );
-        this.#set({ summary: result });
+        this.#accept(result);
         return true;
       } catch (e) {
         void logError(`[ExecutionStore] act error: ${e}`);

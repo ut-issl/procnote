@@ -170,6 +170,9 @@ pub struct ExecutionState {
     pub step_order: Vec<String>,
     pub steps: HashMap<String, StepState>,
     pub global_notes: Vec<RecordedNote>,
+    /// Number of events applied so far. It grows by one per recorded event,
+    /// so clients can use it as a cursor to tell whether they are behind.
+    pub applied_events: u64,
 }
 
 impl ExecutionState {
@@ -189,6 +192,7 @@ impl ExecutionState {
             step_order: Vec::new(),
             steps: HashMap::new(),
             global_notes: Vec::new(),
+            applied_events: 0,
         }
     }
 
@@ -471,6 +475,7 @@ impl ExecutionState {
             Event::LogMeta { .. } => return Err(ExecutionError::ReplayMetadataEvent),
         }
         self.updated_at = Some(transition_event_at(event));
+        self.applied_events += 1;
         Ok(())
     }
 
@@ -1358,6 +1363,23 @@ mod tests {
         assert_eq!(state.steps["step-0"].heading, "Preconditions");
         assert_eq!(state.steps["step-1"].heading, "Step 1: Power On");
         assert_eq!(state.steps["step-2"].heading, "Postconditions");
+    }
+
+    #[test]
+    fn applied_events_counts_every_applied_event_and_matches_replay() {
+        let template = sample_template();
+        let mut state = ExecutionState::new();
+        let mut events = state.start(&template).unwrap();
+        events.push(state.rename_event("renamed").unwrap());
+        state.apply(events.last().unwrap()).unwrap();
+        let rejected = state.skip_step_event("no-such-step", "x");
+
+        assert!(rejected.is_err());
+        assert_eq!(state.applied_events, 6);
+        assert_eq!(
+            ExecutionState::from_events(&events).unwrap().applied_events,
+            6
+        );
     }
 
     #[test]
