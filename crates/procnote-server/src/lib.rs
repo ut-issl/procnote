@@ -29,6 +29,8 @@ use access::{AccessConfig, AccessVerifier, Identity, token_from_headers};
 use live::LiveUpdates;
 use procnote_app::action::{ActionMeta, AttachmentSource, ExecutionAction};
 use procnote_app::execution::{ExecutionSummary, infer_attachment_content_type};
+use procnote_app::persistence::execution_store::ExecutionStore;
+use procnote_app::repository::ExecutionRepository;
 use procnote_app::template::TemplateSummary;
 use procnote_core::event::types::ExecutionId;
 use procnote_core::template::types::ProcedureTemplate;
@@ -63,6 +65,7 @@ pub enum Auth {
 
 struct AppState {
     procedures_dir: PathBuf,
+    executions: Box<dyn ExecutionRepository>,
     uploads: UploadStore,
     links: UploadLinks,
     live: LiveUpdates,
@@ -74,6 +77,7 @@ type SharedState = Arc<AppState>;
 /// Build the application router.
 pub fn router(config: ServerConfig) -> std::io::Result<Router> {
     let state = Arc::new(AppState {
+        executions: Box::new(ExecutionStore::new(config.procedures_dir.clone())),
         procedures_dir: config.procedures_dir,
         uploads: UploadStore::new(config.upload_dir)?,
         links: UploadLinks::new(config.state_dir.join("upload-links"))?,
@@ -237,7 +241,7 @@ async fn list_templates(
 async fn list_executions(
     State(state): State<SharedState>,
 ) -> Result<Json<Vec<ExecutionSummary>>, ApiError> {
-    blocking(move || procnote_app::execution::list_executions(&state.procedures_dir))
+    blocking(move || procnote_app::execution::list_executions(state.executions.as_ref()))
         .await
         .map(Json)
 }
@@ -276,6 +280,7 @@ async fn start_execution(
     let meta = attribute(request.meta, identity);
     blocking(move || {
         procnote_app::execution::start_execution(
+            state.executions.as_ref(),
             &state.procedures_dir,
             std::path::Path::new(&request.template_path),
             env!("CARGO_PKG_VERSION").to_string(),
@@ -290,7 +295,7 @@ async fn get_execution(
     State(state): State<SharedState>,
     Path(id): Path<ExecutionId>,
 ) -> Result<Json<ExecutionSummary>, ApiError> {
-    blocking(move || procnote_app::execution::get_execution(&state.procedures_dir, id))
+    blocking(move || procnote_app::execution::get_execution(state.executions.as_ref(), id))
         .await
         .map(Json)
 }
@@ -315,7 +320,7 @@ async fn record_action(
     let summary = blocking(move || {
         let tokens = state.uploads.authorize(&mut action)?;
         let result =
-            procnote_app::execution::record_action(&state.procedures_dir, id, action, meta);
+            procnote_app::execution::record_action(state.executions.as_ref(), id, action, meta);
         // Uploads are single-use, like the desktop file picker's grants.
         for token in tokens {
             state.uploads.discard(token);
@@ -340,7 +345,7 @@ async fn live_updates(
 
 async fn current_seq(state: &SharedState, id: ExecutionId) -> Result<u64, ApiError> {
     let state = state.clone();
-    blocking(move || procnote_app::execution::get_execution(&state.procedures_dir, id))
+    blocking(move || procnote_app::execution::get_execution(state.executions.as_ref(), id))
         .await
         .map(|summary| summary.seq)
 }
@@ -396,7 +401,11 @@ async fn attachment_preview(
     Query(query): Query<PreviewQuery>,
 ) -> Result<Json<Option<String>>, ApiError> {
     blocking(move || {
-        procnote_app::execution::attachment_preview_data_url(&state.procedures_dir, id, &query.path)
+        procnote_app::execution::attachment_preview_data_url(
+            state.executions.as_ref(),
+            id,
+            &query.path,
+        )
     })
     .await
     .map(Json)
@@ -510,7 +519,7 @@ async fn create_upload_link(
     Path(id): Path<ExecutionId>,
 ) -> Result<Json<UploadLinkResponse>, ApiError> {
     blocking(move || {
-        let summary = procnote_app::execution::get_execution(&state.procedures_dir, id)?;
+        let summary = procnote_app::execution::get_execution(state.executions.as_ref(), id)?;
         if summary.status != "active" {
             return Err("upload links are only available for active executions".to_string());
         }
@@ -549,7 +558,7 @@ async fn upload_link_target(
     Path(token): Path<String>,
 ) -> Result<Json<UploadTarget>, ApiError> {
     let id = resolve_link(&state, &token)?;
-    blocking(move || procnote_app::execution::get_execution(&state.procedures_dir, id))
+    blocking(move || procnote_app::execution::get_execution(state.executions.as_ref(), id))
         .await
         .map(|summary| {
             Json(UploadTarget {
@@ -592,12 +601,12 @@ async fn upload_to_link(
     let total = files.len();
     let live_state = state.clone();
     let (summary, received) = blocking(move || {
-        let sources = files
+        let sources: Vec<_> = files
             .iter()
             .map(|file| (file.path.clone(), file.filename.clone()))
             .collect();
         let result =
-            procnote_app::execution::receive_files(&state.procedures_dir, id, sources, meta);
+            procnote_app::execution::receive_files(state.executions.as_ref(), id, &sources, meta);
         for file in files {
             state.uploads.discard(file.token);
         }

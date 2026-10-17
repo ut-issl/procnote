@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use crate::drop_point::{DropPointClient, DropPointConfig};
+use procnote_app::persistence::execution_store::ExecutionStore;
 
 /// Application state managed by Tauri.
 pub struct AppState {
@@ -19,6 +20,11 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// The execution repository over `procedures_dir`.
+    pub fn executions(&self) -> ExecutionStore {
+        ExecutionStore::new(self.procedures_dir.clone())
+    }
+
     pub fn grant_attachment_path(&self, path: PathBuf) -> Result<(), String> {
         self.attachment_grants
             .lock()

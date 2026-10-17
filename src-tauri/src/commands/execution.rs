@@ -20,7 +20,7 @@ pub fn get_attachment_preview_data_url(
     execution_id: ExecutionId,
     path: String,
 ) -> Result<Option<String>, String> {
-    procnote_app::execution::attachment_preview_data_url(&state.procedures_dir, execution_id, &path)
+    procnote_app::execution::attachment_preview_data_url(&state.executions(), execution_id, &path)
 }
 
 fn authorize_attachment_action(
@@ -127,6 +127,7 @@ pub fn start_execution(
     meta: Option<ActionMeta>,
 ) -> Result<ExecutionSummary, String> {
     procnote_app::execution::start_execution(
+        &state.executions(),
         &state.procedures_dir,
         Path::new(&template_path),
         env!("CARGO_PKG_VERSION").to_string(),
@@ -148,7 +149,7 @@ pub fn record_action(
 ) -> Result<ExecutionSummary, String> {
     authorize_attachment_action(&state, &mut action)?;
     procnote_app::execution::record_action(
-        &state.procedures_dir,
+        &state.executions(),
         execution_id,
         action,
         meta.unwrap_or_default(),
@@ -165,7 +166,7 @@ pub fn get_execution_state(
     state: State<'_, AppState>,
     execution_id: ExecutionId,
 ) -> Result<ExecutionSummary, String> {
-    procnote_app::execution::get_execution(&state.procedures_dir, execution_id)
+    procnote_app::execution::get_execution(&state.executions(), execution_id)
 }
 
 /// List all executions by scanning each procedure's `.executions/` subdirectory.
@@ -175,5 +176,5 @@ pub fn get_execution_state(
     reason = "Tauri command handlers require owned parameters"
 )]
 pub fn list_executions(state: State<'_, AppState>) -> Result<Vec<ExecutionSummary>, String> {
-    procnote_app::execution::list_executions(&state.procedures_dir)
+    procnote_app::execution::list_executions(&state.executions())
 }
