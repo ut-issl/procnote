@@ -86,6 +86,18 @@ pub enum ExecutionAction {
         input_id: String,
         reason: String,
     },
+    /// Assign a file from the execution's inbox to an attachment input.
+    AssignAttachment {
+        step_id: String,
+        input_id: String,
+        path: String,
+    },
+    /// Return an attached file to the execution's inbox.
+    UnassignAttachment {
+        step_id: String,
+        input_id: String,
+        path: String,
+    },
     Complete {
         status: CompletionStatus,
     },
@@ -178,6 +190,8 @@ impl ExecutionAction {
             | Self::RemoveAttachmentFile { .. }
             | Self::ClearAttachments { .. }
             | Self::RemoveAttachment { .. }
+            | Self::AssignAttachment { .. }
+            | Self::UnassignAttachment { .. }
             | Self::Complete { .. }
             | Self::Abort { .. }
             | Self::RenameExecution { .. }

@@ -5,4 +5,11 @@ import type { InputType } from "./InputType";
 /**
  * Definition of an input field that operators fill in during execution.
  */
-export type InputDefinition = { id: string, label: string, type: InputType, unit?: string, options: Array<string>, expected?: ExpectedValue, };
+export type InputDefinition = {
+  id: string;
+  label: string;
+  type: InputType;
+  unit?: string;
+  options: Array<string>;
+  expected?: ExpectedValue;
+};

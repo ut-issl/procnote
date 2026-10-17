@@ -146,14 +146,24 @@ fn render_inbox(state: &ExecutionState, output: &mut String) {
         return;
     }
 
-    push_fmt(output, format_args!("## Unassigned files
+    push_fmt(
+        output,
+        format_args!(
+            "## Unassigned files
 
-"));
+"
+        ),
+    );
     for file in &state.inbox {
         render_attachment(file, output);
     }
-    push_fmt(output, format_args!("
-"));
+    push_fmt(
+        output,
+        format_args!(
+            "
+"
+        ),
+    );
 }
 
 fn render_step(number: usize, step: &StepState, output: &mut String) {
