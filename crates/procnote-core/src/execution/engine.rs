@@ -143,6 +143,15 @@ impl RecordedAttachment {
             at,
         }
     }
+
+    fn to_record(&self) -> AttachmentRecord {
+        AttachmentRecord {
+            filename: self.filename.clone(),
+            path: self.path.clone(),
+            content_type: self.content_type.clone(),
+            sha256: self.sha256.clone(),
+        }
+    }
 }
 
 /// A recorded note.
@@ -170,6 +179,8 @@ pub struct ExecutionState {
     pub step_order: Vec<String>,
     pub steps: HashMap<String, StepState>,
     pub global_notes: Vec<RecordedNote>,
+    /// Files received through the upload link and not assigned to an input.
+    pub inbox: Vec<RecordedAttachment>,
     /// Number of events applied so far. It grows by one per recorded event,
     /// so clients can use it as a cursor to tell whether they are behind.
     pub applied_events: u64,
@@ -192,6 +203,7 @@ impl ExecutionState {
             step_order: Vec::new(),
             steps: HashMap::new(),
             global_notes: Vec::new(),
+            inbox: Vec::new(),
             applied_events: 0,
         }
     }
@@ -463,6 +475,55 @@ impl ExecutionState {
                 self.require_active()?;
                 let step = self.get_present_step_mut(step_id)?;
                 clear_attachments_from_step(step, input_id)?;
+            }
+
+            Event::AttachmentReceived { at, attachment, .. } => {
+                self.require_active()?;
+                validate_attachment_path(&attachment.path)?;
+                if self.has_attachment_path(&attachment.path) {
+                    return Err(ExecutionError::AttachmentAlreadyExists(
+                        attachment.path.clone(),
+                    ));
+                }
+                self.inbox
+                    .push(RecordedAttachment::from_record_at(attachment, *at));
+            }
+            Event::AttachmentAssigned {
+                at,
+                step_id,
+                input_id,
+                path,
+                ..
+            } => {
+                self.require_active()?;
+                let index = self
+                    .inbox
+                    .iter()
+                    .position(|file| &file.path == path)
+                    .ok_or_else(|| ExecutionError::AttachmentNotFound(path.clone()))?;
+                let record = self.inbox[index].to_record();
+                let step = self.get_present_step_mut(step_id)?;
+                add_attachments_to_step(step, input_id, &[record], *at)?;
+                self.inbox.remove(index);
+            }
+            Event::AttachmentUnassigned {
+                at,
+                step_id,
+                input_id,
+                path,
+                ..
+            } => {
+                self.require_active()?;
+                let step = self.get_present_step_mut(step_id)?;
+                let file = step
+                    .attachments
+                    .get(input_id)
+                    .and_then(|files| files.iter().find(|file| &file.path == path))
+                    .ok_or_else(|| ExecutionError::AttachmentNotFound(path.clone()))?
+                    .to_record();
+                remove_attachment_file_from_step(step, input_id, path)?;
+                self.inbox
+                    .push(RecordedAttachment::from_record_at(&file, *at));
             }
 
             Event::ExecutionRenamed { name, .. } => {
@@ -849,6 +910,65 @@ impl ExecutionState {
         Ok(event)
     }
 
+    /// Whether a file with this stored path is already in the inbox or on an input.
+    #[must_use]
+    pub fn has_attachment_path(&self, path: &str) -> bool {
+        self.inbox.iter().any(|file| file.path == path)
+            || self.steps.values().any(|step| {
+                step.attachments
+                    .values()
+                    .flatten()
+                    .any(|file| file.path == path)
+            })
+    }
+
+    /// Build and validate an event receiving a file into the inbox.
+    pub fn receive_attachment_event(
+        &self,
+        attachment: AttachmentRecord,
+    ) -> Result<Event, ExecutionError> {
+        self.require_active()?;
+        self.validated_candidate(Event::AttachmentReceived {
+            at: Utc::now(),
+            execution_id: self.require_execution_id()?,
+            attachment,
+        })
+    }
+
+    /// Build and validate an event assigning an inbox file to an attachment input.
+    pub fn assign_attachment_event(
+        &self,
+        step_id: &str,
+        input_id: &str,
+        path: &str,
+    ) -> Result<Event, ExecutionError> {
+        self.require_active()?;
+        self.validated_candidate(Event::AttachmentAssigned {
+            at: Utc::now(),
+            execution_id: self.require_execution_id()?,
+            step_id: step_id.to_string(),
+            input_id: input_id.to_string(),
+            path: path.to_string(),
+        })
+    }
+
+    /// Build and validate an event returning an attached file to the inbox.
+    pub fn unassign_attachment_event(
+        &self,
+        step_id: &str,
+        input_id: &str,
+        path: &str,
+    ) -> Result<Event, ExecutionError> {
+        self.require_active()?;
+        self.validated_candidate(Event::AttachmentUnassigned {
+            at: Utc::now(),
+            execution_id: self.require_execution_id()?,
+            step_id: step_id.to_string(),
+            input_id: input_id.to_string(),
+            path: path.to_string(),
+        })
+    }
+
     /// Build and validate a single attachment-file removal event without mutating this state.
     pub fn remove_attachment_file_event(
         &self,
@@ -1121,6 +1241,9 @@ fn transition_event_at(event: &Event) -> DateTime<Utc> {
         | Event::AttachmentFileRemoved { at, .. }
         | Event::AttachmentsCleared { at, .. }
         | Event::AttachmentRemoved { at, .. }
+        | Event::AttachmentReceived { at, .. }
+        | Event::AttachmentAssigned { at, .. }
+        | Event::AttachmentUnassigned { at, .. }
         | Event::ExecutionRenamed { at, .. } => *at,
         Event::LogMeta { .. } => unreachable!("LogMeta is rejected before timestamp extraction"),
     }
@@ -1432,6 +1555,9 @@ mod tests {
             | Event::AttachmentFileRemoved { at, .. }
             | Event::AttachmentsCleared { at, .. }
             | Event::AttachmentRemoved { at, .. }
+            | Event::AttachmentReceived { at, .. }
+            | Event::AttachmentAssigned { at, .. }
+            | Event::AttachmentUnassigned { at, .. }
             | Event::ExecutionRenamed { at, .. }
             | Event::LogMeta { at, .. } => *at,
         }
@@ -1620,6 +1746,122 @@ mod tests {
         assert_eq!(
             state.status,
             ExecutionStatus::Finished(CompletionStatus::Aborted)
+        );
+    }
+
+    fn inbox_record(name: &str) -> AttachmentRecord {
+        AttachmentRecord {
+            filename: format!("{name}.jpg"),
+            path: format!("attachments/{name}.jpg"),
+            content_type: "image/jpeg".to_string(),
+            sha256: format!("{name}-hash"),
+        }
+    }
+
+    fn apply_new(
+        state: &mut ExecutionState,
+        build: impl FnOnce(&ExecutionState) -> Result<Event, ExecutionError>,
+    ) -> Event {
+        let event = build(state).unwrap();
+        state.apply(&event).unwrap();
+        event
+    }
+
+    #[test]
+    fn received_files_wait_in_the_inbox_until_assigned() {
+        let mut state = ExecutionState::new();
+        let mut events = state.start(&sample_template()).unwrap();
+        events.push(apply_new(&mut state, |s| {
+            s.receive_attachment_event(inbox_record("a"))
+        }));
+        events.push(apply_new(&mut state, |s| {
+            s.receive_attachment_event(inbox_record("b"))
+        }));
+        assert_eq!(state.inbox.len(), 2);
+
+        events.push(apply_new(&mut state, |s| {
+            s.assign_attachment_event("step-1", "photos", "attachments/a.jpg")
+        }));
+
+        assert_eq!(state.inbox.len(), 1);
+        assert_eq!(state.inbox[0].path, "attachments/b.jpg");
+        assert_eq!(
+            state.steps["step-1"].attachments["photos"][0].filename,
+            "a.jpg"
+        );
+        let replayed = ExecutionState::from_events(&events).unwrap();
+        assert_eq!(replayed.inbox, state.inbox);
+        assert_eq!(
+            replayed.steps["step-1"].attachments["photos"],
+            state.steps["step-1"].attachments["photos"]
+        );
+    }
+
+    #[test]
+    fn unassigning_returns_the_file_to_the_inbox() {
+        let mut state = ExecutionState::new();
+        state.start(&sample_template()).unwrap();
+        apply_new(&mut state, |s| {
+            s.receive_attachment_event(inbox_record("a"))
+        });
+        apply_new(&mut state, |s| {
+            s.assign_attachment_event("step-1", "photos", "attachments/a.jpg")
+        });
+
+        apply_new(&mut state, |s| {
+            s.unassign_attachment_event("step-1", "photos", "attachments/a.jpg")
+        });
+
+        assert!(!state.steps["step-1"].attachments.contains_key("photos"));
+        assert_eq!(state.inbox.len(), 1);
+        assert_eq!(state.inbox[0].sha256, "a-hash");
+    }
+
+    #[test]
+    fn inbox_events_are_validated() {
+        let mut state = ExecutionState::new();
+        state.start(&sample_template()).unwrap();
+        apply_new(&mut state, |s| {
+            s.receive_attachment_event(inbox_record("a"))
+        });
+
+        assert_eq!(
+            state
+                .receive_attachment_event(inbox_record("a"))
+                .unwrap_err(),
+            ExecutionError::AttachmentAlreadyExists("attachments/a.jpg".to_string())
+        );
+        assert_eq!(
+            state
+                .assign_attachment_event("step-1", "photos", "attachments/missing.jpg")
+                .unwrap_err(),
+            ExecutionError::AttachmentNotFound("attachments/missing.jpg".to_string())
+        );
+        assert!(
+            state
+                .assign_attachment_event("step-1", "current-draw", "attachments/a.jpg")
+                .is_err(),
+            "only attachment inputs take files"
+        );
+        assert!(
+            state
+                .unassign_attachment_event("step-1", "photos", "attachments/a.jpg")
+                .is_err(),
+            "the file is not on that input"
+        );
+    }
+
+    #[test]
+    fn a_finished_execution_receives_no_files() {
+        let mut state = ExecutionState::new();
+        state.start(&sample_template()).unwrap();
+        state.complete(CompletionStatus::Pass).unwrap();
+
+        assert_eq!(
+            state
+                .receive_attachment_event(inbox_record("a"))
+                .unwrap_err(),
+            ExecutionError::AlreadyFinished
         );
     }
 

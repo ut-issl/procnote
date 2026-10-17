@@ -119,6 +119,56 @@ export function watchExecution(executionId: string, onSeq: (seq: number) => void
   };
 }
 
+// --- Upload links (browser only; the desktop app uses DropPoint) ---
+
+export async function getUploadLink(executionId: string): Promise<string | null> {
+  const { token } = await request<{ token: string | null }>(
+    `/executions/${encodeURIComponent(executionId)}/upload-link`,
+  );
+  return token;
+}
+
+export async function createUploadLink(executionId: string): Promise<string> {
+  const { token } = await postJson<{ token: string }>(
+    `/executions/${encodeURIComponent(executionId)}/upload-link`,
+    {},
+  );
+  return token;
+}
+
+export async function revokeUploadLink(executionId: string): Promise<void> {
+  await request(`/executions/${encodeURIComponent(executionId)}/upload-link`, {
+    method: "DELETE",
+  });
+}
+
+export interface UploadTarget {
+  name: string;
+  procedure_title: string;
+  active: boolean;
+}
+
+/** What an upload link points at, as a phone may see it. */
+export function getUploadTarget(token: string): Promise<UploadTarget> {
+  return request(`/upload-links/${encodeURIComponent(token)}`);
+}
+
+/** Send files to an execution's inbox through its upload link. */
+export function uploadToLink(
+  token: string,
+  files: File[],
+  meta: ActionMeta,
+): Promise<{ received: number; skipped: number }> {
+  const form = new FormData();
+  if (meta.recorded_by) form.append("recorded_by", meta.recorded_by);
+  if (meta.device) form.append("device", meta.device);
+  for (const file of files) form.append("file", file, file.name);
+  return request(`/upload-links/${encodeURIComponent(token)}/files`, {
+    method: "POST",
+    body: form,
+  });
+}
+
 export async function getAttachmentPreviewDataUrl(
   executionId: string,
   path: string,

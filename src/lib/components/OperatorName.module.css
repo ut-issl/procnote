@@ -37,7 +37,7 @@
   color: #e0e0e0;
   font: inherit;
   font-size: 12px;
-  width: 200px;
+  width: min(200px, 45vw);
 }
 
 .missing input {

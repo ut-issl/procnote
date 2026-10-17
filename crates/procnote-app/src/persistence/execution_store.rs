@@ -184,6 +184,65 @@ impl ExecutionStore {
             .map_err(|error| error.to_string())?
     }
 
+    /// Store files into the execution and receive them into its inbox.
+    ///
+    /// Each `(source, filename)` is copied under `attachments/`. A file whose
+    /// content is already in the execution is skipped. Returns the new state
+    /// and how many files were received.
+    pub fn receive_files(
+        &self,
+        execution_id: ExecutionId,
+        files: Vec<(PathBuf, String)>,
+        meta: &EventMeta,
+    ) -> Result<(RecordedExecution, usize), String> {
+        let execution_dir = find_execution_dir(&self.procedures_dir, execution_id)?
+            .ok_or_else(|| format!("Execution not found: {execution_id}"))?;
+        let event_log = EventLog::new(execution_dir.join("events.jsonl"));
+        let transaction_log = event_log.clone();
+        let store = AttachmentStore::new(execution_dir.clone());
+
+        event_log
+            .with_exclusive_lock(|| {
+                let events = transaction_log.read().map_err(|e| e.to_string())?;
+                let mut state = ExecutionState::from_events(&events).map_err(|e| e.to_string())?;
+                let mut received = 0;
+                for (source, filename) in files {
+                    let pending = store.prepare_copy(&source, &filename)?;
+                    if has_content(&state, &pending.stored.sha256)
+                        || state.has_attachment_path(&pending.stored.relative_path)
+                    {
+                        continue;
+                    }
+                    let record = attachment_record(&pending);
+                    let event = state
+                        .receive_attachment_event(record)
+                        .map_err(|e| e.to_string())?;
+                    store.commit_prepared(pending)?;
+                    state.apply(&event).map_err(|e| e.to_string())?;
+                    transaction_log
+                        .append_durable(&EventRecord {
+                            event,
+                            meta: meta.clone(),
+                        })
+                        .map_err(|e| e.to_string())?;
+                    received += 1;
+                }
+                if let Err(e) = write_execution_snapshot_durable(&execution_dir, &state) {
+                    log::warn!(
+                        "failed to update execution snapshot for {execution_id} after receiving files: {e}"
+                    );
+                }
+                Ok((
+                    RecordedExecution {
+                        state,
+                        execution_dir: execution_dir.clone(),
+                    },
+                    received,
+                ))
+            })
+            .map_err(|e| e.to_string())?
+    }
+
     fn with_log_transaction(
         &self,
         execution_id: ExecutionId,
@@ -233,6 +292,20 @@ impl ExecutionStore {
             })
             .map_err(|e| e.to_string())?
     }
+}
+
+/// Whether the execution already holds a file with this content.
+fn has_content(state: &ExecutionState, sha256: &str) -> bool {
+    state
+        .inbox
+        .iter()
+        .chain(
+            state
+                .steps
+                .values()
+                .flat_map(|step| step.attachments.values().flatten()),
+        )
+        .any(|file| file.sha256 == sha256)
 }
 
 /// Whether `meta` carries an event ID that is already recorded.
@@ -375,6 +448,22 @@ fn build_event_for_action(
             reason,
         } => state
             .remove_attachment_event(&step_id, &input_id, &reason)
+            .map(BuiltAction::without_attachments)
+            .map_err(|e| e.to_string()),
+        ExecutionAction::AssignAttachment {
+            step_id,
+            input_id,
+            path,
+        } => state
+            .assign_attachment_event(&step_id, &input_id, &path)
+            .map(BuiltAction::without_attachments)
+            .map_err(|e| e.to_string()),
+        ExecutionAction::UnassignAttachment {
+            step_id,
+            input_id,
+            path,
+        } => state
+            .unassign_attachment_event(&step_id, &input_id, &path)
             .map(BuiltAction::without_attachments)
             .map_err(|e| e.to_string()),
         ExecutionAction::Complete { status } => state
@@ -760,6 +849,86 @@ version: 1.0.0
             .filter(|event| matches!(event, Event::CheckboxToggled { .. }))
             .count();
         assert_eq!(toggles, 1);
+    }
+
+    #[test]
+    fn received_files_go_to_the_inbox_once_per_content_and_can_be_assigned() {
+        let temporary = tempfile::tempdir().unwrap();
+        let procedure_dir = temporary.path().join("attachment-test");
+        std::fs::create_dir(&procedure_dir).unwrap();
+        let template_path = procedure_dir.join("template.md");
+        std::fs::write(&template_path, ATTACHMENT_TEMPLATE).unwrap();
+        let mut state = ExecutionState::new();
+        let events = state
+            .start(&parse_template(ATTACHMENT_TEMPLATE).unwrap())
+            .unwrap();
+        let execution_id = state.execution_id.unwrap();
+        let store = ExecutionStore::new(temporary.path().to_path_buf());
+        store
+            .create_execution(
+                &template_path,
+                state,
+                events,
+                "test".to_string(),
+                &EventMeta::default(),
+            )
+            .unwrap();
+        let source = |name: &str, content: &str| {
+            let path = temporary.path().join(name);
+            std::fs::write(&path, content).unwrap();
+            (path, name.to_string())
+        };
+        let phone = EventMeta {
+            device: Some("upload-link".to_string()),
+            ..EventMeta::default()
+        };
+
+        let (recorded, received) = store
+            .receive_files(
+                execution_id,
+                vec![
+                    source("a.txt", "same"),
+                    source("b.txt", "same"),
+                    source("c.txt", "other"),
+                ],
+                &phone,
+            )
+            .unwrap();
+        let (_, again) = store
+            .receive_files(execution_id, vec![source("a.txt", "same")], &phone)
+            .unwrap();
+
+        assert_eq!((received, again), (2, 0));
+        let inbox: Vec<&str> = recorded
+            .state
+            .inbox
+            .iter()
+            .map(|f| f.filename.as_str())
+            .collect();
+        assert_eq!(inbox, ["a.txt", "c.txt"]);
+        assert!(
+            recorded
+                .execution_dir
+                .join(&recorded.state.inbox[0].path)
+                .is_file()
+        );
+
+        let assigned = store
+            .record_action(
+                execution_id,
+                ExecutionAction::AssignAttachment {
+                    step_id: "step-0".to_string(),
+                    input_id: "evidence".to_string(),
+                    path: recorded.state.inbox[0].path.clone(),
+                },
+                EventMeta::default(),
+            )
+            .unwrap();
+        assert_eq!(assigned.state.inbox.len(), 1);
+        assert_eq!(
+            assigned.state.steps["step-0"].attachments["evidence"].len(),
+            1
+        );
     }
 
     #[test]
