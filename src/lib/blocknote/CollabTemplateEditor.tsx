@@ -4,6 +4,7 @@ import { BlockNoteView } from "@blocknote/mantine";
 import { useCreateBlockNote } from "@blocknote/react";
 import { HocuspocusProvider } from "@hocuspocus/provider";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { IndexeddbPersistence } from "y-indexeddb";
 import * as Y from "yjs";
 import { getCollabToken, getSharedTemplateMarkdown } from "#lib/api/commands.js";
 import type { ProcedureMetadata, ProcedureTemplate } from "#lib/types/index.js";
@@ -30,6 +31,11 @@ const c = scoped(styles);
 function collabUrl(): string {
   const scheme = window.location.protocol === "https:" ? "wss" : "ws";
   return `${scheme}://${window.location.host}/collab`;
+}
+
+/** Whether a template document has no content yet (not loaded from anywhere). */
+function isEmptyDocument(doc: Y.Doc): boolean {
+  return doc.getXmlFragment(DOCUMENT_FRAGMENT).length === 0 && doc.getMap(METADATA_MAP).size === 0;
 }
 
 /** A stable cursor color per user. */
@@ -65,6 +71,12 @@ export default function CollabTemplateEditor({
 
   useEffect(() => {
     const doc = new Y.Doc();
+    // Keep the document on this device too, so it opens and can be edited
+    // offline; Yjs merges the offline edits when the provider reconnects.
+    const local = new IndexeddbPersistence(`procnote-template-${id}`, doc);
+    void local.whenSynced.then(() => {
+      if (!isEmptyDocument(doc)) setSynced(true);
+    });
     const provider = new HocuspocusProvider({
       url: collabUrl(),
       name: id,
@@ -78,6 +90,7 @@ export default function CollabTemplateEditor({
     setSession({ doc, provider });
     return () => {
       provider.destroy();
+      void local.destroy();
       doc.destroy();
       setSession(null);
       setSynced(false);
@@ -87,7 +100,10 @@ export default function CollabTemplateEditor({
   return (
     <div className={c("collab")}>
       <p className={c("connection", status === "connected" && "connected")}>
-        {error ?? (status === "connected" ? "Connected — changes are saved as you type" : status)}
+        {error ??
+          (status === "connected"
+            ? "Connected — changes are saved as you type"
+            : "Offline — changes are kept on this device and shared when the connection is back")}
       </p>
       {session && synced ? (
         <SharedEditor id={id} session={session} user={user} onStart={onStart} />
