@@ -7,7 +7,9 @@ use ts_rs::TS;
 
 use crate::action::{ActionMeta, ExecutionAction};
 use crate::path_security::resolve_template_path;
+#[cfg(feature = "fs")]
 use crate::persistence::event_log::EventLog;
+#[cfg(feature = "fs")]
 use crate::persistence::execution_store::find_execution_dir;
 use crate::repository::{
     self, ExecutionRepository, NewExecution, StoredExecution, TemplateSnapshot,
@@ -277,6 +279,7 @@ pub fn summarize(
 }
 
 /// Load an execution from disk by replaying its event log.
+#[cfg(feature = "fs")]
 pub fn load_execution_from_disk(
     procedures_dir: &Path,
     execution_id: ExecutionId,

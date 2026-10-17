@@ -3,10 +3,14 @@
 export type { ActionMeta } from "./generated/ActionMeta";
 export type { AttachmentDropPointSessionSummary } from "./generated/AttachmentDropPointSessionSummary";
 export type { AttachmentDropPointStatus } from "./generated/AttachmentDropPointStatus";
+export type { AttachmentRecord } from "./generated/AttachmentRecord";
 export type { AttachmentSource } from "./generated/AttachmentSource";
 export type { AttachmentState } from "./generated/AttachmentState";
 export type { CompletionStatus } from "./generated/CompletionStatus";
 export type { Equipment } from "./generated/Equipment";
+export type { Event } from "./generated/Event";
+export type { EventMeta } from "./generated/EventMeta";
+export type { EventRecord } from "./generated/EventRecord";
 export type { ExecutionAction } from "./generated/ExecutionAction";
 export type { ExecutionSummary } from "./generated/ExecutionSummary";
 export type { ExpectedValue } from "./generated/ExpectedValue";

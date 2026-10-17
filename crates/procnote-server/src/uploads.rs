@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 use procnote_app::action::ExecutionAction;
+use procnote_app::attachment::sanitize_attachment_filename;
 use procnote_app::execution::infer_attachment_content_type;
-use procnote_app::persistence::attachment_store::sanitize_attachment_filename;
 
 /// Staging area for files uploaded by browsers before they are attached.
 ///

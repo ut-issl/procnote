@@ -1,0 +1,137 @@
+//! Attachment naming and hashing, shared by the stores and the browser (WASM).
+
+use std::io::Read;
+use std::path::Path;
+
+use sha2::{Digest, Sha256};
+
+#[must_use]
+pub fn sanitize_attachment_filename(filename: &str) -> String {
+    let mut sanitized: String = filename
+        .trim()
+        .chars()
+        .map(|c| if is_safe_filename_char(c) { c } else { '_' })
+        .collect();
+
+    while sanitized.ends_with(['.', ' ']) {
+        sanitized.pop();
+    }
+
+    if sanitized.is_empty() || sanitized == "." || sanitized == ".." {
+        sanitized = "attachment".to_string();
+    }
+
+    if is_windows_reserved_name(&sanitized) {
+        sanitized.insert(0, '_');
+    }
+
+    sanitized
+}
+
+const fn is_safe_filename_char(c: char) -> bool {
+    !c.is_control()
+        && !is_format_or_bidi_control(c)
+        && !matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|')
+}
+
+const fn is_format_or_bidi_control(c: char) -> bool {
+    matches!(
+        c,
+        '\u{00AD}'
+            | '\u{034F}'
+            | '\u{061C}'
+            | '\u{115F}'..='\u{1160}'
+            | '\u{17B4}'..='\u{17B5}'
+            | '\u{180B}'..='\u{180F}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'..='\u{206F}'
+            | '\u{3164}'
+            | '\u{FE00}'..='\u{FE0F}'
+            | '\u{FEFF}'
+            | '\u{FFA0}'
+            | '\u{1BCA0}'..='\u{1BCA3}'
+            | '\u{1D173}'..='\u{1D17A}'
+            | '\u{E0000}'..='\u{E0FFF}'
+    )
+}
+
+fn is_windows_reserved_name(filename: &str) -> bool {
+    let stem = filename
+        .split_once('.')
+        .map_or(filename, |(stem, _)| stem)
+        .to_ascii_uppercase();
+    matches!(
+        stem.as_str(),
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+    )
+}
+
+/// The hex SHA-256 of a file's content.
+pub fn compute_sha256(path: &Path) -> std::io::Result<String> {
+    let mut file = std::fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(hex_encode(hasher.finalize().as_ref()))
+}
+
+/// The hex SHA-256 of `bytes`.
+#[must_use]
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    hex_encode(Sha256::digest(bytes).as_ref())
+}
+
+pub(crate) fn hex_encode(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .fold(String::with_capacity(bytes.len() * 2), |mut output, b| {
+            std::fmt::Write::write_fmt(&mut output, format_args!("{b:02x}"))
+                .expect("writing to a String should never fail");
+            output
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_attachment_filename;
+
+    #[test]
+    fn sanitizes_to_single_safe_component() {
+        assert_eq!(
+            sanitize_attachment_filename("../secret.txt"),
+            ".._secret.txt"
+        );
+        assert_eq!(sanitize_attachment_filename("a/b\\c?.txt"), "a_b_c_.txt");
+        assert_eq!(sanitize_attachment_filename("photo.jpg."), "photo.jpg");
+        assert_eq!(sanitize_attachment_filename("\u{202E}gpj.exe"), "_gpj.exe");
+        assert_eq!(sanitize_attachment_filename("CON.txt"), "_CON.txt");
+    }
+}

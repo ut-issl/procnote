@@ -31,3 +31,4 @@ vite.config.ts.timestamp-*
 # Zensical
 /site
 /collab/dist
+/src/lib/wasm/pkg

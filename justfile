@@ -43,6 +43,10 @@ build:
 build-frontend:
     pnpm build
 
+# Build the execution logic for the browser (crates/procnote-wasm -> src/lib/wasm/pkg)
+build-wasm:
+    pnpm run build:wasm
+
 # --- Check & Lint ---
 
 # Run all linters (fmt, clippy, vp, tsc, type bindings)
@@ -61,7 +65,7 @@ check-vp:
     pnpm run vp:check
 
 # Type-check the frontend
-check-frontend:
+check-frontend: build-wasm
     pnpm check
 
 # --- Format ---
@@ -92,7 +96,7 @@ test-rust:
     cargo test --workspace
 
 # Run frontend tests
-test-frontend:
+test-frontend: build-wasm
     pnpm test
 
 # --- Utility ---
@@ -104,4 +108,4 @@ pre-commit:
 # Clean build artifacts
 clean:
     cargo clean
-    rm -rf build node_modules/.vite src-tauri/launchers/bin
+    rm -rf build node_modules/.vite src-tauri/launchers/bin src/lib/wasm/pkg
