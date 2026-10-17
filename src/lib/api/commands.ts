@@ -5,9 +5,12 @@ import type {
   AttachmentDropPointSessionSummary,
   AttachmentDropPointStatus,
   AttachmentSource,
+  Conflict,
+  EventRecord,
   ExecutionAction,
   ExecutionSummary,
   ProcedureTemplate,
+  PushOutcome,
   TemplateSummary,
 } from "#lib/types/index.js";
 
@@ -108,6 +111,11 @@ export async function startSharedExecution(
 ): Promise<ExecutionSummary> {
   if (isDesktop) desktopOnly("startSharedExecution");
   return postJson(`/collab/templates/${encodeURIComponent(id)}/executions`, { meta });
+}
+
+/** Shared template `id` as it is now, if it can be executed. */
+export function getSharedTemplate(id: string): Promise<ProcedureTemplate> {
+  return request(`/collab/templates/${encodeURIComponent(id)}/template`);
 }
 
 /** Shared template `id` as procnote Markdown (`template.md`). */
@@ -248,6 +256,57 @@ export function uploadToLink(
     method: "POST",
     body: form,
   });
+}
+
+// --- Sync for offline recording (browser only) ---
+
+/** Log lines of an execution from position `after` on, and how many there are. */
+export function pullEvents(
+  executionId: string,
+  after: number,
+): Promise<{ records: EventRecord[]; count: number }> {
+  return request(`/executions/${encodeURIComponent(executionId)}/events?after=${after}`);
+}
+
+export type PushResult = PushOutcome & { event_id: string | null };
+
+/** Push log lines recorded on this device, with upload tokens for their attachment content. */
+export function pushEvents(
+  executionId: string,
+  events: EventRecord[],
+  uploads: string[] = [],
+): Promise<{ results: PushResult[] }> {
+  return postJson(`/executions/${encodeURIComponent(executionId)}/events`, { events, uploads });
+}
+
+/** Register an execution this device started itself. */
+export function registerExecution(
+  executionId: string,
+  procedure: string,
+  template: ProcedureTemplate,
+  events: EventRecord[],
+): Promise<ExecutionSummary> {
+  return request(`/executions/${encodeURIComponent(executionId)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ procedure, template, events }),
+  });
+}
+
+/** Events that reached the server after the execution had moved on. */
+export function listConflicts(executionId: string): Promise<Conflict[]> {
+  return request(`/executions/${encodeURIComponent(executionId)}/conflicts`);
+}
+
+export function resolveConflict(
+  executionId: string,
+  eventId: string,
+  meta: ActionMeta,
+): Promise<Conflict[]> {
+  return postJson(
+    `/executions/${encodeURIComponent(executionId)}/conflicts/${encodeURIComponent(eventId)}/resolve`,
+    { meta },
+  );
 }
 
 export async function getAttachmentPreviewDataUrl(
