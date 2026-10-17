@@ -3,4 +3,4 @@
 /**
  * A piece of equipment referenced by the procedure.
  */
-export type Equipment = { id: string; name: string };
+export type Equipment = { id: string, name: string, };
