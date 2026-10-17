@@ -15,6 +15,7 @@
   2. **`crates/procnote-app/`** — Tauri-free application layer shared by the desktop shell and the future server. Owns serialization DTOs (`ExecutionSummary`, `StepSummary`, etc.), `ExecutionAction` → event mapping, and filesystem I/O (`persistence/`). Must never depend on Tauri.
   3. **`src-tauri/`** — Thin Tauri shell. Exposes `procnote-app` operations as IPC commands and owns desktop-only concerns: the native file picker and its attachment grants, revealing directories, and DropPoint.
   4. **`src/`** — SvelteKit + Svelte 5 frontend. Uses runes (`$state`, `$derived`, `$props`), not stores.
+- **`crates/procnote-server/`** is an axum HTTP shell over `procnote-app`, parallel to `src-tauri`, for using the same UI from a browser. It must never depend on Tauri.
 - **`crates/procnote-launcher/`** is a Tauri-free console adapter outside those domain layers. It owns `procnote [WORKSPACE]`, prints help/version synchronously, and detaches the packaged GUI. It must never depend on `procnote-tauri`, Tauri, or GUI/dialog libraries.
 
 ### Core domain (`procnote-core`)
@@ -38,7 +39,16 @@
 - `AppState` holds the `procedures_dir` path, DropPoint configuration, and the attachment grants issued by the native file picker.
 - Attachment actions are authorized against those grants before being passed to `procnote_app::execution::record_action`.
 
+### API server (`procnote-server`)
+
+- Routes under `/api` mirror the IPC commands; other paths serve the built frontend (`--static-dir`) with an SPA fallback.
+- No authentication yet: it listens on `127.0.0.1` by default and is meant for trusted networks only.
+- Browsers upload attachments to `/api/uploads` first and receive single-use upload tokens. Attachment actions may only reference files by such tokens, mirroring the desktop's file picker grants, so clients can never make the server read arbitrary paths.
+- `just dev-server` + `just dev-frontend` for development (Vite proxies `/api`), `just serve` to build and serve.
+
 ### Frontend (`src/`)
+
+- `lib/api/commands.ts` talks to Tauri IPC in the desktop app and to the HTTP API in a browser. Host services (logging, confirm dialogs, opening URLs) go through `lib/platform.ts`; components must not import Tauri plugins directly.
 
 - `executionStore` (in `lib/stores/execution.svelte.ts`) is a Svelte 5 runes-based reactive store wrapping `ExecutionSummary`.
 - TypeScript types in `lib/types/generated/` are auto-generated from Rust via `ts-rs`. Regenerate with `cargo test --workspace export_bindings_`. CI enforces they stay in sync.

@@ -3,6 +3,7 @@
     import { goto } from "$app/navigation";
     import { executionStore } from "#lib/stores/execution.svelte.js";
     import * as api from "#lib/api/commands.js";
+    import { isDesktop } from "#lib/platform.js";
     import type { ExecutionAction, ExecutionSummary, StepContent } from "#lib/types/index.js";
     import { formatTimestamp } from "#lib/utils/format.js";
     import { isNonComposingEnter } from "#lib/utils/keyboard.js";
@@ -179,13 +180,17 @@
                     <span class="procedure-meta">
                         {summary.procedure_title} ({summary.procedure_id}) v{summary.procedure_version}
                     </span>
-                    <button
-                        class="execution-dir"
-                        onclick={openDirectory}
-                        title="Open in Finder"
-                    >
-                        {summary.execution_dir}
-                    </button>
+                    {#if isDesktop}
+                        <button
+                            class="execution-dir"
+                            onclick={openDirectory}
+                            title="Open in Finder"
+                        >
+                            {summary.execution_dir}
+                        </button>
+                    {:else}
+                        <span class="execution-dir">{summary.execution_dir}</span>
+                    {/if}
                 </div>
             </div>
             <div class="header-right">
@@ -443,11 +448,14 @@
         background: none;
         border: none;
         padding: 0;
-        cursor: pointer;
         text-align: left;
     }
 
-    .execution-dir:hover {
+    button.execution-dir {
+        cursor: pointer;
+    }
+
+    button.execution-dir:hover {
         color: #1a73e8;
         text-decoration: underline;
     }
