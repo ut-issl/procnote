@@ -14,4 +14,5 @@ pub mod path_security;
 #[cfg(feature = "fs")]
 pub mod persistence;
 pub mod repository;
+pub mod sync;
 pub mod template;

@@ -6,12 +6,15 @@ use procnote_core::event::SUPPORTED_VERSION;
 use procnote_core::event::types::{AttachmentRecord, Event, EventMeta, EventRecord, ExecutionId};
 use procnote_core::execution::ExecutionState;
 use procnote_core::snapshot::render_execution_markdown;
+use uuid::Uuid;
 
 use crate::persistence::attachment_store::AttachmentStore;
+use crate::persistence::conflict_log;
 use crate::persistence::event_log::{EventLog, sync_dir};
 use crate::repository::{
     Decide, ExecutionRepository, NewExecution, StoredExecution, apply_decision,
 };
+use crate::sync::{Conflict, Resolution};
 
 /// Executions stored as directories under each procedure's `.executions/`.
 pub struct ExecutionStore {
@@ -169,6 +172,51 @@ impl ExecutionRepository for ExecutionStore {
         let execution_dir = self.existing_dir(execution_id)?;
         std::fs::read(resolve_attachment_file_path(&execution_dir, path)?)
             .map_err(|e| e.to_string())
+    }
+
+    fn records(&self, execution_id: ExecutionId) -> Result<Vec<EventRecord>, String> {
+        let execution_dir = self.existing_dir(execution_id)?;
+        let event_log = EventLog::new(execution_dir.join("events.jsonl"));
+        event_log
+            .with_shared_lock(|| event_log.read_records())
+            .map_err(|e| e.to_string())?
+            .map_err(|e| e.to_string())
+    }
+
+    fn conflicts(&self, execution_id: ExecutionId) -> Result<Vec<Conflict>, String> {
+        conflict_log::read(&self.existing_dir(execution_id)?)
+    }
+
+    fn add_conflict(&self, execution_id: ExecutionId, conflict: &Conflict) -> Result<(), String> {
+        let execution_dir = self.existing_dir(execution_id)?;
+        let event_id = conflict.record.meta.event_id;
+        // Under the log's lock, so a conflict is kept once however it's retried.
+        EventLog::new(execution_dir.join("events.jsonl"))
+            .with_exclusive_lock(|| {
+                let kept = conflict_log::read(&execution_dir)?
+                    .iter()
+                    .any(|known| event_id.is_some() && known.record.meta.event_id == event_id);
+                if kept {
+                    Ok(())
+                } else {
+                    conflict_log::append_conflict(&execution_dir, conflict)
+                }
+            })
+            .map_err(|e| e.to_string())?
+    }
+
+    fn resolve_conflict(
+        &self,
+        execution_id: ExecutionId,
+        event_id: Uuid,
+        resolution: &Resolution,
+    ) -> Result<(), String> {
+        let execution_dir = self.existing_dir(execution_id)?;
+        EventLog::new(execution_dir.join("events.jsonl"))
+            .with_exclusive_lock(|| {
+                conflict_log::append_resolution(&execution_dir, event_id, resolution)
+            })
+            .map_err(|e| e.to_string())?
     }
 }
 
@@ -745,5 +793,98 @@ version: 1.0.0
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn pushed_events_are_recorded_once_or_kept_as_conflicts() {
+        use crate::sync::{PushOutcome, create_started, push_event, resolve_conflict};
+
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(temp.path().join("snapshot-test")).unwrap();
+        let store = ExecutionStore::new(temp.path().to_path_buf());
+        // A device starts the execution itself and pushes what it recorded.
+        let mut device = ExecutionState::new();
+        let started = device.start(&parse_template(TEMPLATE).unwrap()).unwrap();
+        let id = device.execution_id.unwrap();
+        let author = EventMeta {
+            event_id: None,
+            recorded_by: Some("offline operator".to_string()),
+            device: Some("tablet".to_string()),
+        };
+        let records: Vec<EventRecord> = started
+            .into_iter()
+            .map(|event| EventRecord {
+                event,
+                meta: author.clone(),
+            })
+            .collect();
+        create_started(
+            &store,
+            "snapshot-test".to_string(),
+            TemplateSnapshot::Markdown(TEMPLATE.to_string()),
+            &records,
+            "test".to_string(),
+        )
+        .unwrap();
+        let push = |event: Event| EventRecord {
+            event,
+            meta: EventMeta {
+                event_id: Some(uuid::Uuid::new_v4()),
+                ..author.clone()
+            },
+        };
+        let toggle = push(
+            device
+                .toggle_checkbox_event("step-0", "step-0/cb-0", true)
+                .unwrap(),
+        );
+        let untoggle = push(
+            device
+                .toggle_checkbox_event("step-0", "step-0/cb-0", false)
+                .unwrap(),
+        );
+        let now = Utc::now();
+
+        let first = push_event(&store, id, &toggle, &[], now).unwrap();
+        let retried = push_event(&store, id, &toggle, &[], now).unwrap();
+        // Meanwhile someone finishes the execution on the server.
+        record_action(
+            &store,
+            id,
+            ExecutionAction::Complete {
+                status: procnote_core::event::types::CompletionStatus::Pass,
+            },
+            &EventMeta::default(),
+        )
+        .unwrap();
+        let late = push_event(&store, id, &untoggle, &[], now).unwrap();
+        let late_again = push_event(&store, id, &untoggle, &[], now).unwrap();
+
+        assert_eq!(first, PushOutcome::Recorded);
+        assert_eq!(retried, PushOutcome::Duplicate);
+        assert!(matches!(late, PushOutcome::Conflict { .. }), "{late:?}");
+        assert_eq!(late_again, PushOutcome::Duplicate);
+        let records = store.records(id).unwrap();
+        assert!(matches!(records[0].event, Event::LogMeta { .. }));
+        let toggled = records
+            .iter()
+            .find(|record| record.meta.event_id == toggle.meta.event_id)
+            .unwrap();
+        assert_eq!(toggled.event, toggle.event, "kept with the device's time");
+        assert_eq!(
+            toggled.meta.recorded_by.as_deref(),
+            Some("offline operator")
+        );
+        let conflicts = store.conflicts(id).unwrap();
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(conflicts[0].record, untoggle);
+
+        let resolution = crate::sync::Resolution {
+            at: Utc::now(),
+            by: Some("reviewer".to_string()),
+        };
+        resolve_conflict(&store, id, untoggle.meta.event_id.unwrap(), &resolution).unwrap();
+        assert!(resolve_conflict(&store, id, uuid::Uuid::new_v4(), &resolution).is_err());
+        assert_eq!(store.conflicts(id).unwrap()[0].resolved, Some(resolution));
     }
 }
