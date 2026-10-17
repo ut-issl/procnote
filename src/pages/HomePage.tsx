@@ -85,7 +85,11 @@ export default function HomePage() {
             No procedure templates found. Place <code>.md</code> files in the procedures directory.
           </p>
         ) : (
-          <TemplateList templates={templates} onstart={handleStart} />
+          <TemplateList
+            templates={templates}
+            onstart={handleStart}
+            onedit={(t) => navigate(`/templates/edit?${new URLSearchParams({ path: t.path })}`)}
+          />
         )}
       </section>
 
