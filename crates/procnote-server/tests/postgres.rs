@@ -18,7 +18,9 @@ use procnote_app::action::{AttachmentSource, ExecutionAction};
 use procnote_app::execution::summarize;
 use procnote_app::persistence::event_log::EventLog;
 use procnote_app::persistence::execution_store::ExecutionStore;
-use procnote_app::repository::{ExecutionRepository, NewExecution, receive_files, record_action};
+use procnote_app::repository::{
+    ExecutionRepository, NewExecution, TemplateSnapshot, receive_files, record_action,
+};
 use procnote_core::event::types::{EventMeta, ExecutionId};
 use procnote_core::execution::ExecutionState;
 use procnote_core::template::parse_template;
@@ -72,7 +74,7 @@ fn create(store: &PostgresStore) -> ExecutionId {
     store
         .create(NewExecution {
             procedure: "postgres-test".to_string(),
-            template_source: TEMPLATE.to_string(),
+            template: TemplateSnapshot::Markdown(TEMPLATE.to_string()),
             state,
             initial_events,
             tool_version: "test".to_string(),
@@ -278,7 +280,7 @@ fn file_workspace(temp: &tempfile::TempDir) -> (PathBuf, PathBuf, ExecutionId) {
     let created = files
         .create(NewExecution {
             procedure: "postgres-test".to_string(),
-            template_source: TEMPLATE.to_string(),
+            template: TemplateSnapshot::Markdown(TEMPLATE.to_string()),
             state,
             initial_events,
             tool_version: "test".to_string(),
@@ -378,24 +380,32 @@ async fn a_workspace_round_trips_through_import_and_export() {
 }
 
 /// A stand-in for the collab service's internal API: records the templates
-/// it is asked to seed, and answers with `status`.
+/// it is asked to seed, answering with `status`, and describes every
+/// document as the test template with `issues`.
 async fn stub_collab_service(
     status: StatusCode,
+    issues: &[&str],
 ) -> (String, Arc<std::sync::Mutex<Vec<(String, Value)>>>) {
     let seeded = Arc::new(std::sync::Mutex::new(Vec::new()));
     let recorded = seeded.clone();
-    let app = axum::Router::new().route(
-        "/internal/templates/{id}",
-        axum::routing::post(
-            move |axum::extract::Path(id): axum::extract::Path<String>,
-                  headers: axum::http::HeaderMap,
-                  axum::Json(template): axum::Json<Value>| async move {
-                assert_eq!(headers["authorization"], "Bearer stub-secret");
-                recorded.lock().unwrap().push((id, template));
-                status
-            },
-        ),
-    );
+    let current = json!({ "template": parse_template(TEMPLATE).unwrap(), "issues": issues });
+    let app = axum::Router::new()
+        .route(
+            "/internal/templates/{id}",
+            axum::routing::post(
+                move |axum::extract::Path(id): axum::extract::Path<String>,
+                      headers: axum::http::HeaderMap,
+                      axum::Json(template): axum::Json<Value>| async move {
+                    assert_eq!(headers["authorization"], "Bearer stub-secret");
+                    recorded.lock().unwrap().push((id, template));
+                    status
+                },
+            ),
+        )
+        .route(
+            "/internal/templates/{id}/template",
+            axum::routing::get(move || async move { axum::Json(current) }),
+        );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     tokio::spawn(axum::serve(listener, app).into_future());
@@ -459,7 +469,7 @@ async fn shared_templates_are_seeded_through_the_collab_service() {
     let Some(url) = database_url() else { return };
     let temp = tempfile::tempdir().unwrap();
     let store = store(&url).await;
-    let (service, seeded) = stub_collab_service(StatusCode::OK).await;
+    let (service, seeded) = stub_collab_service(StatusCode::OK, &[]).await;
     let (app, template_path) = collab_app(&temp, &store, service);
 
     let (status, created) = call(
@@ -511,7 +521,7 @@ async fn a_template_the_collab_service_refuses_is_not_kept() {
     let Some(url) = database_url() else { return };
     let temp = tempfile::tempdir().unwrap();
     let store = store(&url).await;
-    let (service, asked) = stub_collab_service(StatusCode::INTERNAL_SERVER_ERROR).await;
+    let (service, asked) = stub_collab_service(StatusCode::INTERNAL_SERVER_ERROR, &[]).await;
     let (app, template_path) = collab_app(&temp, &store, service);
 
     let (status, _) = call(
@@ -533,4 +543,109 @@ async fn a_template_the_collab_service_refuses_is_not_kept() {
             .all(|template| template["id"] != refused.as_str()),
         "{list}"
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn executions_start_from_a_shared_template_as_it_is_now() {
+    let Some(url) = database_url() else { return };
+    let temp = tempfile::tempdir().unwrap();
+    let store = store(&url).await;
+    let (service, _) = stub_collab_service(StatusCode::OK, &[]).await;
+    let (app, template_path) = collab_app(&temp, &store, service);
+    let (_, created) = call(
+        &app,
+        "POST",
+        "/api/collab/templates",
+        Some(json!({ "template_path": template_path })),
+    )
+    .await;
+    let id = created["id"].as_str().unwrap();
+
+    let (status, summary) = call(
+        &app,
+        "POST",
+        &format!("/api/collab/templates/{id}/executions"),
+        Some(json!({ "meta": { "recorded_by": "starter" } })),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "{summary}");
+    assert_eq!(summary["procedure_id"], "postgres-test");
+    // The workspace store files it under the procedure ID, with the template as JSON.
+    let execution_dir = PathBuf::from(summary["execution_dir"].as_str().unwrap());
+    assert!(execution_dir.starts_with(template_path.parent().unwrap()));
+    let snapshot: Value = serde_json::from_str(
+        &std::fs::read_to_string(execution_dir.join("template.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(snapshot["metadata"]["id"], "postgres-test");
+    assert!(!execution_dir.join("template.md").exists());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_shared_template_with_issues_does_not_start() {
+    let Some(url) = database_url() else { return };
+    let temp = tempfile::tempdir().unwrap();
+    let store = store(&url).await;
+    let (service, _) = stub_collab_service(StatusCode::OK, &["The procedure has no title."]).await;
+    let (app, template_path) = collab_app(&temp, &store, service);
+    let (_, created) = call(
+        &app,
+        "POST",
+        "/api/collab/templates",
+        Some(json!({ "template_path": template_path })),
+    )
+    .await;
+    let id = created["id"].as_str().unwrap();
+
+    let (status, body) = call(
+        &app,
+        "POST",
+        &format!("/api/collab/templates/{id}/executions"),
+        Some(json!({})),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("The procedure has no title."),
+        "{body}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn json_template_snapshots_are_kept_as_json() {
+    let Some(url) = database_url() else { return };
+    let store = store(&url).await;
+    let template = parse_template(TEMPLATE).unwrap();
+    let snapshot = TemplateSnapshot::of_template(&template).unwrap();
+
+    let exported = {
+        let store = store.clone();
+        let snapshot = snapshot.clone();
+        blocking(move || {
+            let mut state = ExecutionState::new();
+            let initial_events = state.start(&template).unwrap();
+            let id = state.execution_id.unwrap();
+            store
+                .create(NewExecution {
+                    procedure: "postgres-test".to_string(),
+                    template: snapshot,
+                    state,
+                    initial_events,
+                    tool_version: "test".to_string(),
+                    meta: EventMeta::default(),
+                })
+                .unwrap();
+            id
+        })
+        .await
+    };
+    let exported = store.export(exported).await.unwrap();
+
+    assert_eq!(exported.template, snapshot);
+    assert_eq!(exported.template.file_name(), "template.json");
 }

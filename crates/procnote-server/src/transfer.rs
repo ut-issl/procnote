@@ -13,7 +13,7 @@ use procnote_app::persistence::event_log::EventLog;
 use procnote_app::persistence::execution_store::{
     execution_dir_name, execution_dirs, write_execution_snapshot_durable,
 };
-use procnote_app::repository::StagedFile;
+use procnote_app::repository::{StagedFile, TemplateSnapshot};
 use procnote_core::event::types::ExecutionId;
 use procnote_core::execution::ExecutionState;
 
@@ -87,8 +87,7 @@ async fn import_execution(store: &PostgresStore, dir: &Path) -> Result<bool, Str
         .and_then(|name| name.to_str())
         .ok_or("execution directory is not inside a procedure directory")?
         .to_string();
-    let template_source =
-        std::fs::read_to_string(dir.join("template.md")).map_err(|e| e.to_string())?;
+    let template = read_snapshot(dir)?;
     let files = referenced_files(&records)
         .into_iter()
         .map(|record| StagedFile {
@@ -99,11 +98,22 @@ async fn import_execution(store: &PostgresStore, dir: &Path) -> Result<bool, Str
     store
         .import(TransferredExecution {
             procedure,
-            template_source,
+            template,
             records,
             files,
         })
         .await
+}
+
+/// The template snapshot of an execution directory: `template.md`, or
+/// `template.json` for executions of shared templates.
+fn read_snapshot(dir: &Path) -> Result<TemplateSnapshot, String> {
+    let read = |name: &str| std::fs::read_to_string(dir.join(name)).map_err(|e| e.to_string());
+    if dir.join(TemplateSnapshot::JSON_FILE).exists() {
+        read(TemplateSnapshot::JSON_FILE).map(TemplateSnapshot::Json)
+    } else {
+        read(TemplateSnapshot::MARKDOWN_FILE).map(TemplateSnapshot::Markdown)
+    }
 }
 
 /// Export every stored execution into `procedures_dir`, as
@@ -165,7 +175,11 @@ fn write_execution(
 ) -> Result<(), String> {
     let io = |e: std::io::Error| e.to_string();
     std::fs::create_dir_all(dir).map_err(io)?;
-    std::fs::write(dir.join("template.md"), &execution.template_source).map_err(io)?;
+    std::fs::write(
+        dir.join(execution.template.file_name()),
+        execution.template.text(),
+    )
+    .map_err(io)?;
     for (path, content) in &execution.files {
         let destination = safe_join(dir, path)?;
         if let Some(parent) = destination.parent() {

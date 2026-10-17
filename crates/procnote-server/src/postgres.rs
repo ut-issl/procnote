@@ -16,7 +16,8 @@ use chrono::Utc;
 use object_store::{ObjectStore, ObjectStoreExt, PutMode};
 use procnote_app::persistence::attachment_store::sha256_hex;
 use procnote_app::repository::{
-    Decide, ExecutionRepository, NewExecution, StagedFile, StoredExecution, apply_decision,
+    Decide, ExecutionRepository, NewExecution, StagedFile, StoredExecution, TemplateSnapshot,
+    apply_decision,
 };
 use procnote_core::event::SUPPORTED_VERSION;
 use procnote_core::event::types::{AttachmentRecord, Event, EventMeta, EventRecord, ExecutionId};
@@ -171,7 +172,7 @@ impl PostgresStore {
 /// template snapshot, and the files its events reference.
 pub struct TransferredExecution<F> {
     pub procedure: String,
-    pub template_source: String,
+    pub template: TemplateSnapshot,
     pub records: Vec<EventRecord>,
     pub files: Vec<F>,
 }
@@ -189,12 +190,13 @@ impl PostgresStore {
             .ok_or("event log has no ExecutionStarted")?;
         let mut tx = self.pool.begin().await.map_err(db_error)?;
         let inserted = sqlx::query(
-            "INSERT INTO executions (id, procedure, template_source) VALUES ($1, $2, $3) \
-             ON CONFLICT DO NOTHING",
+            "INSERT INTO executions (id, procedure, template_source, template_format) \
+             VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
         )
         .bind(execution_id)
         .bind(&execution.procedure)
-        .bind(&execution.template_source)
+        .bind(execution.template.text())
+        .bind(execution.template.format())
         .execute(&mut *tx)
         .await
         .map_err(db_error)?
@@ -233,13 +235,15 @@ impl PostgresStore {
         &self,
         execution_id: ExecutionId,
     ) -> Result<TransferredExecution<(String, Vec<u8>)>, String> {
-        let (procedure, template_source): (String, String) =
-            sqlx::query_as("SELECT procedure, template_source FROM executions WHERE id = $1")
-                .bind(execution_id)
-                .fetch_optional(&self.pool)
-                .await
-                .map_err(db_error)?
-                .ok_or_else(|| format!("Execution not found: {execution_id}"))?;
+        let (procedure, template_source, template_format): (String, String, String) =
+            sqlx::query_as(
+                "SELECT procedure, template_source, template_format FROM executions WHERE id = $1",
+            )
+            .bind(execution_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(db_error)?
+            .ok_or_else(|| format!("Execution not found: {execution_id}"))?;
         let records = self.records(&self.pool, execution_id).await?;
         let attachments: Vec<(String, String)> = sqlx::query_as(
             "SELECT path, sha256 FROM attachments WHERE execution_id = $1 ORDER BY path",
@@ -255,7 +259,7 @@ impl PostgresStore {
         }
         Ok(TransferredExecution {
             procedure,
-            template_source,
+            template: TemplateSnapshot::from_format(&template_format, template_source)?,
             records,
             files,
         })
@@ -343,11 +347,13 @@ impl ExecutionRepository for PostgresStore {
         self.runtime.block_on(async {
             let mut tx = self.pool.begin().await.map_err(db_error)?;
             sqlx::query(
-                "INSERT INTO executions (id, procedure, template_source) VALUES ($1, $2, $3)",
+                "INSERT INTO executions (id, procedure, template_source, template_format) \
+                 VALUES ($1, $2, $3, $4)",
             )
             .bind(execution_id)
             .bind(&new.procedure)
-            .bind(&new.template_source)
+            .bind(new.template.text())
+            .bind(new.template.format())
             .execute(&mut *tx)
             .await
             .map_err(db_error)?;

@@ -9,13 +9,16 @@ use crate::action::{ActionMeta, ExecutionAction};
 use crate::path_security::resolve_template_path;
 use crate::persistence::event_log::EventLog;
 use crate::persistence::execution_store::find_execution_dir;
-use crate::repository::{self, ExecutionRepository, NewExecution, StoredExecution};
+use crate::repository::{
+    self, ExecutionRepository, NewExecution, StoredExecution, TemplateSnapshot,
+};
 use procnote_core::event::types::{CompletionStatus, ExecutionId};
 use procnote_core::execution::{
     ExecutionState, ExecutionStepContent, RecordedAttachment, StepStatus,
 };
 use procnote_core::template::parse_template;
 use procnote_core::template::types::InputDefinition;
+use procnote_core::template::types::ProcedureTemplate;
 
 /// Serializable execution state summary for the frontend.
 #[derive(Debug, Serialize, TS)]
@@ -391,13 +394,32 @@ pub fn start_execution(
         .to_string();
     let template_source = std::fs::read_to_string(&template_path).map_err(|e| e.to_string())?;
     let template = parse_template(&template_source).map_err(|e| e.to_string())?;
+    start_execution_of(
+        repository,
+        procedure,
+        &template,
+        TemplateSnapshot::Markdown(template_source),
+        tool_version,
+        meta,
+    )
+}
 
+/// Start a new execution of `template`, filed under `procedure`, keeping
+/// `snapshot` as the template it was started from.
+pub fn start_execution_of(
+    repository: &dyn ExecutionRepository,
+    procedure: String,
+    template: &ProcedureTemplate,
+    snapshot: TemplateSnapshot,
+    tool_version: String,
+    meta: ActionMeta,
+) -> Result<ExecutionSummary, String> {
     let mut state = ExecutionState::new();
-    let initial_events = state.start(&template).map_err(|e| e.to_string())?;
+    let initial_events = state.start(template).map_err(|e| e.to_string())?;
 
     let stored = repository.create(NewExecution {
         procedure,
-        template_source,
+        template: snapshot,
         state,
         initial_events,
         tool_version,
