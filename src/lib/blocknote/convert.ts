@@ -328,6 +328,23 @@ export function blocksToTemplate(
   return { template: { metadata, steps }, issues };
 }
 
+// --- Editor structure ---
+
+/**
+ * The outermost step that contains block `id` (not counting the block
+ * itself), or undefined when the block is not inside a step.
+ */
+export function enclosingStep(
+  id: string,
+  parentOf: (id: string) => DocBlock | undefined,
+): DocBlock | undefined {
+  let outermost: DocBlock | undefined;
+  for (let parent = parentOf(id); parent?.id; parent = parentOf(parent.id)) {
+    if (parent.type === "step") outermost = parent;
+  }
+  return outermost;
+}
+
 // --- Comparison ---
 
 /**

@@ -84,3 +84,38 @@
 .narrow {
   width: 72px;
 }
+
+.step-wrapper {
+  width: 100%;
+}
+
+.step.nested {
+  border-bottom-color: #c62828;
+}
+
+.step.nested .step-label {
+  background: #c62828;
+}
+
+.nested-warning {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: #fce4ec;
+  color: #c62828;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.nested-warning button {
+  padding: 2px 8px;
+  border: 1px solid #c62828;
+  border-radius: 4px;
+  background: #fff;
+  color: #c62828;
+  font: inherit;
+  cursor: pointer;
+}

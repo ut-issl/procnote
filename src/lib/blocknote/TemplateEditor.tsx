@@ -15,6 +15,7 @@ import {
   type ConversionIssue,
   diffPaths,
   type DocBlock,
+  enclosingStep,
   type MarkdownConverter,
   templateToBlocks,
 } from "./convert.js";
@@ -34,16 +35,22 @@ function markdownConverter(editor: ProcnoteEditor): MarkdownConverter {
 }
 
 function procnoteSlashItems(editor: ProcnoteEditor): DefaultReactSuggestionItem[] {
-  return [
-    {
-      title: "Procedure step",
-      subtext: "A step of the procedure; put its content inside (indented)",
-      aliases: ["step", "section"],
-      group: "Procedure",
-      onItemClick: () => {
-        insertOrUpdateBlockForSlashMenu(editor, { type: "step" });
-      },
+  // Steps only exist at the top level, so don't offer one inside a step.
+  const cursorBlock = editor.getTextCursorPosition().block;
+  const insideStep =
+    enclosingStep(cursorBlock.id, (id) => editor.getParentBlock(id) as DocBlock | undefined) !==
+    undefined;
+  const stepItem: DefaultReactSuggestionItem = {
+    title: "Procedure step",
+    subtext: "A step of the procedure; put its content inside (indented)",
+    aliases: ["step", "section"],
+    group: "Procedure",
+    onItemClick: () => {
+      insertOrUpdateBlockForSlashMenu(editor, { type: "step" });
     },
+  };
+  return [
+    ...(insideStep ? [] : [stepItem]),
     {
       title: "Input field",
       subtext: "A value the operator records during execution",
