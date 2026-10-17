@@ -21,7 +21,7 @@ use procnote_app::persistence::execution_store::ExecutionStore;
 use procnote_app::repository::{
     ExecutionRepository, NewExecution, TemplateSnapshot, receive_files, record_action,
 };
-use procnote_core::event::types::{EventMeta, ExecutionId};
+use procnote_core::event::types::{EventMeta, EventRecord, ExecutionId};
 use procnote_core::execution::ExecutionState;
 use procnote_core::template::parse_template;
 use procnote_server::postgres::PostgresStore;
@@ -719,4 +719,78 @@ async fn shared_templates_export_as_procnote_markdown() {
         parse_template(&std::fs::read_to_string(&target).unwrap()).unwrap(),
         parse_template(TEMPLATE).unwrap()
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn device_recordings_sync_into_postgres() {
+    use procnote_app::sync::{PushOutcome, Resolution, create_started, push_event};
+
+    let Some(url) = database_url() else { return };
+    let store = store(&url).await;
+
+    let outcomes = blocking(move || {
+        let mut device = ExecutionState::new();
+        let started = device.start(&parse_template(TEMPLATE).unwrap()).unwrap();
+        let id = device.execution_id.unwrap();
+        let records: Vec<EventRecord> = started.into_iter().map(EventRecord::from).collect();
+        create_started(
+            store.as_ref(),
+            "postgres-test".to_string(),
+            TemplateSnapshot::of_template(&parse_template(TEMPLATE).unwrap()).unwrap(),
+            &records,
+            "test".to_string(),
+        )
+        .unwrap();
+        let pushed = |event| EventRecord {
+            event,
+            meta: EventMeta {
+                event_id: Some(uuid::Uuid::new_v4()),
+                ..EventMeta::default()
+            },
+        };
+        let toggle = pushed(
+            device
+                .toggle_checkbox_event("step-0", "step-0/cb-0", true)
+                .unwrap(),
+        );
+        let now = chrono::Utc::now();
+        let recorded = push_event(store.as_ref(), id, &toggle, &[], now).unwrap();
+        let retried = push_event(store.as_ref(), id, &toggle, &[], now).unwrap();
+        record_action(
+            store.as_ref(),
+            id,
+            ExecutionAction::Complete {
+                status: procnote_core::event::types::CompletionStatus::Pass,
+            },
+            &EventMeta::default(),
+        )
+        .unwrap();
+        let late = pushed(
+            device
+                .toggle_checkbox_event("step-0", "step-0/cb-0", false)
+                .unwrap(),
+        );
+        let conflict = push_event(store.as_ref(), id, &late, &[], now).unwrap();
+        let conflict_again = push_event(store.as_ref(), id, &late, &[], now).unwrap();
+        procnote_app::sync::resolve_conflict(
+            store.as_ref(),
+            id,
+            late.meta.event_id.unwrap(),
+            &Resolution { at: now, by: None },
+        )
+        .unwrap();
+        let conflicts = store.conflicts(id).unwrap();
+        let logged = store.records(id).unwrap();
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(conflicts[0].record, late);
+        assert!(conflicts[0].resolved.is_some());
+        assert!(logged.contains(&toggle));
+        (recorded, retried, conflict, conflict_again)
+    })
+    .await;
+
+    assert_eq!(outcomes.0, PushOutcome::Recorded);
+    assert_eq!(outcomes.1, PushOutcome::Duplicate);
+    assert!(matches!(outcomes.2, PushOutcome::Conflict { .. }));
+    assert_eq!(outcomes.3, PushOutcome::Duplicate);
 }

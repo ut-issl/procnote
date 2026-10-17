@@ -34,8 +34,9 @@ use live::LiveUpdates;
 use procnote_app::action::{ActionMeta, AttachmentSource, ExecutionAction};
 use procnote_app::execution::{ExecutionSummary, infer_attachment_content_type};
 use procnote_app::repository::{ExecutionRepository, TemplateSnapshot};
+use procnote_app::sync::{self, Conflict, PushOutcome, Resolution};
 use procnote_app::template::TemplateSummary;
-use procnote_core::event::types::ExecutionId;
+use procnote_core::event::types::{EventRecord, ExecutionId};
 use procnote_core::template::types::ProcedureTemplate;
 use upload_links::UploadLinks;
 use uploads::UploadStore;
@@ -123,7 +124,19 @@ pub fn router(config: ServerConfig) -> std::io::Result<Router> {
         )
         .route("/collab/templates/{id}/markdown", get(collab_markdown))
         .route("/executions", get(list_executions).post(start_execution))
-        .route("/executions/{id}", get(get_execution))
+        .route(
+            "/executions/{id}",
+            get(get_execution).put(create_started_execution),
+        )
+        .route(
+            "/executions/{id}/events",
+            get(pull_events).post(push_events),
+        )
+        .route("/executions/{id}/conflicts", get(list_conflicts))
+        .route(
+            "/executions/{id}/conflicts/{event_id}/resolve",
+            post(resolve_conflict),
+        )
         .route("/executions/{id}/actions", post(record_action))
         .route("/executions/{id}/live", get(live_updates))
         .route(
@@ -499,6 +512,245 @@ async fn record_action(
     .await?;
     live_state.live.publish(id, summary.seq);
     Ok(Json(summary))
+}
+
+#[derive(Deserialize)]
+struct PullQuery {
+    /// Log lines already held; only later ones are sent.
+    #[serde(default)]
+    after: usize,
+}
+
+#[derive(Serialize)]
+struct PulledEvents {
+    /// Log lines from position `after` on.
+    records: Vec<EventRecord>,
+    /// Number of log lines in total: the next `after`.
+    count: usize,
+}
+
+/// The execution's log lines after the first `after`, for devices that keep
+/// a copy of the log (offline recording).
+async fn pull_events(
+    State(state): State<SharedState>,
+    Path(id): Path<ExecutionId>,
+    Query(query): Query<PullQuery>,
+) -> Result<Json<PulledEvents>, ApiError> {
+    blocking(move || {
+        let records = state.executions.records(id)?;
+        let count = records.len();
+        Ok(PulledEvents {
+            records: records.into_iter().skip(query.after).collect(),
+            count,
+        })
+    })
+    .await
+    .map(Json)
+}
+
+/// Log lines as JSON objects (an event and its metadata in one object).
+fn parse_records(values: &[serde_json::Value]) -> Result<Vec<EventRecord>, ApiError> {
+    values
+        .iter()
+        .map(|value| {
+            EventRecord::from_value(value)
+                .map_err(|e| ApiError::bad_request(format!("invalid event: {e}")))
+        })
+        .collect()
+}
+
+/// With an authenticated caller, they are the recorder of what they push.
+fn attribute_record(mut record: EventRecord, identity: Option<&Identity>) -> EventRecord {
+    if let Some(identity) = identity {
+        record.meta.recorded_by = Some(identity.email.clone());
+    }
+    record
+}
+
+#[derive(Deserialize)]
+struct PushRequest {
+    /// Log lines recorded on the device, in order, each with an `event_id`.
+    events: Vec<serde_json::Value>,
+    /// Upload tokens for the attachment content the events reference.
+    #[serde(default)]
+    uploads: Vec<uuid::Uuid>,
+}
+
+#[derive(Serialize)]
+struct PushedEvent {
+    event_id: Option<uuid::Uuid>,
+    #[serde(flatten)]
+    outcome: PushOutcome,
+}
+
+#[derive(Serialize)]
+struct PushResponse {
+    results: Vec<PushedEvent>,
+}
+
+/// Record events a device recorded, possibly offline. Each is recorded if it
+/// still applies, skipped if already recorded, or kept as a conflict.
+async fn push_events(
+    State(state): State<SharedState>,
+    Path(id): Path<ExecutionId>,
+    identity: Option<Extension<Identity>>,
+    Json(request): Json<PushRequest>,
+) -> Result<Json<PushResponse>, ApiError> {
+    let identity = identity.map(|Extension(identity)| identity);
+    let records: Vec<EventRecord> = parse_records(&request.events)?
+        .into_iter()
+        .map(|record| attribute_record(record, identity.as_ref()))
+        .collect();
+    let live_state = state.clone();
+    let (results, seq) = blocking(move || {
+        let uploaded = request
+            .uploads
+            .iter()
+            .map(|token| state.uploads.staged(*token))
+            .collect::<Result<Vec<_>, _>>();
+        let results = uploaded.and_then(|uploaded| {
+            records
+                .iter()
+                .map(|record| {
+                    sync::push_event(
+                        state.executions.as_ref(),
+                        id,
+                        record,
+                        &uploaded,
+                        chrono::Utc::now(),
+                    )
+                    .map(|outcome| PushedEvent {
+                        event_id: record.meta.event_id,
+                        outcome,
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()
+        });
+        // Uploads are single-use, like the desktop file picker's grants.
+        for token in &request.uploads {
+            state.uploads.discard(*token);
+        }
+        let results = results?;
+        let seq = procnote_app::execution::get_execution(state.executions.as_ref(), id)?.seq;
+        Ok((results, seq))
+    })
+    .await?;
+    if results
+        .iter()
+        .any(|result| result.outcome == PushOutcome::Recorded)
+    {
+        live_state.live.publish(id, seq);
+    }
+    Ok(Json(PushResponse { results }))
+}
+
+#[derive(Deserialize)]
+struct CreateStartedRequest {
+    /// Procedure (directory) name to file the execution under.
+    procedure: String,
+    /// The template it was started from, kept as its snapshot.
+    template: ProcedureTemplate,
+    /// Its first log lines, as `ExecutionState::start` produced them.
+    events: Vec<serde_json::Value>,
+}
+
+/// Store an execution a device started itself (possibly offline). Creating
+/// one that already exists with the same start is a retry and succeeds.
+async fn create_started_execution(
+    State(state): State<SharedState>,
+    Path(id): Path<ExecutionId>,
+    identity: Option<Extension<Identity>>,
+    Json(request): Json<CreateStartedRequest>,
+) -> Result<Json<ExecutionSummary>, ApiError> {
+    let identity = identity.map(|Extension(identity)| identity);
+    let records: Vec<EventRecord> = parse_records(&request.events)?
+        .into_iter()
+        .map(|record| attribute_record(record, identity.as_ref()))
+        .collect();
+    let started_id = records.first().and_then(|record| match &record.event {
+        procnote_core::event::types::Event::ExecutionStarted { execution_id, .. } => {
+            Some(*execution_id)
+        }
+        _ => None,
+    });
+    if started_id != Some(id) {
+        return Err(ApiError::bad_request(
+            "the first event must start this execution",
+        ));
+    }
+    let procedure = collab::procedure_name(&request.procedure).map_err(ApiError::bad_request)?;
+    let snapshot =
+        TemplateSnapshot::of_template(&request.template).map_err(ApiError::bad_request)?;
+    blocking(move || {
+        if let Ok(existing) = state.executions.records(id) {
+            let same_start = existing
+                .iter()
+                .find(|record| {
+                    matches!(
+                        record.event,
+                        procnote_core::event::types::Event::ExecutionStarted { .. }
+                    )
+                })
+                .map(|record| &record.event)
+                == records.first().map(|record| &record.event);
+            return if same_start {
+                procnote_app::execution::get_execution(state.executions.as_ref(), id)
+            } else {
+                Err(format!("execution {id} already exists"))
+            };
+        }
+        let stored = sync::create_started(
+            state.executions.as_ref(),
+            procedure,
+            snapshot,
+            &records,
+            env!("CARGO_PKG_VERSION").to_string(),
+        )?;
+        procnote_app::execution::summarize(&stored.state, stored.location.as_deref())
+    })
+    .await
+    .map(Json)
+}
+
+async fn list_conflicts(
+    State(state): State<SharedState>,
+    Path(id): Path<ExecutionId>,
+) -> Result<Json<Vec<Conflict>>, ApiError> {
+    blocking(move || state.executions.conflicts(id))
+        .await
+        .map(Json)
+}
+
+/// Mark a conflict as dealt with (re-recorded, or deliberately dropped).
+async fn resolve_conflict(
+    State(state): State<SharedState>,
+    Path((id, event_id)): Path<(ExecutionId, uuid::Uuid)>,
+    identity: Option<Extension<Identity>>,
+    Json(request): Json<ResolveConflictRequest>,
+) -> Result<Json<Vec<Conflict>>, ApiError> {
+    let by = identity
+        .map(|Extension(identity)| identity.email)
+        .or(request.meta.recorded_by);
+    blocking(move || {
+        sync::resolve_conflict(
+            state.executions.as_ref(),
+            id,
+            event_id,
+            &Resolution {
+                at: chrono::Utc::now(),
+                by,
+            },
+        )?;
+        state.executions.conflicts(id)
+    })
+    .await
+    .map(Json)
+}
+
+#[derive(Deserialize)]
+struct ResolveConflictRequest {
+    #[serde(default)]
+    meta: ActionMeta,
 }
 
 /// WebSocket that sends `{"seq": n}` now and after every write to the

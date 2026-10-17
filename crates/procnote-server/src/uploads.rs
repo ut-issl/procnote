@@ -5,6 +5,7 @@ use uuid::Uuid;
 use procnote_app::action::ExecutionAction;
 use procnote_app::attachment::sanitize_attachment_filename;
 use procnote_app::execution::infer_attachment_content_type;
+use procnote_app::repository::StagedFile;
 
 /// Staging area for files uploaded by browsers before they are attached.
 ///
@@ -54,6 +55,17 @@ impl UploadStore {
                 Ok(token)
             })
             .collect()
+    }
+
+    /// The staged file of `token`, hashed and named as it would be stored.
+    pub fn staged(&self, token: Uuid) -> Result<StagedFile, String> {
+        let file = self.staged_file(token)?;
+        let filename = file
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| "staged upload has no filename".to_string())?
+            .to_string();
+        StagedFile::new(&file, &filename)
     }
 
     /// Delete a staged upload.
