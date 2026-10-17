@@ -302,3 +302,71 @@ async fn unknown_api_paths_are_not_served_the_frontend() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 }
+
+async fn next_seq(
+    socket: &mut tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+) -> u64 {
+    use futures_util::StreamExt;
+    let message = tokio::time::timeout(std::time::Duration::from_secs(2), socket.next())
+        .await
+        .expect("no live update within 2 s")
+        .unwrap()
+        .unwrap();
+    let value: Value = serde_json::from_str(message.to_text().unwrap()).unwrap();
+    value["seq"].as_u64().unwrap()
+}
+
+#[tokio::test]
+async fn live_updates_reach_every_watcher_of_the_execution() {
+    let fixture = fixture(None);
+    let id = start(&fixture).await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(axum::serve(listener, fixture.app.clone()).into_future());
+    let url = format!("ws://{addr}/api/executions/{id}/live");
+    let (mut alice, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+    let (mut bob, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+    let initial = next_seq(&mut alice).await;
+    assert_eq!(next_seq(&mut bob).await, initial);
+
+    let started = std::time::Instant::now();
+    let (status, summary) = send(
+        &fixture.app,
+        post_json(
+            &format!("/api/executions/{id}/actions"),
+            &json!({ "action": { "action": "rename_execution", "name": "live" } }),
+        ),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(summary["seq"].as_u64().unwrap(), initial + 1);
+    assert_eq!(next_seq(&mut alice).await, initial + 1);
+    assert_eq!(next_seq(&mut bob).await, initial + 1);
+    assert!(started.elapsed() < std::time::Duration::from_millis(200));
+}
+
+#[tokio::test]
+async fn live_updates_close_for_unknown_executions() {
+    use futures_util::StreamExt;
+    let fixture = fixture(None);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(axum::serve(listener, fixture.app.clone()).into_future());
+    let url = format!(
+        "ws://{addr}/api/executions/{}/live",
+        "00000000-0000-4000-8000-000000000000"
+    );
+    let (mut socket, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+
+    let message = tokio::time::timeout(std::time::Duration::from_secs(2), socket.next())
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        message,
+        None | Some(Ok(tokio_tungstenite::tungstenite::Message::Close(_)))
+    ));
+}

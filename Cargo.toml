@@ -24,6 +24,7 @@ chrono = { version = "0.4.43", features = ["serde"] }
 clap = { version = "4.5.56", features = ["derive"] }
 env_logger = "0.11.11"
 fs2 = "0.4.3"
+futures-util = "0.3.34"
 http-body-util = "0.1.5"
 log = "0.4"
 names = { version = "0.14.0", default-features = false }
@@ -40,6 +41,7 @@ tauri-plugin-opener = "2.5.3"
 tempfile = "3.24.0"
 thiserror = "2.0.18"
 tokio = "1.53.3"
+tokio-tungstenite = "0.30.0"
 tower = "0.5.3"
 tower-http = "0.7.1"
 ts-rs = { version = "12.0.1", features = ["chrono-impl", "uuid-impl"] }

@@ -74,6 +74,12 @@ export default function ExecutionPage() {
     };
   }, [executionId]);
 
+  // Show what other operators record on this execution as it happens.
+  useEffect(() => {
+    if (!executionId) return;
+    return executionStore.watch(executionId);
+  }, [executionId]);
+
   const isActive = summary?.status === "active";
   const finished = isFinished(summary);
   const skippedSteps = summary?.steps.filter((s) => s.status === "skipped").length ?? 0;

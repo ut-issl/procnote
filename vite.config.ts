@@ -15,6 +15,6 @@ export default defineConfig({
     port: 5180,
     strictPort: true,
     // Browser mode talks to procnote-server (`just dev-server`).
-    proxy: { "/api": "http://127.0.0.1:5181" },
+    proxy: { "/api": { target: "http://127.0.0.1:5181", ws: true } },
   },
 });
