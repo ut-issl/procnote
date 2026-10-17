@@ -86,6 +86,10 @@ export default function StepBody({
     void onaction({ action: "remove_attachment_file", step_id: stepId, input_id: inputId, path });
   }
 
+  function unassignAttachment(inputId: string, path: string) {
+    void onaction({ action: "unassign_attachment", step_id: stepId, input_id: inputId, path });
+  }
+
   function clearAttachments(inputId: string) {
     void onaction({ action: "clear_attachments", step_id: stepId, input_id: inputId });
   }
@@ -147,6 +151,9 @@ export default function StepBody({
                         onpick={() => api.pickAttachmentSources(input.definition.label)}
                         onremovefile={
                           isInteractable ? (path) => removeAttachmentFile(inputId, path) : undefined
+                        }
+                        onunassign={
+                          isInteractable ? (path) => unassignAttachment(inputId, path) : undefined
                         }
                         onclear={isInteractable ? () => clearAttachments(inputId) : undefined}
                         onpreview={(path) => api.getAttachmentPreviewDataUrl(executionId, path)}

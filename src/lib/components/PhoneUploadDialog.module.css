@@ -1,0 +1,28 @@
+.qr {
+  display: flex;
+  justify-content: center;
+  margin: 12px 0;
+}
+
+.qr :global(svg) {
+  width: 220px;
+  height: 220px;
+}
+
+.url {
+  font-family: monospace;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+  text-align: center;
+}
+
+.warning {
+  padding: 8px 10px;
+  border-radius: 4px;
+  background: #fff3e0;
+  color: #e65100 !important;
+}
+
+.error {
+  color: #c62828 !important;
+}
