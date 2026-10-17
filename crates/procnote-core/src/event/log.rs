@@ -1,7 +1,7 @@
 use std::io::{BufRead, Write};
 use std::path::Path;
 
-use super::types::Event;
+use super::types::{Event, EventMeta, EventRecord};
 
 /// The current supported schema version for event logs.
 pub const SUPPORTED_VERSION: u32 = 2;
@@ -62,6 +62,16 @@ pub fn append_event(path: &Path, event: &Event) -> Result<(), EventLogError> {
 /// - Invalid JSON is only tolerated at the tail of the file (truncated write
 ///   from a crash); mid-file corruption is an error.
 pub fn read_log(path: &Path) -> Result<Vec<Event>, EventLogError> {
+    Ok(read_log_records(path)?
+        .into_iter()
+        .map(|record| record.event)
+        .collect())
+}
+
+/// Read all events from a JSONL event log together with their [`EventMeta`].
+///
+/// Applies the same validation as [`read_log`].
+pub fn read_log_records(path: &Path) -> Result<Vec<EventRecord>, EventLogError> {
     let file = std::fs::File::open(path)?;
     let reader = std::io::BufReader::new(file);
     let mut lines = reader.lines().enumerate();
@@ -91,7 +101,7 @@ pub fn read_log(path: &Path) -> Result<Vec<Event>, EventLogError> {
         _ => return Err(EventLogError::MissingLogMeta),
     }
 
-    let mut events = vec![first_event];
+    let mut events = vec![EventRecord::from(first_event)];
     let mut pending_truncated_tail: Option<(usize, String)> = None;
 
     for (line_idx, line) in lines {
@@ -105,7 +115,16 @@ pub fn read_log(path: &Path) -> Result<Vec<Event>, EventLogError> {
         }
 
         match serde_json::from_str::<Event>(trimmed) {
-            Ok(event) => events.push(event),
+            Ok(event) => {
+                let meta = serde_json::from_str::<EventMeta>(trimmed).map_err(|source| {
+                    EventLogError::InvalidEventPayload {
+                        type_name: event_type_name(trimmed),
+                        line: line_idx + 1,
+                        source,
+                    }
+                })?;
+                events.push(EventRecord { event, meta });
+            }
             Err(source) => {
                 if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
                     let type_name = value
@@ -136,6 +155,13 @@ pub fn read_log(path: &Path) -> Result<Vec<Event>, EventLogError> {
     }
 
     Ok(events)
+}
+
+fn event_type_name(line: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(line)
+        .ok()
+        .and_then(|value| value.get("type")?.as_str().map(str::to_string))
+        .unwrap_or_else(|| "<no type>".to_string())
 }
 
 fn is_known_event_type(type_name: &str) -> bool {
@@ -182,6 +208,93 @@ mod tests {
             version: SUPPORTED_VERSION,
             tool_version: "0.1.0".to_string(),
         }
+    }
+
+    fn renamed(name: &str) -> Event {
+        Event::ExecutionRenamed {
+            at: Utc::now(),
+            execution_id: sample_execution_id(),
+            name: name.to_string(),
+        }
+    }
+
+    fn write_records(path: &Path, records: &[EventRecord]) {
+        let lines: Vec<String> = records
+            .iter()
+            .map(|record| serde_json::to_string(record).unwrap())
+            .collect();
+        std::fs::write(path, lines.join("\n") + "\n").unwrap();
+    }
+
+    #[test]
+    fn record_without_meta_serializes_exactly_like_the_event() {
+        let event = renamed("x");
+
+        assert_eq!(
+            serde_json::to_value(EventRecord::from(event.clone())).unwrap(),
+            serde_json::to_value(event).unwrap()
+        );
+    }
+
+    #[test]
+    fn record_meta_is_written_on_the_same_line() {
+        let record = EventRecord {
+            event: renamed("x"),
+            meta: EventMeta {
+                event_id: Some(sample_execution_id()),
+                recorded_by: Some("野村".to_string()),
+                device: Some("browser-1".to_string()),
+            },
+        };
+
+        let value = serde_json::to_value(&record).unwrap();
+
+        assert_eq!(value["type"], "execution_renamed");
+        assert_eq!(value["name"], "x");
+        assert_eq!(value["recorded_by"], "野村");
+        assert_eq!(value["device"], "browser-1");
+        assert_eq!(value["event_id"], sample_execution_id().to_string());
+    }
+
+    #[test]
+    fn records_round_trip_with_and_without_meta() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        let with_meta = EventRecord {
+            event: renamed("a"),
+            meta: EventMeta {
+                event_id: Some(Uuid::new_v4()),
+                recorded_by: Some("op".to_string()),
+                device: None,
+            },
+        };
+        let records = vec![
+            EventRecord::from(log_meta()),
+            with_meta,
+            EventRecord::from(renamed("b")),
+        ];
+        write_records(&path, &records);
+
+        assert_eq!(read_log_records(&path).unwrap(), records);
+        assert_eq!(read_log(&path).unwrap().len(), 3);
+    }
+
+    #[test]
+    fn meta_with_a_wrong_type_is_an_invalid_payload() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        let mut bad = serde_json::to_value(renamed("a")).unwrap();
+        bad["device"] = serde_json::json!(5);
+        std::fs::write(
+            &path,
+            format!("{}\n{}\n", serde_json::to_string(&log_meta()).unwrap(), bad),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            read_log_records(&path),
+            Err(EventLogError::InvalidEventPayload { line: 2, .. })
+        ));
     }
 
     fn sample_events() -> Vec<Event> {

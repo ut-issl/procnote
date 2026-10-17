@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { isDesktop } from "#lib/platform.js";
 import type {
+  ActionMeta,
   AttachmentDropPointSessionSummary,
   AttachmentDropPointStatus,
   AttachmentSource,
@@ -49,17 +50,21 @@ export async function getTemplate(templatePath: string): Promise<ProcedureTempla
   return request(`/templates/content?${new URLSearchParams({ path: templatePath })}`);
 }
 
-export async function startExecution(templatePath: string): Promise<ExecutionSummary> {
-  if (isDesktop) return invoke("start_execution", { templatePath });
-  return postJson("/executions", { template_path: templatePath });
+export async function startExecution(
+  templatePath: string,
+  meta: ActionMeta,
+): Promise<ExecutionSummary> {
+  if (isDesktop) return invoke("start_execution", { templatePath, meta });
+  return postJson("/executions", { template_path: templatePath, meta });
 }
 
 export async function recordAction(
   executionId: string,
   action: ExecutionAction,
+  meta: ActionMeta,
 ): Promise<ExecutionSummary> {
-  if (isDesktop) return invoke("record_action", { executionId, action });
-  return postJson(`/executions/${encodeURIComponent(executionId)}/actions`, action);
+  if (isDesktop) return invoke("record_action", { executionId, action, meta });
+  return postJson(`/executions/${encodeURIComponent(executionId)}/actions`, { action, meta });
 }
 
 export async function getExecutionState(executionId: string): Promise<ExecutionSummary> {

@@ -38,7 +38,7 @@ const rename = (name: string): ExecutionAction => ({ action: "rename_execution",
 
 describe("ExecutionStore", () => {
   test("load stores the summary and clears loading", async () => {
-    const store = new ExecutionStore(fakeApi());
+    const store = new ExecutionStore(fakeApi(), () => ({}));
 
     const loaded = await store.load("exec-1");
 
@@ -65,7 +65,7 @@ describe("ExecutionStore", () => {
   });
 
   test("act without a loaded execution does nothing", async () => {
-    const store = new ExecutionStore(fakeApi());
+    const store = new ExecutionStore(fakeApi(), () => ({}));
 
     expect(await store.act(rename("x"))).toBe(false);
   });
@@ -116,8 +116,31 @@ describe("ExecutionStore", () => {
     expect(store.getState().summary?.name).toBe("good");
   });
 
+  test("each action is sent with fresh metadata", async () => {
+    const sent: unknown[] = [];
+    let n = 0;
+    const store = new ExecutionStore(
+      fakeApi({
+        recordAction: async (_id, _action, meta) => {
+          sent.push(meta);
+          return summary();
+        },
+      }),
+      () => ({ event_id: `id-${++n}`, recorded_by: "Operator A", device: "browser-1" }),
+    );
+    store.setSummary(summary());
+
+    await store.act(rename("a"));
+    await store.act(rename("b"));
+
+    expect(sent).toEqual([
+      { event_id: "id-1", recorded_by: "Operator A", device: "browser-1" },
+      { event_id: "id-2", recorded_by: "Operator A", device: "browser-1" },
+    ]);
+  });
+
   test("subscribers are notified with a new snapshot on every change", () => {
-    const store = new ExecutionStore(fakeApi());
+    const store = new ExecutionStore(fakeApi(), () => ({}));
     const snapshots: unknown[] = [];
     const unsubscribe = store.subscribe(() => snapshots.push(store.getState()));
     const before = store.getState();

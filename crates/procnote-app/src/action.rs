@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use procnote_core::event::types::CompletionStatus;
+use procnote_core::event::types::{CompletionStatus, EventMeta};
 use procnote_core::template::types::StepContent;
 
 /// A file selected by the trusted native file picker for attachment storage.
@@ -98,6 +98,41 @@ pub enum ExecutionAction {
     ReopenExecution {
         reason: String,
     },
+}
+
+/// Who performs an action and from where, sent by the frontend with each action.
+#[derive(Debug, Default, Deserialize, Serialize, TS)]
+#[ts(export)]
+pub struct ActionMeta {
+    /// Client-generated ID used to recognize retries of the same action.
+    #[serde(default)]
+    #[ts(optional)]
+    pub event_id: Option<uuid::Uuid>,
+    /// Operator name as entered in the UI.
+    #[serde(default)]
+    #[ts(optional)]
+    pub recorded_by: Option<String>,
+    /// Stable per-device identifier.
+    #[serde(default)]
+    #[ts(optional)]
+    pub device: Option<String>,
+}
+
+impl ActionMeta {
+    /// The metadata to store with the resulting event; blank strings are omitted.
+    #[must_use]
+    pub fn into_event_meta(self) -> EventMeta {
+        let non_blank = |value: Option<String>| {
+            value
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+        };
+        EventMeta {
+            event_id: self.event_id,
+            recorded_by: non_blank(self.recorded_by),
+            device: non_blank(self.device),
+        }
+    }
 }
 
 /// Mutable view of one attachment source referenced by an [`ExecutionAction`].
@@ -198,6 +233,26 @@ mod tests {
             .collect();
 
         assert_eq!(paths, ["a", "b"]);
+    }
+
+    #[test]
+    fn action_meta_drops_blank_strings_and_trims() {
+        let id = uuid::Uuid::new_v4();
+        let meta = ActionMeta {
+            event_id: Some(id),
+            recorded_by: Some("  Nomura ".to_string()),
+            device: Some("   ".to_string()),
+        }
+        .into_event_meta();
+
+        assert_eq!(
+            meta,
+            EventMeta {
+                event_id: Some(id),
+                recorded_by: Some("Nomura".to_string()),
+                device: None,
+            }
+        );
     }
 
     #[test]

@@ -4,7 +4,7 @@ use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
 
 use crate::state::AppState;
-use procnote_app::action::{AttachmentSource, ExecutionAction};
+use procnote_app::action::{ActionMeta, AttachmentSource, ExecutionAction};
 use procnote_app::execution::{ExecutionSummary, infer_attachment_content_type};
 use procnote_app::persistence::execution_store::find_execution_dir;
 use procnote_core::event::types::ExecutionId;
@@ -124,11 +124,13 @@ pub fn reveal_execution_dir(
 pub fn start_execution(
     state: State<'_, AppState>,
     template_path: String,
+    meta: Option<ActionMeta>,
 ) -> Result<ExecutionSummary, String> {
     procnote_app::execution::start_execution(
         &state.procedures_dir,
         Path::new(&template_path),
         env!("CARGO_PKG_VERSION").to_string(),
+        meta.unwrap_or_default(),
     )
 }
 
@@ -142,9 +144,15 @@ pub fn record_action(
     state: State<'_, AppState>,
     execution_id: ExecutionId,
     mut action: ExecutionAction,
+    meta: Option<ActionMeta>,
 ) -> Result<ExecutionSummary, String> {
     authorize_attachment_action(&state, &mut action)?;
-    procnote_app::execution::record_action(&state.procedures_dir, execution_id, action)
+    procnote_app::execution::record_action(
+        &state.procedures_dir,
+        execution_id,
+        action,
+        meta.unwrap_or_default(),
+    )
 }
 
 /// Get the current state of an execution.
