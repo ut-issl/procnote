@@ -174,6 +174,12 @@ pub fn compute_sha256(path: &Path) -> std::io::Result<String> {
     Ok(hex_encode(hasher.finalize().as_ref()))
 }
 
+/// The hex SHA-256 of `bytes`.
+#[must_use]
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    hex_encode(Sha256::digest(bytes).as_ref())
+}
+
 fn hex_encode(bytes: &[u8]) -> String {
     bytes
         .iter()
