@@ -12,7 +12,7 @@ categories.workspace = true
 [dependencies]
 base64.workspace = true
 chrono.workspace = true
-fs2.workspace = true
+fs2 = { workspace = true, optional = true }
 log.workspace = true
 procnote-core = { path = "../procnote-core" }
 serde.workspace = true
@@ -20,6 +20,11 @@ serde_json.workspace = true
 sha2.workspace = true
 ts-rs.workspace = true
 uuid.workspace = true
+
+[features]
+default = ["fs"]
+# Filesystem storage of executions (not available in WebAssembly).
+fs = ["dep:fs2"]
 
 [lints]
 workspace = true
