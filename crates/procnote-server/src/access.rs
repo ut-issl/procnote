@@ -129,8 +129,8 @@ pub fn verify_token(
 /// Verifies tokens, fetching the team's signing keys as needed.
 ///
 /// Keys are fetched on first use and again when a token names an unknown key
-/// (Access rotates keys every six weeks), at most once per
-/// [`KEY_REFRESH_INTERVAL`]. Requests that need keys while a fetch is in
+/// (Access rotates keys every six weeks), at most once every 30 seconds.
+/// Requests that need keys while a fetch is in
 /// flight wait for it and use its result.
 pub struct AccessVerifier {
     config: AccessConfig,
