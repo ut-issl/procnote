@@ -11,6 +11,7 @@ use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
+use procnote_app::persistence::execution_store::ExecutionStore;
 use procnote_server::access::{AccessConfig, TOKEN_HEADER};
 use procnote_server::{Auth, ServerConfig, router};
 
@@ -57,6 +58,7 @@ async fn fixture() -> Fixture {
     std::fs::create_dir_all(&template_dir).unwrap();
     std::fs::write(template_dir.join("template.md"), TEMPLATE).unwrap();
     let app = router(ServerConfig {
+        executions: Box::new(ExecutionStore::new(procedures_dir.canonicalize().unwrap())),
         procedures_dir: procedures_dir.canonicalize().unwrap(),
         upload_dir: temp.path().join("uploads"),
         static_dir: None,

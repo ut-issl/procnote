@@ -7,6 +7,7 @@
 
 pub mod access;
 mod live;
+pub mod postgres;
 mod upload_links;
 mod uploads;
 
@@ -29,7 +30,6 @@ use access::{AccessConfig, AccessVerifier, Identity, token_from_headers};
 use live::LiveUpdates;
 use procnote_app::action::{ActionMeta, AttachmentSource, ExecutionAction};
 use procnote_app::execution::{ExecutionSummary, infer_attachment_content_type};
-use procnote_app::persistence::execution_store::ExecutionStore;
 use procnote_app::repository::ExecutionRepository;
 use procnote_app::template::TemplateSummary;
 use procnote_core::event::types::ExecutionId;
@@ -43,6 +43,9 @@ const MAX_UPLOAD_BYTES: usize = 512 * 1024 * 1024;
 pub struct ServerConfig {
     /// Workspace directory containing procedure subdirectories.
     pub procedures_dir: PathBuf,
+    /// Where executions are stored: the procedures directory itself
+    /// ([`procnote_app::persistence::execution_store::ExecutionStore`]) or a database ([`postgres::PostgresStore`]).
+    pub executions: Box<dyn ExecutionRepository>,
     /// Directory where uploaded files are staged before being attached.
     pub upload_dir: PathBuf,
     /// Built frontend to serve for non-API paths, if any.
@@ -77,7 +80,7 @@ type SharedState = Arc<AppState>;
 /// Build the application router.
 pub fn router(config: ServerConfig) -> std::io::Result<Router> {
     let state = Arc::new(AppState {
-        executions: Box::new(ExecutionStore::new(config.procedures_dir.clone())),
+        executions: config.executions,
         procedures_dir: config.procedures_dir,
         uploads: UploadStore::new(config.upload_dir)?,
         links: UploadLinks::new(config.state_dir.join("upload-links"))?,
