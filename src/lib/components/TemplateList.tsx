@@ -7,9 +7,11 @@ const c = scoped(styles);
 export default function TemplateList({
   templates,
   onstart,
+  onedit,
 }: {
   templates: TemplateSummary[];
   onstart: (t: TemplateSummary) => void;
+  onedit?: (t: TemplateSummary) => void;
 }) {
   return (
     <div className={c("template-list")}>
@@ -21,6 +23,11 @@ export default function TemplateList({
               {template.id} &middot; v{template.version}
             </span>
           </div>
+          {onedit && (
+            <button className={c("btn-edit")} onClick={() => onedit(template)}>
+              Edit (prototype)
+            </button>
+          )}
           <button className={c("btn-start")} onClick={() => onstart(template)}>
             Start
           </button>

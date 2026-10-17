@@ -49,3 +49,20 @@
 .btn-start:hover {
   background: #16213e;
 }
+
+.btn-edit {
+  margin-left: auto;
+  margin-right: 8px;
+  padding: 6px 12px;
+  background: #fff;
+  color: #555;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.btn-edit:hover {
+  background: #f5f5f5;
+}
