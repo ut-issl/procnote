@@ -3,6 +3,7 @@ import { useNavigate, useParams } from "react-router";
 import * as api from "#lib/api/commands.js";
 import AddStepDialog from "#lib/components/AddStepDialog.js";
 import Modal from "#lib/components/Modal.js";
+import RunView from "#lib/components/RunView.js";
 import StepCard from "#lib/components/StepCard.js";
 import { isDesktop } from "#lib/platform.js";
 import { executionStore, isFinished } from "#lib/stores/execution.js";
@@ -19,6 +20,29 @@ function handleAction(action: ExecutionAction): Promise<boolean> {
   return executionStore.act(action);
 }
 
+type Layout = "focus" | "list";
+const LAYOUT_KEY = "procnote.executionLayout";
+
+/** The execution layout, remembered per browser (best effort). */
+function useLayout(): [Layout, (layout: Layout) => void] {
+  const [layout, setLayout] = useState<Layout>(() => {
+    try {
+      return localStorage.getItem(LAYOUT_KEY) === "list" ? "list" : "focus";
+    } catch {
+      return "focus";
+    }
+  });
+  function update(next: Layout) {
+    setLayout(next);
+    try {
+      localStorage.setItem(LAYOUT_KEY, next);
+    } catch {
+      // Storage may be unavailable; the choice then lasts for this page only.
+    }
+  }
+  return [layout, update];
+}
+
 export default function ExecutionPage() {
   const navigate = useNavigate();
   const executionId = useParams().id ?? "";
@@ -32,6 +56,7 @@ export default function ExecutionPage() {
   const [editNameValue, setEditNameValue] = useState("");
   const [savingName, setSavingName] = useState(false);
   const [dropPointEnabled, setDropPointEnabled] = useState(false);
+  const [layout, setLayout] = useLayout();
 
   useEffect(() => {
     if (!executionId) return;
@@ -197,6 +222,18 @@ export default function ExecutionPage() {
                     {summary.status}
                   </span>
                   <span className={c("progress")}>{totalSteps} steps</span>
+                  <div className={c("layout-toggle")} role="group" aria-label="Layout">
+                    {(["focus", "list"] as const).map((option) => (
+                      <button
+                        key={option}
+                        className={c(layout === option && "active")}
+                        aria-pressed={layout === option}
+                        onClick={() => setLayout(option)}
+                      >
+                        {option === "focus" ? "Focus" : "List"}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
 
@@ -247,19 +284,29 @@ export default function ExecutionPage() {
                 </div>
               )}
 
-              <div className={c("steps")}>
-                {summary.steps.map((stepSummary) => (
-                  <StepCard
-                    key={stepSummary.id}
-                    stepSummary={stepSummary}
-                    executionId={summary.execution_id}
-                    executionActive={isActive}
-                    dropPointEnabled={dropPointEnabled}
-                    onaction={handleAction}
-                    ondropimported={(next) => executionStore.setSummary(next)}
-                  />
-                ))}
-              </div>
+              {layout === "focus" ? (
+                <RunView
+                  summary={summary}
+                  executionActive={isActive}
+                  dropPointEnabled={dropPointEnabled}
+                  onaction={handleAction}
+                  ondropimported={(next) => executionStore.setSummary(next)}
+                />
+              ) : (
+                <div className={c("steps")}>
+                  {summary.steps.map((stepSummary) => (
+                    <StepCard
+                      key={stepSummary.id}
+                      stepSummary={stepSummary}
+                      executionId={summary.execution_id}
+                      executionActive={isActive}
+                      dropPointEnabled={dropPointEnabled}
+                      onaction={handleAction}
+                      ondropimported={(next) => executionStore.setSummary(next)}
+                    />
+                  ))}
+                </div>
+              )}
             </>
           )
         )}

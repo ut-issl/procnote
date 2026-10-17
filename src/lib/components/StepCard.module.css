@@ -38,56 +38,6 @@
   font-weight: 600;
 }
 
-.step-description {
-  margin: 0 0 4px;
-  font-size: 14px;
-  color: #444;
-  line-height: 1.5;
-}
-
-.step-description :global(p) {
-  margin: 0 0 0.5em;
-}
-
-.step-description :global(p:last-child) {
-  margin-bottom: 0;
-}
-
-.step-description :global(a) {
-  color: #1a73e8;
-}
-
-.step-description :global(code) {
-  background: #f0f0f0;
-  padding: 1px 4px;
-  border-radius: 3px;
-  font-size: 13px;
-}
-
-.step-description :global(pre) {
-  border-radius: 4px;
-  overflow-x: auto;
-  margin: 0.5em 0;
-  font-size: 13px;
-  line-height: 1.4;
-}
-
-.step-description :global(pre code) {
-  padding: 0;
-  border-radius: 0;
-}
-
-.step-description :global(pre code.hljs) {
-  padding: 12px;
-  border-radius: 4px;
-}
-
-.step-description :global(pre code:not(.hljs)) {
-  background: #f0f0f0;
-  padding: 12px;
-  display: block;
-}
-
 .step-status-badge {
   font-size: 11px;
   font-weight: 600;
@@ -97,13 +47,6 @@
 
 .skipped .step-status-badge {
   color: #e65100;
-}
-
-.step-section {
-  margin-top: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
 }
 
 .step-actions {
