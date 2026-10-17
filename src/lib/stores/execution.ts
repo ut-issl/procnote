@@ -12,6 +12,7 @@ export interface ExecutionStoreState {
 /** Backend operations the store needs; injectable for tests. */
 export interface ExecutionApi {
   startExecution(templatePath: string, meta: ActionMeta): Promise<ExecutionSummary>;
+  startSharedExecution(templateId: string, meta: ActionMeta): Promise<ExecutionSummary>;
   getExecutionState(executionId: string): Promise<ExecutionSummary>;
   recordAction(
     executionId: string,
@@ -62,6 +63,11 @@ export class ExecutionStore {
 
   async start(templatePath: string): Promise<ExecutionSummary | null> {
     return this.#fetchSummary(() => this.#api.startExecution(templatePath, this.#meta()));
+  }
+
+  /** Start an execution of a shared (collaboratively edited) template. */
+  async startShared(templateId: string): Promise<ExecutionSummary | null> {
+    return this.#fetchSummary(() => this.#api.startSharedExecution(templateId, this.#meta()));
   }
 
   async load(executionId: string): Promise<ExecutionSummary | null> {
