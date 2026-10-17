@@ -14,7 +14,6 @@ use url::Url;
 use url::form_urlencoded;
 use zeroize::Zeroizing;
 
-use crate::commands::execution::{load_execution_from_disk, summarize};
 use crate::drop_point::client::{
     CreateDropPointResponse, DropPointClient, DropPointConfig, DropPointStatusResponse,
     RemoteTerminal,
@@ -29,8 +28,9 @@ use crate::drop_point::storage::{
     InstalledBundle, discover_installed_bundles, encrypted_bundle_identity, install_bundle,
     verify_installed_bundle,
 };
-use crate::persistence::execution_store::{ExecutionStore, InstalledAttachmentSource};
 use crate::state::AppState;
+use procnote_app::execution::{load_execution_from_disk, summarize};
+use procnote_app::persistence::execution_store::{ExecutionStore, InstalledAttachmentSource};
 
 #[derive(Debug, Serialize, TS)]
 #[ts(export)]
@@ -212,7 +212,7 @@ pub async fn import_attachment_drop_point_upload(
     step_id: String,
     input_id: String,
     session_id: String,
-) -> Result<super::execution::ExecutionSummary, String> {
+) -> Result<procnote_app::execution::ExecutionSummary, String> {
     let _operation = sessions.lock_operation().await;
     let mut session = sessions.get(&session_id)?;
     let client = configured_receiver_client(&state, &session)?;
@@ -459,7 +459,7 @@ fn record_one_submission(
     sessions: &DropPointSessions,
     session: &mut ActiveDropPointSession,
     submission_id: &str,
-) -> Result<Option<super::execution::ExecutionSummary>, String> {
+) -> Result<Option<procnote_app::execution::ExecutionSummary>, String> {
     if session
         .submissions
         .get(submission_id)
@@ -498,7 +498,7 @@ fn record_pending_submissions(
     procedures_dir: &std::path::Path,
     sessions: &DropPointSessions,
     session: &mut ActiveDropPointSession,
-) -> Result<Option<super::execution::ExecutionSummary>, String> {
+) -> Result<Option<procnote_app::execution::ExecutionSummary>, String> {
     validate_session_execution_dir(procedures_dir, session)?;
     for (id, installed) in
         discover_installed_bundles(&session.execution_dir, &session.drop_point_id)
@@ -794,7 +794,7 @@ mod tests {
     use procnote_core::template::parse_template;
 
     use super::*;
-    use crate::persistence::event_log::EventLog;
+    use procnote_app::persistence::event_log::EventLog;
 
     const TEMPLATE: &str = r"---
 id: drop-point-restart
