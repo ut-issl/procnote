@@ -4,21 +4,10 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 
 use crate::persistence::event_log::sync_dir;
+use crate::repository::StagedFile;
 
 pub struct AttachmentStore {
     execution_dir: PathBuf,
-}
-
-#[derive(Debug, Clone)]
-pub struct StoredAttachment {
-    pub filename: String,
-    pub relative_path: String,
-    pub sha256: String,
-}
-
-pub struct PendingStoredAttachment {
-    pub stored: StoredAttachment,
-    source: PathBuf,
 }
 
 impl AttachmentStore {
@@ -27,32 +16,18 @@ impl AttachmentStore {
         Self { execution_dir }
     }
 
-    pub fn prepare_copy(
-        &self,
-        source: &Path,
-        filename: &str,
-    ) -> Result<PendingStoredAttachment, String> {
-        let filename = sanitize_attachment_filename(filename);
-        let sha256 = compute_sha256(source).map_err(|e| e.to_string())?;
-        Ok(PendingStoredAttachment {
-            stored: stored_attachment(filename, sha256),
-            source: source.to_path_buf(),
-        })
-    }
-
-    pub fn commit_prepared(
-        &self,
-        pending: PendingStoredAttachment,
-    ) -> Result<StoredAttachment, String> {
+    /// Durably copy a staged file to its stored path. Storing the same content
+    /// again is a no-op.
+    pub fn store(&self, file: &StagedFile) -> Result<(), String> {
         let attachments_dir = self.execution_dir.join("attachments");
         std::fs::create_dir_all(&attachments_dir).map_err(|e| e.to_string())?;
         sync_dir(&attachments_dir).map_err(|e| e.to_string())?;
 
-        let destination = self.execution_dir.join(&pending.stored.relative_path);
+        let destination = self.execution_dir.join(&file.record.path);
         if destination.exists() {
             let existing_hash = compute_sha256(&destination).map_err(|e| e.to_string())?;
-            if existing_hash == pending.stored.sha256 {
-                return Ok(pending.stored);
+            if existing_hash == file.record.sha256 {
+                return Ok(());
             }
             return Err(format!(
                 "attachment hash-prefix collision at {}",
@@ -60,27 +35,16 @@ impl AttachmentStore {
             ));
         }
 
-        let mut file = std::fs::OpenOptions::new()
+        let mut output = std::fs::OpenOptions::new()
             .create_new(true)
             .write(true)
             .open(&destination)
             .map_err(|e| e.to_string())?;
-        write_pending_source(&pending.source, &mut file, &pending.stored.sha256)?;
-        file.flush().map_err(|e| e.to_string())?;
-        file.sync_all().map_err(|e| e.to_string())?;
+        write_pending_source(&file.source, &mut output, &file.record.sha256)?;
+        output.flush().map_err(|e| e.to_string())?;
+        output.sync_all().map_err(|e| e.to_string())?;
         sync_dir(&attachments_dir).map_err(|e| e.to_string())?;
-
-        Ok(pending.stored)
-    }
-}
-
-fn stored_attachment(filename: String, sha256: String) -> StoredAttachment {
-    let short_hash = &sha256[..7];
-    let stored_name = format!("{short_hash}-{filename}");
-    StoredAttachment {
-        filename,
-        relative_path: format!("attachments/{stored_name}"),
-        sha256,
+        Ok(())
     }
 }
 
@@ -195,7 +159,8 @@ fn is_windows_reserved_name(filename: &str) -> bool {
     )
 }
 
-fn compute_sha256(path: &Path) -> std::io::Result<String> {
+/// The hex SHA-256 of a file's content.
+pub fn compute_sha256(path: &Path) -> std::io::Result<String> {
     let mut file = std::fs::File::open(path)?;
     let mut hasher = Sha256::new();
     let mut buffer = vec![0u8; 64 * 1024];
