@@ -1,9 +1,11 @@
 //! HTTP API server exposing the same operations as the desktop IPC commands.
 //!
 //! Storage is the same procedures directory layout the desktop app uses, so a
-//! workspace can be opened from both at once. There is no authentication yet;
-//! run it only on a trusted network.
+//! workspace can be opened from both at once. Users are authenticated by
+//! Cloudflare Access in front of the server (see [`access`]); the server
+//! verifies Access's token on every API request except upload links.
 
+pub mod access;
 mod live;
 mod upload_links;
 mod uploads;
@@ -13,15 +15,17 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{DefaultBodyLimit, Multipart, Path, Query, State};
+use axum::extract::{DefaultBodyLimit, Multipart, Path, Query, Request, State};
 use axum::http::StatusCode;
+use axum::middleware::{Next, from_fn_with_state};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use axum::{Json, Router};
+use axum::{Extension, Json, Router};
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
 use tower_http::services::{ServeDir, ServeFile};
 
+use access::{AccessConfig, AccessVerifier, Identity, token_from_headers};
 use live::LiveUpdates;
 use procnote_app::action::{ActionMeta, AttachmentSource, ExecutionAction};
 use procnote_app::execution::{ExecutionSummary, infer_attachment_content_type};
@@ -44,6 +48,17 @@ pub struct ServerConfig {
     /// Directory for server-owned state that must not live in the procedures
     /// directory (upload link tokens).
     pub state_dir: PathBuf,
+    pub auth: Auth,
+}
+
+/// How API requests are authenticated.
+pub enum Auth {
+    /// Behind Cloudflare Access: every API request (except upload links) must
+    /// carry a valid Access token, whose email becomes the recorder.
+    Access(AccessConfig),
+    /// No authentication; recorders are whatever the client sends. For local
+    /// development only.
+    Disabled,
 }
 
 struct AppState {
@@ -51,6 +66,7 @@ struct AppState {
     uploads: UploadStore,
     links: UploadLinks,
     live: LiveUpdates,
+    access: Option<AccessVerifier>,
 }
 
 type SharedState = Arc<AppState>;
@@ -62,9 +78,23 @@ pub fn router(config: ServerConfig) -> std::io::Result<Router> {
         uploads: UploadStore::new(config.upload_dir)?,
         links: UploadLinks::new(config.state_dir.join("upload-links"))?,
         live: LiveUpdates::default(),
+        access: match config.auth {
+            Auth::Access(access) => Some(AccessVerifier::new(access)),
+            Auth::Disabled => None,
+        },
     });
 
+    // Upload links are reached by phones without logging in (they are an
+    // Access Bypass); the random token in the path is their credential.
+    let link_routes = Router::new()
+        .route("/upload-links/{token}", get(upload_link_target))
+        .route(
+            "/upload-links/{token}/files",
+            post(upload_to_link).layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES)),
+        );
+
     let api = Router::new()
+        .route("/me", get(me))
         .route("/templates", get(list_templates))
         .route("/templates/content", get(get_template))
         .route("/executions", get(list_executions).post(start_execution))
@@ -77,11 +107,6 @@ pub fn router(config: ServerConfig) -> std::io::Result<Router> {
                 .post(create_upload_link)
                 .delete(revoke_upload_link),
         )
-        .route("/upload-links/{token}", get(upload_link_target))
-        .route(
-            "/upload-links/{token}/files",
-            post(upload_to_link).layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES)),
-        )
         .route(
             "/executions/{id}/attachment-preview",
             get(attachment_preview),
@@ -90,6 +115,8 @@ pub fn router(config: ServerConfig) -> std::io::Result<Router> {
             "/uploads",
             post(upload).layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES)),
         )
+        .route_layer(from_fn_with_state(state.clone(), require_identity))
+        .merge(link_routes)
         .fallback(|| async { ApiError::new(StatusCode::NOT_FOUND, "no such API endpoint") })
         .with_state(state);
 
@@ -101,6 +128,63 @@ pub fn router(config: ServerConfig) -> std::io::Result<Router> {
         }
         None => app,
     })
+}
+
+/// Reject requests without a valid Access token, and attach the caller's
+/// [`Identity`] to those with one. A no-op when authentication is disabled.
+async fn require_identity(
+    State(state): State<SharedState>,
+    mut request: Request,
+    next: Next,
+) -> Response {
+    let Some(verifier) = &state.access else {
+        return next.run(request).await;
+    };
+    let outcome = match token_from_headers(request.headers()) {
+        Some(token) => verifier.verify(token).await,
+        None => Err(access::AuthError::Missing),
+    };
+    match outcome {
+        Ok(identity) => {
+            request.extensions_mut().insert(identity);
+            next.run(request).await
+        }
+        Err(e) => {
+            log::info!(
+                "rejected {} {}: {e}",
+                request.method(),
+                request.uri().path()
+            );
+            ApiError::new(StatusCode::UNAUTHORIZED, e.to_string()).into_response()
+        }
+    }
+}
+
+/// The caller as the server sees them.
+#[derive(Serialize)]
+struct Me {
+    /// `"access"` when Cloudflare Access authenticates users, else `"none"`.
+    auth: &'static str,
+    email: Option<String>,
+}
+
+async fn me(State(state): State<SharedState>, identity: Option<Extension<Identity>>) -> Json<Me> {
+    Json(Me {
+        auth: if state.access.is_some() {
+            "access"
+        } else {
+            "none"
+        },
+        email: identity.map(|Extension(identity)| identity.email),
+    })
+}
+
+/// With an authenticated caller, they are the recorder, whatever the client sent.
+fn attribute(mut meta: ActionMeta, identity: Option<Extension<Identity>>) -> ActionMeta {
+    if let Some(Extension(identity)) = identity {
+        meta.recorded_by = Some(identity.email);
+    }
+    meta
 }
 
 /// Error returned to the browser as `{"error": "..."}`.
@@ -186,14 +270,16 @@ struct StartExecutionRequest {
 
 async fn start_execution(
     State(state): State<SharedState>,
+    identity: Option<Extension<Identity>>,
     Json(request): Json<StartExecutionRequest>,
 ) -> Result<Json<ExecutionSummary>, ApiError> {
+    let meta = attribute(request.meta, identity);
     blocking(move || {
         procnote_app::execution::start_execution(
             &state.procedures_dir,
             std::path::Path::new(&request.template_path),
             env!("CARGO_PKG_VERSION").to_string(),
-            request.meta,
+            meta,
         )
     })
     .await
@@ -220,9 +306,11 @@ struct RecordActionRequest {
 async fn record_action(
     State(state): State<SharedState>,
     Path(id): Path<ExecutionId>,
+    identity: Option<Extension<Identity>>,
     Json(request): Json<RecordActionRequest>,
 ) -> Result<Json<ExecutionSummary>, ApiError> {
     let RecordActionRequest { mut action, meta } = request;
+    let meta = attribute(meta, identity);
     let live_state = state.clone();
     let summary = blocking(move || {
         let tokens = state.uploads.authorize(&mut action)?;

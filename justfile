@@ -12,13 +12,13 @@ dev *args='':
 dev-frontend:
     pnpm dev
 
-# Start the API server for browser use (frontend via `just dev-frontend`, which proxies /api)
+# Start the API server for browser use, without authentication (frontend via `just dev-frontend`, which proxies /api)
 dev-server *args='':
-    cargo run -p procnote-server -- {{ justfile_directory() }}/procedures {{ args }}
+    cargo run -p procnote-server -- {{ justfile_directory() }}/procedures --insecure-no-auth {{ args }}
 
-# Build the frontend and serve it with the API server (pass --listen 0.0.0.0:5181 for other devices)
+# Build the frontend and serve it locally without authentication (pass --listen 0.0.0.0:5181 for other devices on a trusted network)
 serve *args='': build-frontend
-    cargo run --release -p procnote-server -- {{ justfile_directory() }}/procedures --static-dir {{ justfile_directory() }}/build {{ args }}
+    cargo run --release -p procnote-server -- {{ justfile_directory() }}/procedures --static-dir {{ justfile_directory() }}/build --insecure-no-auth {{ args }}
 
 # --- Build ---
 
