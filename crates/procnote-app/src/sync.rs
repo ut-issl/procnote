@@ -64,7 +64,12 @@ pub enum PushOutcome {
 #[derive(Debug)]
 pub enum Pushed {
     Record(Decision),
-    Conflict(String),
+    /// Keep it as a conflict; its attachment content is still stored, since
+    /// it was recorded.
+    Conflict {
+        reason: String,
+        files: Vec<StagedFile>,
+    },
 }
 
 /// The attachment files an event references.
@@ -166,7 +171,10 @@ pub fn decide_pushed(
             events: vec![record.event.clone()],
             files,
         }),
-        Err(e) => Pushed::Conflict(e.to_string()),
+        Err(e) => Pushed::Conflict {
+            reason: e.to_string(),
+            files,
+        },
     })
 }
 
@@ -201,9 +209,12 @@ pub fn push_event(
                 outcome = PushOutcome::Recorded;
                 Ok(decision)
             }
-            Ok(Pushed::Conflict(reason)) => {
+            Ok(Pushed::Conflict { reason, files }) => {
                 outcome = PushOutcome::Conflict { reason };
-                Ok(Decision::default())
+                Ok(Decision {
+                    events: Vec::new(),
+                    files,
+                })
             }
             Err(reason) => {
                 outcome = PushOutcome::Rejected { reason };
@@ -331,7 +342,7 @@ mod tests {
         let after = decide_pushed(id, &state, &pushed(toggle), &[]).unwrap();
 
         assert!(matches!(before, Pushed::Record(d) if d.events.len() == 1));
-        assert!(matches!(after, Pushed::Conflict(_)));
+        assert!(matches!(after, Pushed::Conflict { .. }));
     }
 
     #[test]

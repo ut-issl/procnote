@@ -141,6 +141,7 @@ pub trait ExecutionRepository: Send + Sync {
     /// Record what `decide` returns, atomically with respect to other writers
     /// of the same execution: replay the current state, call `decide`, apply
     /// its events, store its files, then append the events with `meta`.
+    /// Files are stored even without events (the content of a conflict).
     ///
     /// When `meta.event_id` is already recorded the request is a retry:
     /// `decide` is not called and the current state is returned.
