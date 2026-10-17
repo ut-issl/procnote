@@ -1,0 +1,50 @@
+.conflicts {
+  border: 1px solid #e65100;
+  background: #fff3e0;
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+}
+
+.conflicts h3 {
+  margin: 0 0 4px;
+  font-size: 14px;
+  color: #e65100;
+}
+
+.hint {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: #6d4c41;
+}
+
+.conflicts ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.conflicts li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+}
+
+.what {
+  font-weight: 600;
+}
+
+.meta {
+  font-size: 12px;
+  color: #6d4c41;
+  flex: 1;
+}
+
+.error {
+  color: #c0392b;
+  font-size: 12px;
+}
