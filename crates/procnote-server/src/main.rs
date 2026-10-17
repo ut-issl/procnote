@@ -3,7 +3,8 @@ use std::path::PathBuf;
 
 use clap::Parser;
 
-use procnote_server::{ServerConfig, router};
+use procnote_server::access::AccessConfig;
+use procnote_server::{Auth, ServerConfig, router};
 
 /// Arguments accepted by the API server.
 #[derive(Parser, Debug)]
@@ -26,6 +27,33 @@ struct Args {
     /// `$XDG_STATE_HOME/procnote-server` or `~/.local/state/procnote-server`.
     #[arg(long)]
     state_dir: Option<PathBuf>,
+    /// Cloudflare Access team domain, e.g. `https://lab.cloudflareaccess.com`.
+    #[arg(long, requires = "access_aud")]
+    access_team_domain: Option<String>,
+    /// Audience (AUD) tag of the Cloudflare Access application for this server.
+    #[arg(long, requires = "access_team_domain")]
+    access_aud: Option<String>,
+    /// Run without authentication: recorders are whatever clients send.
+    /// For local development only.
+    #[arg(long, conflicts_with = "access_team_domain")]
+    insecure_no_auth: bool,
+}
+
+impl Args {
+    fn auth(&self) -> Result<Auth, String> {
+        match (&self.access_team_domain, &self.access_aud) {
+            (Some(team_domain), Some(audience)) => Ok(Auth::Access(AccessConfig {
+                team_domain: team_domain.clone(),
+                audience: audience.clone(),
+            })),
+            _ if self.insecure_no_auth => Ok(Auth::Disabled),
+            _ => Err(
+                "set --access-team-domain and --access-aud to run behind Cloudflare Access, \
+                 or pass --insecure-no-auth for local development"
+                    .to_string(),
+            ),
+        }
+    }
 }
 
 fn default_state_dir() -> PathBuf {
@@ -40,6 +68,24 @@ fn default_state_dir() -> PathBuf {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let args = Args::parse();
+    let auth = args.auth()?;
+    match &auth {
+        Auth::Access(config) => {
+            log::info!(
+                "authenticating with Cloudflare Access ({})",
+                config.team_domain
+            );
+            if !args.listen.ip().is_loopback() {
+                log::warn!(
+                    "listening on {} with Cloudflare Access: requests that reach this address \
+                     without going through Access are rejected, but bind to 127.0.0.1 behind \
+                     Cloudflare Tunnel so the origin is not reachable directly",
+                    args.listen
+                );
+            }
+        }
+        Auth::Disabled => log::warn!("authentication is DISABLED (--insecure-no-auth)"),
+    }
 
     let procedures_dir = args.workspace.canonicalize().map_err(|e| {
         format!(
@@ -54,6 +100,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         upload_dir,
         static_dir: args.static_dir,
         state_dir: args.state_dir.unwrap_or_else(default_state_dir),
+        auth,
     })?;
 
     let listener = tokio::net::TcpListener::bind(args.listen).await?;

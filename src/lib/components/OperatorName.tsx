@@ -1,4 +1,5 @@
-import { useState, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
+import { getMe } from "#lib/api/commands.js";
 import { operatorName, setOperatorName, subscribeOperatorName } from "#lib/operator.js";
 import { scoped } from "#lib/utils/cx.js";
 import { isNonComposingEnter } from "#lib/utils/keyboard.js";
@@ -6,11 +7,35 @@ import styles from "./OperatorName.module.css";
 
 const c = scoped(styles);
 
-/** The operator's name, recorded with every action; editable in place. */
+/**
+ * Who is recording. Behind Cloudflare Access the server records the
+ * signed-in email, so it is shown as is. Otherwise the operator enters a
+ * name, recorded with every action and editable in place.
+ */
 export default function OperatorName() {
   const name = useSyncExternalStore(subscribeOperatorName, operatorName);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(name);
+  const [signedInAs, setSignedInAs] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void getMe().then((me) => {
+      if (!cancelled) setSignedInAs(me.email);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (signedInAs) {
+    return (
+      <span className={c("operator")} title="Recorded with your actions">
+        <span className={c("label")}>Signed in as</span>
+        <span className={c("name")}>{signedInAs}</span>
+      </span>
+    );
+  }
 
   function commit() {
     setOperatorName(draft);
