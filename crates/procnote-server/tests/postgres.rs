@@ -219,6 +219,7 @@ async fn the_api_runs_on_postgres_without_writing_to_the_workspace() {
         static_dir: None,
         state_dir: temp.path().join("state"),
         auth: Auth::Disabled,
+        collab: None,
     })
     .unwrap();
     let post = |uri: String, body: Value| {
@@ -374,4 +375,162 @@ async fn a_workspace_round_trips_through_import_and_export() {
         );
     }
     assert_eq!(stored.state.inbox.len(), 1);
+}
+
+/// A stand-in for the collab service's internal API: records the templates
+/// it is asked to seed, and answers with `status`.
+async fn stub_collab_service(
+    status: StatusCode,
+) -> (String, Arc<std::sync::Mutex<Vec<(String, Value)>>>) {
+    let seeded = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let recorded = seeded.clone();
+    let app = axum::Router::new().route(
+        "/internal/templates/{id}",
+        axum::routing::post(
+            move |axum::extract::Path(id): axum::extract::Path<String>,
+                  headers: axum::http::HeaderMap,
+                  axum::Json(template): axum::Json<Value>| async move {
+                assert_eq!(headers["authorization"], "Bearer stub-secret");
+                recorded.lock().unwrap().push((id, template));
+                status
+            },
+        ),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(axum::serve(listener, app).into_future());
+    (url, seeded)
+}
+
+/// A workspace with the test template, and an API on it whose collab
+/// service is at `service_url`. Returns the workspace's template path too.
+fn collab_app(
+    temp: &tempfile::TempDir,
+    store: &PostgresStore,
+    service_url: String,
+) -> (axum::Router, PathBuf) {
+    use procnote_server::collab::{CollabConfig, CollabTemplates};
+
+    let workspace = temp.path().join("procedures");
+    std::fs::create_dir_all(workspace.join("postgres-test")).unwrap();
+    std::fs::write(workspace.join("postgres-test/template.md"), TEMPLATE).unwrap();
+    let workspace = workspace.canonicalize().unwrap();
+    let app = router(ServerConfig {
+        procedures_dir: workspace.clone(),
+        executions: Box::new(ExecutionStore::new(workspace.clone())),
+        upload_dir: temp.path().join("uploads"),
+        static_dir: None,
+        state_dir: temp.path().join("state"),
+        auth: Auth::Disabled,
+        collab: Some(CollabTemplates::new(
+            store.pool(),
+            CollabConfig {
+                secret: "stub-secret".to_string(),
+                service_url,
+            },
+        )),
+    })
+    .unwrap();
+    (app, workspace.join("postgres-test/template.md"))
+}
+
+async fn call(
+    app: &axum::Router,
+    method: &str,
+    uri: &str,
+    body: Option<Value>,
+) -> (StatusCode, Value) {
+    let request = Request::builder().method(method).uri(uri);
+    let request = match body {
+        Some(body) => request
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body.to_string())),
+        None => request.body(Body::empty()),
+    }
+    .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    (status, serde_json::from_slice(&bytes).unwrap())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn shared_templates_are_seeded_through_the_collab_service() {
+    let Some(url) = database_url() else { return };
+    let temp = tempfile::tempdir().unwrap();
+    let store = store(&url).await;
+    let (service, seeded) = stub_collab_service(StatusCode::OK).await;
+    let (app, template_path) = collab_app(&temp, &store, service);
+
+    let (status, created) = call(
+        &app,
+        "POST",
+        "/api/collab/templates",
+        Some(json!({ "template_path": template_path })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let id = created["id"].as_str().unwrap().to_string();
+    let (status, token) = call(
+        &app,
+        "POST",
+        &format!("/api/collab/templates/{id}/token"),
+        Some(json!({})),
+    )
+    .await;
+    let (unknown, _) = call(
+        &app,
+        "POST",
+        &format!("/api/collab/templates/{}/token", uuid::Uuid::new_v4()),
+        Some(json!({})),
+    )
+    .await;
+    let (_, list) = call(&app, "GET", "/api/collab/templates", None).await;
+
+    {
+        let seeded = seeded.lock().unwrap();
+        assert_eq!(seeded.len(), 1);
+        assert_eq!(seeded[0].0, id);
+        assert_eq!(seeded[0].1["metadata"]["id"], "postgres-test");
+    }
+    assert_eq!(status, StatusCode::OK);
+    assert!(token["token"].as_str().unwrap().contains('.'));
+    assert_eq!(unknown, StatusCode::NOT_FOUND);
+    assert_eq!(list["enabled"], true);
+    assert!(
+        list["templates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|template| template["id"] == id.as_str())
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_template_the_collab_service_refuses_is_not_kept() {
+    let Some(url) = database_url() else { return };
+    let temp = tempfile::tempdir().unwrap();
+    let store = store(&url).await;
+    let (service, asked) = stub_collab_service(StatusCode::INTERNAL_SERVER_ERROR).await;
+    let (app, template_path) = collab_app(&temp, &store, service);
+
+    let (status, _) = call(
+        &app,
+        "POST",
+        "/api/collab/templates",
+        Some(json!({ "template_path": template_path })),
+    )
+    .await;
+    let (_, list) = call(&app, "GET", "/api/collab/templates", None).await;
+
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    let refused = asked.lock().unwrap()[0].0.clone();
+    assert!(
+        list["templates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|template| template["id"] != refused.as_str()),
+        "{list}"
+    );
 }

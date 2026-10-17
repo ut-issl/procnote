@@ -6,6 +6,7 @@
 //! verifies Access's token on every API request except upload links.
 
 pub mod access;
+pub mod collab;
 mod live;
 pub mod postgres;
 pub mod transfer;
@@ -28,6 +29,7 @@ use tokio::io::AsyncWriteExt;
 use tower_http::services::{ServeDir, ServeFile};
 
 use access::{AccessConfig, AccessVerifier, Identity, token_from_headers};
+use collab::{CollabTemplateSummary, CollabTemplates};
 use live::LiveUpdates;
 use procnote_app::action::{ActionMeta, AttachmentSource, ExecutionAction};
 use procnote_app::execution::{ExecutionSummary, infer_attachment_content_type};
@@ -55,6 +57,9 @@ pub struct ServerConfig {
     /// directory (upload link tokens).
     pub state_dir: PathBuf,
     pub auth: Auth,
+    /// Collaborative template editing, when a database and the collab
+    /// service are configured.
+    pub collab: Option<CollabTemplates>,
 }
 
 /// How API requests are authenticated.
@@ -74,6 +79,7 @@ struct AppState {
     links: UploadLinks,
     live: LiveUpdates,
     access: Option<AccessVerifier>,
+    collab: Option<CollabTemplates>,
 }
 
 type SharedState = Arc<AppState>;
@@ -90,6 +96,7 @@ pub fn router(config: ServerConfig) -> std::io::Result<Router> {
             Auth::Access(access) => Some(AccessVerifier::new(access)),
             Auth::Disabled => None,
         },
+        collab: config.collab,
     });
 
     // Upload links are reached by phones without logging in (they are an
@@ -105,6 +112,11 @@ pub fn router(config: ServerConfig) -> std::io::Result<Router> {
         .route("/me", get(me))
         .route("/templates", get(list_templates))
         .route("/templates/content", get(get_template))
+        .route(
+            "/collab/templates",
+            get(list_collab_templates).post(create_collab_template),
+        )
+        .route("/collab/templates/{id}/token", post(collab_token))
         .route("/executions", get(list_executions).post(start_execution))
         .route("/executions/{id}", get(get_execution))
         .route("/executions/{id}/actions", post(record_action))
@@ -267,6 +279,95 @@ async fn get_template(
     })
     .await
     .map(Json)
+}
+
+fn collab(state: &AppState) -> Result<&CollabTemplates, ApiError> {
+    state.collab.as_ref().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::NOT_FOUND,
+            "collaborative editing is not enabled on this server",
+        )
+    })
+}
+
+#[derive(Serialize)]
+struct CollabTemplateList {
+    /// Whether this server has collaborative editing at all.
+    enabled: bool,
+    templates: Vec<CollabTemplateSummary>,
+}
+
+async fn list_collab_templates(
+    State(state): State<SharedState>,
+) -> Result<Json<CollabTemplateList>, ApiError> {
+    let Some(collab) = &state.collab else {
+        return Ok(Json(CollabTemplateList {
+            enabled: false,
+            templates: Vec::new(),
+        }));
+    };
+    let templates = collab
+        .list()
+        .await
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(Json(CollabTemplateList {
+        enabled: true,
+        templates,
+    }))
+}
+
+#[derive(Deserialize)]
+struct CreateCollabTemplateRequest {
+    /// Workspace template to start the document from.
+    template_path: String,
+}
+
+#[derive(Serialize)]
+struct CreatedCollabTemplate {
+    id: uuid::Uuid,
+}
+
+async fn create_collab_template(
+    State(state): State<SharedState>,
+    Json(request): Json<CreateCollabTemplateRequest>,
+) -> Result<Json<CreatedCollabTemplate>, ApiError> {
+    collab(&state)?;
+    let template = blocking({
+        let state = state.clone();
+        move || {
+            procnote_app::template::get_template(
+                &state.procedures_dir,
+                std::path::Path::new(&request.template_path),
+            )
+        }
+    })
+    .await?;
+    let id = collab(&state)?
+        .create(&template)
+        .await
+        .map_err(|e| ApiError::new(StatusCode::BAD_GATEWAY, e))?;
+    Ok(Json(CreatedCollabTemplate { id }))
+}
+
+#[derive(Serialize)]
+struct CollabToken {
+    token: String,
+}
+
+async fn collab_token(
+    State(state): State<SharedState>,
+    Path(id): Path<uuid::Uuid>,
+    identity: Option<Extension<Identity>>,
+) -> Result<Json<CollabToken>, ApiError> {
+    let subject = identity
+        .map(|Extension(identity)| identity.email)
+        .unwrap_or_default();
+    collab(&state)?
+        .token(id, &subject)
+        .await
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?
+        .map(|token| Json(CollabToken { token }))
+        .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, format!("no template {id}")))
 }
 
 #[derive(Deserialize)]

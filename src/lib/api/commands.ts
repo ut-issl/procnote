@@ -70,6 +70,46 @@ export async function getTemplate(templatePath: string): Promise<ProcedureTempla
   return request(`/templates/content?${new URLSearchParams({ path: templatePath })}`);
 }
 
+/** A collaboratively edited template (server only). */
+export interface CollabTemplateSummary {
+  id: string;
+  title: string;
+  procedure_id: string;
+  version: string;
+  /** ISO 8601 timestamp of the last stored change. */
+  updated_at: string;
+}
+
+/**
+ * Collaboratively edited templates, or null when this server (or the
+ * desktop app) has no collaborative editing.
+ */
+export async function listCollabTemplates(): Promise<CollabTemplateSummary[] | null> {
+  if (isDesktop) return null;
+  const list = await request<{ enabled: boolean; templates: CollabTemplateSummary[] }>(
+    "/collab/templates",
+  );
+  return list.enabled ? list.templates : null;
+}
+
+/** Start a collaboratively edited template from a workspace template; returns its ID. */
+export async function createCollabTemplate(templatePath: string): Promise<string> {
+  if (isDesktop) desktopOnly("createCollabTemplate");
+  const created = await postJson<{ id: string }>("/collab/templates", {
+    template_path: templatePath,
+  });
+  return created.id;
+}
+
+/** A short-lived token for editing template `id` through the collab service. */
+export async function getCollabToken(id: string): Promise<string> {
+  const { token } = await postJson<{ token: string }>(
+    `/collab/templates/${encodeURIComponent(id)}/token`,
+    {},
+  );
+  return token;
+}
+
 export async function startExecution(
   templatePath: string,
   meta: ActionMeta,

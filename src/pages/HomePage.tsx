@@ -21,6 +21,7 @@ export default function HomePage() {
   const [loadingExecutions, setLoadingExecutions] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedProcedure, setSelectedProcedure] = useState("all");
+  const [shared, setShared] = useState<api.CollabTemplateSummary[] | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -32,6 +33,13 @@ export default function HomePage() {
         if (!cancelled) setError(String(e));
       } finally {
         if (!cancelled) setLoadingTemplates(false);
+      }
+
+      try {
+        const loaded = await api.listCollabTemplates();
+        if (!cancelled) setShared(loaded);
+      } catch (e) {
+        void logWarn(`[home] listCollabTemplates failed: ${e}`);
       }
 
       try {
@@ -66,6 +74,15 @@ export default function HomePage() {
       : sorted.filter((e) => e.procedure_id === selectedProcedure);
   }, [executions, selectedProcedure]);
 
+  async function handleShare(template: TemplateSummary) {
+    try {
+      const id = await api.createCollabTemplate(template.path);
+      navigate(`/templates/shared/${id}`);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
   async function handleStart(template: TemplateSummary) {
     const started = await executionStore.start(template.path);
     if (started) navigate(`/execution/${started.execution_id}`);
@@ -89,9 +106,43 @@ export default function HomePage() {
             templates={templates}
             onstart={handleStart}
             onedit={(t) => navigate(`/templates/edit?${new URLSearchParams({ path: t.path })}`)}
+            onshare={shared ? handleShare : undefined}
           />
         )}
       </section>
+
+      {shared && (
+        <section className={c("section")}>
+          <h2 className={c("section-title")}>Shared Templates</h2>
+          {shared.length === 0 ? (
+            <p className={c("empty")}>
+              No shared templates yet. Use <em>Edit together</em> on a template above.
+            </p>
+          ) : (
+            <div className={c("execution-list")}>
+              {shared.map((template) => (
+                <button
+                  key={template.id}
+                  className={c("execution-card")}
+                  onClick={() => navigate(`/templates/shared/${template.id}`)}
+                >
+                  <div className={c("exec-header")}>
+                    <span className={c("exec-name")}>{template.title || "Untitled"}</span>
+                  </div>
+                  <div className={c("exec-meta")}>
+                    <span>
+                      {template.procedure_id} v{template.version}
+                    </span>
+                    <span className={c("exec-time")}>
+                      Updated {formatTimestamp(template.updated_at)}
+                    </span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
 
       {!loadingExecutions && executions.length > 0 && (
         <section className={c("section")}>
