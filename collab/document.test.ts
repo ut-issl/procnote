@@ -1,3 +1,4 @@
+import { lexer, type Tokens } from "marked";
 import { describe, expect, it } from "vite-plus/test";
 import * as Y from "yjs";
 import { diffPaths } from "../src/lib/blocknote/convert.js";
@@ -66,6 +67,27 @@ describe("template documents", () => {
     expect(isEmptyDocument(doc)).toBe(false);
     expect(issues).toEqual([]);
     expect(diffPaths(TEMPLATE, template)).toEqual([]);
+  });
+});
+
+describe("tables in prose", () => {
+  it("keep their column alignment through a Y.Doc", async () => {
+    const editor = createEditor();
+    const doc = new Y.Doc();
+    const table = "| a | b | c |\n| :-- | --: | :-: |\n| 1 | 2 | 3 |";
+    const template: ProcedureTemplate = {
+      ...TEMPLATE,
+      steps: [{ heading: "Table", content: [{ type: "Prose", text: table }] }],
+    };
+
+    Y.applyUpdate(doc, await templateToUpdate(editor, template));
+    const { template: back } = await documentToTemplate(editor, doc);
+
+    const prose = back.steps[0]?.content[0];
+    const tables = lexer(prose?.type === "Prose" ? prose.text : "").filter(
+      (token): token is Tokens.Table => token.type === "table",
+    );
+    expect(tables.map((token) => token.align)).toEqual([[null, "right", "center"]]);
   });
 });
 

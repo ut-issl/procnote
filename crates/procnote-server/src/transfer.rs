@@ -17,6 +17,9 @@ use procnote_app::repository::{StagedFile, TemplateSnapshot};
 use procnote_core::event::types::ExecutionId;
 use procnote_core::execution::ExecutionState;
 
+use procnote_core::template::to_markdown;
+
+use crate::collab::{CollabTemplates, procedure_name};
 use crate::postgres::{PostgresStore, TransferredExecution, referenced_files};
 
 /// The attachment store selected by `--attachment-dir` or
@@ -157,6 +160,54 @@ async fn export_execution(
     }
     write_execution(&dir, &execution, &state).map_err(|e| format!("{}: {e}", dir.display()))?;
     Ok(Exported::Written(dir))
+}
+
+/// Write every shared template into `procedures_dir` as
+/// `<procedure ID>/template.md`, replacing existing files only with
+/// `overwrite`.
+pub async fn export_templates(
+    collab: &CollabTemplates,
+    procedures_dir: &Path,
+    overwrite: bool,
+) -> Result<Report, String> {
+    let mut report = Report::default();
+    let mut written: Vec<PathBuf> = Vec::new();
+    for summary in collab.list().await? {
+        let label = format!("{} ({})", summary.title, summary.id);
+        let result = async {
+            let template = collab.current(summary.id).await?.usable()?;
+            let procedure = procedure_name(&template.metadata.id)?;
+            let markdown = to_markdown(&template).map_err(|e| e.to_string())?;
+            Ok::<_, String>((procedures_dir.join(procedure).join("template.md"), markdown))
+        }
+        .await;
+        match result {
+            Ok((path, _)) if written.contains(&path) => report.failed.push((
+                label,
+                format!(
+                    "another shared template was already written to {}",
+                    path.display()
+                ),
+            )),
+            Ok((path, _)) if path.exists() && !overwrite => report.skipped.push(path),
+            Ok((path, markdown)) => match write_template(&path, &markdown) {
+                Ok(()) => {
+                    written.push(path.clone());
+                    report.transferred.push(path);
+                }
+                Err(e) => report.failed.push((label, e)),
+            },
+            Err(e) => report.failed.push((label, e)),
+        }
+    }
+    Ok(report)
+}
+
+fn write_template(path: &Path, markdown: &str) -> Result<(), String> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(path, markdown).map_err(|e| e.to_string())
 }
 
 fn replay_records<F>(execution: &TransferredExecution<F>) -> Result<ExecutionState, String> {

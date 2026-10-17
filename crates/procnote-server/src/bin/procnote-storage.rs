@@ -1,17 +1,22 @@
-//! Move executions between a workspace directory and PostgreSQL.
+//! Move executions between a workspace directory and PostgreSQL, and export
+//! shared templates as Markdown.
 
 use std::path::PathBuf;
 
 use clap::{ArgGroup, Parser, Subcommand};
 
+use procnote_server::collab::{CollabConfig, CollabTemplates};
 use procnote_server::postgres::PostgresStore;
-use procnote_server::transfer::{Report, attachment_store, export_workspace, import_workspace};
+use procnote_server::transfer::{
+    Report, attachment_store, export_templates, export_workspace, import_workspace,
+};
 
 #[derive(Parser, Debug)]
 #[command(
     name = "procnote-storage",
     version,
-    about = "Import executions from a workspace into PostgreSQL, or export them back.",
+    about = "Import executions from a workspace into PostgreSQL, export them back, \
+             or export shared templates as Markdown.",
     group(ArgGroup::new("attachment_store").required(true).args(["attachment_dir", "attachment_bucket"])),
 )]
 struct Args {
@@ -26,6 +31,12 @@ struct Args {
     /// S3-compatible bucket for attachment content, as for procnote-server.
     #[arg(long)]
     attachment_bucket: Option<String>,
+    /// Secret shared with the collab service (for `export-templates`).
+    #[arg(long, env = "PROCNOTE_COLLAB_SECRET")]
+    collab_secret: Option<String>,
+    /// Internal URL of the collab service (for `export-templates`).
+    #[arg(long, default_value = "http://127.0.0.1:5182")]
+    collab_url: String,
 }
 
 #[derive(Subcommand, Debug)]
@@ -36,6 +47,14 @@ enum Command {
     /// Export every execution into WORKSPACE as `<procedure>/.executions/...`.
     /// Execution directories that already exist are skipped.
     Export { workspace: PathBuf },
+    /// Write every shared template into WORKSPACE as
+    /// `<procedure ID>/template.md`. Needs the collab service.
+    ExportTemplates {
+        workspace: PathBuf,
+        /// Replace `template.md` files that already exist.
+        #[arg(long)]
+        overwrite: bool,
+    },
 }
 
 #[tokio::main]
@@ -51,12 +70,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let report = match &args.command {
         Command::Import { workspace } => import_workspace(&store, workspace).await?,
         Command::Export { workspace } => export_workspace(&store, workspace).await?,
+        Command::ExportTemplates {
+            workspace,
+            overwrite,
+        } => {
+            let secret = args
+                .collab_secret
+                .clone()
+                .ok_or("set --collab-secret (or PROCNOTE_COLLAB_SECRET)")?;
+            let collab = CollabTemplates::new(
+                store.pool(),
+                CollabConfig {
+                    secret,
+                    service_url: args.collab_url.clone(),
+                },
+            );
+            export_templates(&collab, workspace, *overwrite).await?
+        }
     };
     print_report(&report);
     if report.failed.is_empty() {
         Ok(())
     } else {
-        Err(format!("{} execution(s) failed", report.failed.len()).into())
+        Err(format!("{} failed", report.failed.len()).into())
     }
 }
 
