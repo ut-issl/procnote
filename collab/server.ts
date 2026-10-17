@@ -8,7 +8,15 @@ import { Server } from "@hocuspocus/server";
 import type pg from "pg";
 import * as Y from "yjs";
 import type { ProcedureTemplate } from "../src/lib/types/index.js";
-import { createEditor, documentMetadata, isEmptyDocument, templateToUpdate } from "./document.js";
+import { metadataIssues } from "../src/lib/blocknote/convert.js";
+import {
+  createEditor,
+  documentMetadata,
+  documentToTemplate,
+  type Editor,
+  isEmptyDocument,
+  templateToUpdate,
+} from "./document.js";
 import { verifyToken } from "./token.js";
 
 /** Where editors connect. */
@@ -106,13 +114,19 @@ export function createCollabServer(config: CollabServerConfig, pool: pg.Pool): S
       try {
         if (!hasSecret(request, config.secret)) throw new HttpError(401, "unauthorized");
         const path = pathOf(request);
-        if (request.method !== "POST" || !path.startsWith(INTERNAL_TEMPLATES)) {
+        if (!path.startsWith(INTERNAL_TEMPLATES)) throw new HttpError(404, "not found");
+        const [id = "", resource, ...rest] = path.slice(INTERNAL_TEMPLATES.length).split("/");
+        if (request.method === "POST" && resource === undefined) {
+          // POST /internal/templates/{id}: seed an empty document.
+          const template = (await readJson(request)) as ProcedureTemplate;
+          await seed(server, id, await templateToUpdate(editor, template));
+          respond(response, 200, { id });
+        } else if (request.method === "GET" && resource === "template" && rest.length === 0) {
+          // GET /internal/templates/{id}/template: what the document describes now.
+          respond(response, 200, await currentTemplate(server, editor, id));
+        } else {
           throw new HttpError(404, "not found");
         }
-        const id = path.slice(INTERNAL_TEMPLATES.length);
-        const template = (await readJson(request)) as ProcedureTemplate;
-        await seed(server, id, await templateToUpdate(editor, template));
-        respond(response, 200, { id });
       } catch (error) {
         const status = error instanceof HttpError ? error.status : 400;
         respond(response, status, {
@@ -124,6 +138,27 @@ export function createCollabServer(config: CollabServerConfig, pool: pg.Pool): S
     },
   });
   return server;
+}
+
+/**
+ * The template a document describes now, and why it can't be executed (an
+ * empty list when it can).
+ */
+async function currentTemplate(server: Server, editor: Editor, id: string) {
+  const connection = await server.hocuspocus.openDirectConnection(id, {
+    user: "procnote-server",
+  } satisfies ConnectionContext);
+  try {
+    const doc = connection.document;
+    if (!doc) throw new Error(`template ${id} could not be opened`);
+    const { template, issues } = await documentToTemplate(editor, doc);
+    return {
+      template,
+      issues: [...metadataIssues(documentMetadata(doc)), ...issues].map((issue) => issue.message),
+    };
+  } finally {
+    await connection.disconnect();
+  }
 }
 
 /** Fill an empty template document with its first content, and store it. */

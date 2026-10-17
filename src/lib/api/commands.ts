@@ -101,6 +101,15 @@ export async function createCollabTemplate(templatePath: string): Promise<string
   return created.id;
 }
 
+/** Start an execution of shared template `id` as it is now. */
+export async function startSharedExecution(
+  id: string,
+  meta: ActionMeta,
+): Promise<ExecutionSummary> {
+  if (isDesktop) desktopOnly("startSharedExecution");
+  return postJson(`/collab/templates/${encodeURIComponent(id)}/executions`, { meta });
+}
+
 /** A short-lived token for editing template `id` through the collab service. */
 export async function getCollabToken(id: string): Promise<string> {
   const { token } = await postJson<{ token: string }>(

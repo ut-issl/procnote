@@ -796,7 +796,7 @@ mod tests {
 
     use super::*;
     use procnote_app::persistence::event_log::EventLog;
-    use procnote_app::repository::{ExecutionRepository, NewExecution};
+    use procnote_app::repository::{ExecutionRepository, NewExecution, TemplateSnapshot};
 
     const TEMPLATE: &str = r"---
 id: drop-point-restart
@@ -846,7 +846,7 @@ version: 1.0.0
         let created = ExecutionStore::new(workspace.clone())
             .create(NewExecution {
                 procedure: "drop-point-restart".to_string(),
-                template_source: TEMPLATE.to_string(),
+                template: TemplateSnapshot::Markdown(TEMPLATE.to_string()),
                 state: execution_state,
                 initial_events,
                 tool_version: "test".to_string(),
