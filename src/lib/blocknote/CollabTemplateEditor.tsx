@@ -5,7 +5,7 @@ import { useCreateBlockNote } from "@blocknote/react";
 import { HocuspocusProvider } from "@hocuspocus/provider";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import * as Y from "yjs";
-import { getCollabToken } from "#lib/api/commands.js";
+import { getCollabToken, getSharedTemplateMarkdown } from "#lib/api/commands.js";
 import type { ProcedureMetadata, ProcedureTemplate } from "#lib/types/index.js";
 import { scoped } from "#lib/utils/cx.js";
 import { DOCUMENT_FRAGMENT, METADATA_MAP } from "./blocks.js";
@@ -90,7 +90,7 @@ export default function CollabTemplateEditor({
         {error ?? (status === "connected" ? "Connected — changes are saved as you type" : status)}
       </p>
       {session && synced ? (
-        <SharedEditor session={session} user={user} onStart={onStart} />
+        <SharedEditor id={id} session={session} user={user} onStart={onStart} />
       ) : (
         !error && <p>Loading template...</p>
       )}
@@ -147,11 +147,24 @@ const METADATA_FIELDS = [
   ["author", "Author"],
 ] as const;
 
+/** Save the template's procnote Markdown as a file. */
+async function downloadMarkdown(id: string) {
+  const markdown = await getSharedTemplateMarkdown(id);
+  const url = URL.createObjectURL(new Blob([markdown], { type: "text/markdown" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "template.md";
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
 function SharedEditor({
+  id,
   session,
   user,
   onStart,
 }: {
+  id: string;
   session: Session;
   user: string;
   onStart: () => void;
@@ -172,6 +185,7 @@ function SharedEditor({
     [doc, provider],
   );
   const md = useMemo(() => markdownConverter(editor), [editor]);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
   const [result, setResult] = useState<{
     template: ProcedureTemplate;
     issues: ConversionIssue[];
@@ -220,7 +234,19 @@ function SharedEditor({
             title={result?.issues.length ? "Fix the issues below first" : undefined}
           >
             Start execution
+          </button>{" "}
+          <button
+            className="btn btn-secondary"
+            disabled={!result || result.issues.length > 0}
+            onClick={() => {
+              setDownloadError(null);
+              downloadMarkdown(id).catch((e) => setDownloadError(String(e)));
+            }}
+            title="procnote Markdown, to keep the template in git"
+          >
+            Download template.md
           </button>
+          {downloadError && <p className={c("issues")}>{downloadError}</p>}
         </section>
         <IssuesSection issues={result?.issues} />
         <TemplateJsonSection template={result?.template} />
