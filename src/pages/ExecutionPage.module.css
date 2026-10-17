@@ -204,3 +204,11 @@ button.execution-dir:hover {
   background: #1a1a2e;
   color: #fff;
 }
+
+.inbox-warning {
+  padding: 8px 10px;
+  border-radius: 4px;
+  background: #fff3e0;
+  color: #e65100 !important;
+  font-weight: 600;
+}

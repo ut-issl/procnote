@@ -2,7 +2,9 @@ import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router";
 import * as api from "#lib/api/commands.js";
 import AddStepDialog from "#lib/components/AddStepDialog.js";
+import InboxPanel from "#lib/components/InboxPanel.js";
 import Modal from "#lib/components/Modal.js";
+import PhoneUploadDialog from "#lib/components/PhoneUploadDialog.js";
 import RunView from "#lib/components/RunView.js";
 import StepCard from "#lib/components/StepCard.js";
 import { isDesktop } from "#lib/platform.js";
@@ -57,6 +59,7 @@ export default function ExecutionPage() {
   const [savingName, setSavingName] = useState(false);
   const [dropPointEnabled, setDropPointEnabled] = useState(false);
   const [layout, setLayout] = useLayout();
+  const [showPhoneUpload, setShowPhoneUpload] = useState(false);
 
   useEffect(() => {
     if (!executionId) return;
@@ -250,6 +253,11 @@ export default function ExecutionPage() {
                   <button className="btn btn-secondary" onClick={() => setShowAddStepDialog(true)}>
                     + Add Step
                   </button>
+                  {!isDesktop && (
+                    <button className="btn btn-secondary" onClick={() => setShowPhoneUpload(true)}>
+                      Phone upload
+                    </button>
+                  )}
                   <div className={c("toolbar-spacer")} />
                   <button className="btn btn-success" onClick={() => setShowCompleteDialog(true)}>
                     Complete
@@ -290,6 +298,8 @@ export default function ExecutionPage() {
                 </div>
               )}
 
+              <InboxPanel summary={summary} executionActive={isActive} onaction={handleAction} />
+
               {layout === "focus" ? (
                 <RunView
                   summary={summary}
@@ -318,6 +328,13 @@ export default function ExecutionPage() {
         )}
       </div>
 
+      {showPhoneUpload && summary && (
+        <PhoneUploadDialog
+          executionId={summary.execution_id}
+          onclose={() => setShowPhoneUpload(false)}
+        />
+      )}
+
       {showAddStepDialog && (
         <AddStepDialog
           steps={stepRefs}
@@ -329,6 +346,12 @@ export default function ExecutionPage() {
       {showCompleteDialog && (
         <Modal oncancel={() => setShowCompleteDialog(false)}>
           <h3>Complete Execution</h3>
+          {summary && summary.inbox.length > 0 && (
+            <p className={c("inbox-warning")}>
+              {summary.inbox.length} file{summary.inbox.length === 1 ? " is" : "s are"} still in the
+              inbox and not assigned to any step.
+            </p>
+          )}
           <p>Mark this execution as:</p>
           <div className="modal-actions">
             <button className="btn btn-secondary" onClick={() => setShowCompleteDialog(false)}>

@@ -38,3 +38,17 @@
   width: 100%;
   margin: 0 auto;
 }
+
+@media (max-width: 600px) {
+  .app-header {
+    padding: 10px 16px;
+  }
+
+  .app-subtitle {
+    display: none;
+  }
+
+  .app-main {
+    padding: 16px;
+  }
+}
