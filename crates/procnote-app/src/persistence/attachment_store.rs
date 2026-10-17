@@ -27,10 +27,6 @@ impl AttachmentStore {
         Self { execution_dir }
     }
 
-    #[expect(
-        clippy::unused_self,
-        reason = "keeps the attachment preparation API uniform with byte preparation"
-    )]
     pub fn prepare_copy(
         &self,
         source: &Path,
@@ -116,6 +112,7 @@ fn write_pending_source(
     }
 }
 
+#[must_use]
 pub fn sanitize_attachment_filename(filename: &str) -> String {
     let mut sanitized: String = filename
         .trim()
