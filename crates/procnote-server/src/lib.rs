@@ -8,6 +8,7 @@
 pub mod access;
 mod live;
 pub mod postgres;
+pub mod transfer;
 mod upload_links;
 mod uploads;
 
