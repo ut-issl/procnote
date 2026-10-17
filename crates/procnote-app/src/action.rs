@@ -99,3 +99,114 @@ pub enum ExecutionAction {
         reason: String,
     },
 }
+
+/// Mutable view of one attachment source referenced by an [`ExecutionAction`].
+///
+/// Shells use it to replace frontend-supplied file references with trusted
+/// ones before the action reaches the execution store.
+pub struct AttachmentSourceMut<'a> {
+    pub filename: &'a mut String,
+    pub path: &'a mut String,
+    pub content_type: &'a mut String,
+}
+
+impl ExecutionAction {
+    /// Attachment sources that this action would copy into the execution.
+    pub fn attachment_sources_mut(&mut self) -> Vec<AttachmentSourceMut<'_>> {
+        match self {
+            Self::AddAttachment {
+                filename,
+                path,
+                content_type,
+                ..
+            } => vec![AttachmentSourceMut {
+                filename,
+                path,
+                content_type,
+            }],
+            Self::AddAttachments { files, .. } => files
+                .iter_mut()
+                .map(|file| AttachmentSourceMut {
+                    filename: &mut file.filename,
+                    path: &mut file.path,
+                    content_type: &mut file.content_type,
+                })
+                .collect(),
+            Self::SkipStep { .. }
+            | Self::UnskipStep { .. }
+            | Self::ToggleCheckbox { .. }
+            | Self::RecordInput { .. }
+            | Self::ClearInput { .. }
+            | Self::AddNote { .. }
+            | Self::RemoveNote { .. }
+            | Self::AddStep { .. }
+            | Self::RemoveAttachmentFile { .. }
+            | Self::ClearAttachments { .. }
+            | Self::RemoveAttachment { .. }
+            | Self::Complete { .. }
+            | Self::Abort { .. }
+            | Self::RenameExecution { .. }
+            | Self::ReopenExecution { .. } => Vec::new(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn source(path: &str) -> AttachmentSource {
+        AttachmentSource {
+            filename: format!("{path}.txt"),
+            path: path.to_string(),
+            content_type: "text/plain".to_string(),
+        }
+    }
+
+    #[test]
+    fn add_attachment_exposes_its_single_source() {
+        let mut action = ExecutionAction::AddAttachment {
+            step_id: "step-0".to_string(),
+            input_id: "evidence".to_string(),
+            filename: "a.txt".to_string(),
+            path: "a".to_string(),
+            content_type: "text/plain".to_string(),
+        };
+
+        for source in action.attachment_sources_mut() {
+            *source.path = "trusted".to_string();
+        }
+
+        assert!(matches!(
+            action,
+            ExecutionAction::AddAttachment { ref path, .. } if path == "trusted"
+        ));
+    }
+
+    #[test]
+    fn add_attachments_exposes_every_source_in_order() {
+        let mut action = ExecutionAction::AddAttachments {
+            step_id: "step-0".to_string(),
+            input_id: "evidence".to_string(),
+            files: vec![source("a"), source("b")],
+        };
+
+        let paths: Vec<String> = action
+            .attachment_sources_mut()
+            .into_iter()
+            .map(|source| source.path.clone())
+            .collect();
+
+        assert_eq!(paths, ["a", "b"]);
+    }
+
+    #[test]
+    fn other_actions_have_no_sources() {
+        let mut action = ExecutionAction::AddNote {
+            text: "note".to_string(),
+            step_id: None,
+        };
+
+        assert!(action.attachment_sources_mut().is_empty());
+    }
+}
