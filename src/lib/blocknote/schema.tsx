@@ -5,7 +5,7 @@ import { BlockNoteSchema, defaultBlockSpecs } from "@blocknote/core";
 import { createReactBlockSpec } from "@blocknote/react";
 import { useEffect, useState } from "react";
 import { scoped } from "#lib/utils/cx.js";
-import { EXPECTED_KINDS, INPUT_TYPES } from "./convert.js";
+import { type DocBlock, EXPECTED_KINDS, enclosingStep, INPUT_TYPES } from "./convert.js";
 import styles from "./schema.module.css";
 
 const c = scoped(styles);
@@ -21,14 +21,39 @@ export const createStepBlock = createReactBlockSpec(
       emptyChildEnter: "exit-at-end",
       childrenCanOutdent: false,
     },
-    render: ({ contentRef }) => (
-      <div className={c("step")}>
-        <span className={c("step-label")} contentEditable={false}>
-          Step
-        </span>
-        <div className={c("step-heading")} ref={contentRef} />
-      </div>
-    ),
+    render: ({ block, editor, contentRef }) => {
+      // Steps can still end up nested (Tab, drag, paste). Say so on the spot
+      // and offer the fix, since content can't be outdented out of a step.
+      const outer = enclosingStep(
+        block.id,
+        (id) => editor.getParentBlock(id) as DocBlock | undefined,
+      );
+      const moveOut = () => {
+        if (!outer?.id) return;
+        const snapshot = editor.getBlock(block.id);
+        if (!snapshot) return;
+        editor.transact(() => {
+          editor.removeBlocks([block.id]);
+          editor.insertBlocks([snapshot], outer.id as string, "after");
+        });
+      };
+      return (
+        <div className={c("step-wrapper")}>
+          <div className={c("step", outer && "nested")}>
+            <span className={c("step-label")} contentEditable={false}>
+              Step
+            </span>
+            <div className={c("step-heading")} ref={contentRef} />
+          </div>
+          {outer && (
+            <div className={c("nested-warning")} contentEditable={false} role="alert">
+              A step can't be inside another step.
+              <button onClick={moveOut}>Move out</button>
+            </div>
+          )}
+        </div>
+      );
+    },
   },
 );
 

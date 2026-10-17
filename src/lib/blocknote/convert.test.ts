@@ -4,6 +4,7 @@ import {
   blocksToTemplate,
   diffPaths,
   type DocBlock,
+  enclosingStep,
   inlineText,
   inputToProps,
   type MarkdownConverter,
@@ -235,6 +236,25 @@ describe("propsToInput", () => {
     );
 
     expect(input).toEqual({ id: "a", label: "L", type: "text", options: [] });
+  });
+});
+
+describe("enclosingStep", () => {
+  // step-a > checklist > step-b > paragraph
+  const parents: Record<string, DocBlock> = {
+    checklist: { id: "step-a", type: "step" },
+    "step-b": { id: "checklist", type: "checkListItem" },
+    paragraph: { id: "step-b", type: "step" },
+  };
+  const parentOf = (id: string) => parents[id];
+
+  test("finds the outermost step around a block", () => {
+    expect(enclosingStep("paragraph", parentOf)?.id).toBe("step-a");
+    expect(enclosingStep("step-b", parentOf)?.id).toBe("step-a");
+  });
+
+  test("is undefined at the top level", () => {
+    expect(enclosingStep("step-a", parentOf)).toBeUndefined();
   });
 });
 
