@@ -3,7 +3,7 @@
 > [!WARNING]
 > Procnote is in early development. The CLI interface, template grammar, event log schema, and storage layout are all subject to change without notice.
 
-A procedure execution tool for tracking step-by-step procedures with checkboxes, data inputs, attachments, and notes. Built as an event-sourced Tauri 2 desktop app (Rust backend + Svelte 5 frontend).
+A procedure execution tool for tracking step-by-step procedures with checkboxes, data inputs, attachments, and notes. Built as an event-sourced Tauri 2 desktop app (Rust backend + React frontend).
 
 Procedures are written as Markdown templates with YAML frontmatter. Each execution replays an append-only event log, ensuring crash safety and full auditability.
 
@@ -211,7 +211,7 @@ Three layers with strict dependency direction:
 
 1. **`crates/procnote-core/`** -- Pure Rust domain logic (events, state machine, template parser). No Tauri dependency.
 2. **`src-tauri/`** -- Tauri shell. Bridges core to desktop via IPC commands. Owns serialization DTOs and filesystem I/O.
-3. **`src/`** -- SvelteKit + Svelte 5 frontend.
+3. **`src/`** -- React + Vite SPA frontend.
 
 **`crates/procnote-launcher/`** is a separate, Tauri-free console adapter. It handles the public terminal interface and starts the packaged GUI; it does not participate in the domain dependency layers above.
 

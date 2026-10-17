@@ -1,11 +1,16 @@
-import adapter from "@sveltejs/adapter-static";
-import { sveltekit } from "@sveltejs/kit/vite";
+import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite-plus";
 
 export default defineConfig({
   fmt: {},
   lint: {},
-  plugins: [sveltekit({ adapter: adapter({ fallback: "index.html" }) })],
+  plugins: [react()],
+  publicDir: "static",
+  build: {
+    // Tauri (frontendDist) and procnote-server (--static-dir) both serve build/.
+    outDir: "build",
+    emptyOutDir: true,
+  },
   server: {
     port: 5180,
     strictPort: true,
