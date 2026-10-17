@@ -23,9 +23,10 @@ function table(rows: number, columns: number, alignment = "left"): DocBlock {
 }
 
 function cellAlignments(block: DocBlock | undefined): unknown[][] {
-  const rows = (block?.content as { rows: { cells: { props: { textAlignment: unknown } }[] }[] })
-    .rows;
-  return rows.map((row) => row.cells.map((cell) => cell.props.textAlignment));
+  const content = block?.content as
+    | { rows: { cells: { props: { textAlignment: unknown } }[] }[] }
+    | undefined;
+  return (content?.rows ?? []).map((row) => row.cells.map((cell) => cell.props.textAlignment));
 }
 
 function tableAligns(markdown: string): (string | null)[][] {
