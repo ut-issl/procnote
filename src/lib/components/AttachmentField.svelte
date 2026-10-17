@@ -9,8 +9,7 @@
         InputDefinition,
     } from "#lib/types/index.js";
     import { formatTimestamp } from "#lib/utils/format.js";
-    import { confirm as confirmDialog } from "@tauri-apps/plugin-dialog";
-    import { warn } from "@tauri-apps/plugin-log";
+    import { confirmWarning, logWarn } from "#lib/platform.js";
     import Modal from "./Modal.svelte";
     import TrashIcon from "./TrashIcon.svelte";
 
@@ -168,14 +167,13 @@
         if (!onremovefile) return;
         let ok = false;
         try {
-            ok = await confirmDialog(`Remove ${file.filename}?`, {
+            ok = await confirmWarning(`Remove ${file.filename}?`, {
                 title: "Remove attachment",
-                kind: "warning",
                 okLabel: "Remove",
                 cancelLabel: "Cancel",
             });
         } catch (e) {
-            await warn(`[AttachmentField] remove confirmation failed: ${e}`);
+            await logWarn(`[AttachmentField] remove confirmation failed: ${e}`);
             return;
         }
         if (ok) onremovefile(file.path);
@@ -185,17 +183,16 @@
         if (!onclear) return;
         let ok = false;
         try {
-            ok = await confirmDialog(
+            ok = await confirmWarning(
                 `Remove all ${attachments.length} attachments from ${definition.label}?`,
                 {
                     title: "Remove all attachments",
-                    kind: "warning",
                     okLabel: "Remove all",
                     cancelLabel: "Cancel",
                 },
             );
         } catch (e) {
-            await warn(`[AttachmentField] clear confirmation failed: ${e}`);
+            await logWarn(`[AttachmentField] clear confirmation failed: ${e}`);
             return;
         }
         if (ok) onclear();
