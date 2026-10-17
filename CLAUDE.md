@@ -16,6 +16,7 @@
   3. **`src-tauri/`** — Thin Tauri shell. Exposes `procnote-app` operations as IPC commands and owns desktop-only concerns: the native file picker and its attachment grants, revealing directories, and DropPoint.
   4. **`src/`** — React + Vite SPA frontend (react-router), shared by the desktop app and the browser.
 - **`crates/procnote-server/`** is an axum HTTP shell over `procnote-app`, parallel to `src-tauri`, for using the same UI from a browser. It must never depend on Tauri.
+- **`collab/`** is the Node collab service (Hocuspocus) for collaborative template editing on the server; see below.
 - **`crates/procnote-launcher/`** is a Tauri-free console adapter outside those domain layers. It owns `procnote [WORKSPACE]`, prints help/version synchronously, and detaches the packaged GUI. It must never depend on `procnote-tauri`, Tauri, or GUI/dialog libraries.
 
 ### Core domain (`procnote-core`)
@@ -50,6 +51,14 @@
 - Per-execution upload links (`/api/executions/{id}/upload-link`, `/api/upload-links/{token}/...`) let a phone send files without logging in. They land in the execution's inbox (`AttachmentReceived`) and are assigned on the execution screen (`AttachmentAssigned`, back with `AttachmentUnassigned`); nothing is tied to a guessed "current step". Link tokens are files in `--state-dir`, never in the procedures directory. The phone page is `/upload/:token`.
 - Executions are stored in the workspace directory by default, or in PostgreSQL with `--database-url` (`PostgresStore` in `postgres.rs`; schema in `migrations/`, applied on start). There each event-log line is an `events` row and attachment content goes to an object store (`object_store`) under `sha256/{hash}`: `--attachment-dir` locally, or `--attachment-bucket` for an S3-compatible bucket such as Cloudflare R2, configured by `AWS_*` variables. Templates are still read from the workspace. `ExecutionRepository` is synchronous, so the store must be called from blocking threads. `procnote-storage import <WORKSPACE>` copies `.executions/` into the database (read-only on the source, skips executions already there) and `procnote-storage export <WORKSPACE>` writes the directory layout back; both take the same `--database-url` and attachment flags. Postgres tests need `PROCNOTE_TEST_DATABASE_URL` (`just dev-db`); they are required on CI.
 - `just dev-server` + `just dev-frontend` for development (Vite proxies `/api`), `just serve` to build and serve.
+
+### Collab service (`collab/`)
+
+- Node service (Hocuspocus) for collaborative template editing on the server: each shared template is a Yjs document in PostgreSQL's `templates` table (created by procnote-server's migrations). The server's `templates` rows are the source of truth; workspace `template.md` files are what shared templates start from ("Edit together").
+- The document holds the blocks in the `blocks` XML fragment and the `ProcedureMetadata` fields in the `metadata` map (`src/lib/blocknote/blocks.ts`). Block configs and the block ⇄ `ProcedureTemplate` conversion (`convert.ts`) are shared with the browser; `collab/schema.ts` builds the same schema without React.
+- procnote-server creates templates (`POST /api/collab/templates`, which seeds the document through the collab service's internal API) and issues short-lived HMAC tokens (`/api/collab/templates/{id}/token`, `collab.rs`) that the collab service checks in `onAuthenticate`, so Cloudflare Access is verified only in Rust. Both share `PROCNOTE_COLLAB_SECRET`; the server enables collab with `--collab-secret` (needs `--database-url`).
+- Editors connect to `/collab` on the same origin: Vite proxies it in development, Cloudflare Tunnel routes it to the service (port 5182) in production. The internal API (`/internal/...`) must not be routed publicly.
+- Bundled with `pnpm run build:collab` (`vp pack`); `just dev-collab` builds and runs it. Its tests (`collab/*.test.ts`) run with `pnpm test`; the database ones need `PROCNOTE_TEST_DATABASE_URL`.
 
 ### Frontend (`src/`)
 

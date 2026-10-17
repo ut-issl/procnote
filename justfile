@@ -22,6 +22,13 @@ dev-server *args='':
 dev-db:
     docker run -d --rm --name procnote-dev-db -e POSTGRES_PASSWORD=procnote -e POSTGRES_DB=procnote -p 55432:5432 postgres:18
 
+# Needs `just dev-db`. Start dev-server with --database-url, --attachment-dir,
+# and --collab-secret dev-collab-secret.
+# Run the collab service for collaborative template editing
+dev-collab:
+    pnpm run build:collab
+    PROCNOTE_DATABASE_URL=${PROCNOTE_DATABASE_URL:-postgres://postgres:procnote@localhost:55432/procnote} PROCNOTE_COLLAB_SECRET=${PROCNOTE_COLLAB_SECRET:-dev-collab-secret} pnpm run collab
+
 # Build the frontend and serve it locally without authentication (pass --listen 0.0.0.0:5181 for other devices on a trusted network)
 serve *args='': build-frontend
     cargo run --release -p procnote-server -- {{ justfile_directory() }}/procedures --static-dir {{ justfile_directory() }}/build --insecure-no-auth {{ args }}

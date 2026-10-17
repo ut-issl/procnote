@@ -73,3 +73,45 @@
     max-height: none;
   }
 }
+
+/* Collaborative editor */
+
+.collab {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.connection {
+  margin: 0;
+  font-size: 12px;
+  color: #e65100;
+}
+
+.connection.connected {
+  color: #2e7d32;
+}
+
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  padding: 0 16px 12px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid #eee;
+}
+
+.meta-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11px;
+  color: #666;
+}
+
+.meta-field input {
+  font-size: 13px;
+  padding: 4px 6px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+}
