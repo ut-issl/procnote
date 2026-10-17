@@ -9,12 +9,12 @@
 
 ## Architecture
 
-- Event-sourced Tauri 2 desktop app: Rust backend + Svelte 5 frontend.
+- Event-sourced Tauri 2 desktop app (also usable from a browser via `procnote-server`): Rust backend + React frontend.
 - Four layers with strict dependency direction:
   1. **`crates/procnote-core/`** — Pure Rust domain logic. No Tauri dependency. Contains event types, execution state machine, and template parser.
   2. **`crates/procnote-app/`** — Tauri-free application layer shared by the desktop shell and the future server. Owns serialization DTOs (`ExecutionSummary`, `StepSummary`, etc.), `ExecutionAction` → event mapping, and filesystem I/O (`persistence/`). Must never depend on Tauri.
   3. **`src-tauri/`** — Thin Tauri shell. Exposes `procnote-app` operations as IPC commands and owns desktop-only concerns: the native file picker and its attachment grants, revealing directories, and DropPoint.
-  4. **`src/`** — SvelteKit + Svelte 5 frontend. Uses runes (`$state`, `$derived`, `$props`), not stores.
+  4. **`src/`** — React + Vite SPA frontend (react-router), shared by the desktop app and the browser.
 - **`crates/procnote-server/`** is an axum HTTP shell over `procnote-app`, parallel to `src-tauri`, for using the same UI from a browser. It must never depend on Tauri.
 - **`crates/procnote-launcher/`** is a Tauri-free console adapter outside those domain layers. It owns `procnote [WORKSPACE]`, prints help/version synchronously, and detaches the packaged GUI. It must never depend on `procnote-tauri`, Tauri, or GUI/dialog libraries.
 
@@ -50,7 +50,9 @@
 
 - `lib/api/commands.ts` talks to Tauri IPC in the desktop app and to the HTTP API in a browser. Host services (logging, confirm dialogs, opening URLs) go through `lib/platform.ts`; components must not import Tauri plugins directly.
 
-- `executionStore` (in `lib/stores/execution.svelte.ts`) is a Svelte 5 runes-based reactive store wrapping `ExecutionSummary`.
+- `executionStore` (in `lib/stores/execution.ts`) is a framework-independent store wrapping `ExecutionSummary`; components subscribe via `useExecutionStore()` (`useSyncExternalStore`). Keep it free of React so later stages can add sync logic there.
+- Component styles are CSS Modules (`*.module.css`). `scoped(styles)` from `lib/utils/cx.ts` emits both the raw class name (so global rules in `src/global.css` such as `.btn` apply) and the module-scoped one.
+- Frontend tests use `vite-plus/test` (Vitest) and run with `pnpm test`.
 - TypeScript types in `lib/types/generated/` are auto-generated from Rust via `ts-rs`. Regenerate with `cargo test --workspace export_bindings_`. CI enforces they stay in sync.
 - Timestamps cross the IPC boundary as ISO 8601 strings.
 
@@ -85,7 +87,8 @@ The `events.jsonl` format must remain backward-compatible within a major version
 
 - `just dev` — runs the Tauri dev server (passes the workspace directory explicitly).
 - `cargo test --workspace` — runs all Rust tests (46+ tests across core).
-- `npx svelte-check` — TypeScript type checking for frontend.
+- `pnpm check` — TypeScript type checking for frontend (`tsc --noEmit`).
+- `pnpm test` — frontend unit tests.
 - `biome` — frontend linting/formatting.
 - Pre-commit hooks are configured.
 - **Package manager:** `pnpm` (not `npm`). Use `pnpm add` to install dependencies, `pnpm remove` to uninstall.
