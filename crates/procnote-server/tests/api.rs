@@ -8,7 +8,7 @@ use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
-use procnote_server::{ServerConfig, router};
+use procnote_server::{Auth, ServerConfig, router};
 
 const TEMPLATE: &str = r"---
 id: api-test
@@ -47,6 +47,7 @@ fn fixture(static_dir: Option<&Path>) -> Fixture {
         upload_dir: temp.path().join("uploads"),
         static_dir: static_dir.map(Path::to_path_buf),
         state_dir: temp.path().join("state"),
+        auth: Auth::Disabled,
     })
     .unwrap();
     Fixture {
@@ -507,4 +508,14 @@ async fn finished_executions_take_no_uploads() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
     let (status, _) = send(&fixture.app, post_json(&link_uri, &json!({}))).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn without_access_the_caller_is_unknown() {
+    let fixture = fixture(None);
+
+    let (status, me) = send(&fixture.app, get("/api/me")).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(me, json!({ "auth": "none", "email": null }));
 }
