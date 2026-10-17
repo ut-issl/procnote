@@ -28,4 +28,8 @@ export type ExecutionSummary = {
    * Absolute path to the execution directory on disk.
    */
   execution_dir: string;
+  /**
+   * Number of events recorded so far; a larger value is a newer state.
+   */
+  seq: number;
 };

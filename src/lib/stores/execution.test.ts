@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vite-plus/test";
+import { describe, expect, test, vi } from "vite-plus/test";
 import type { ExecutionAction, ExecutionSummary } from "#lib/types/index.js";
 import { type ExecutionApi, ExecutionStore, isFinished } from "./execution.js";
 
@@ -11,6 +11,7 @@ function summary(overrides: Partial<ExecutionSummary> = {}): ExecutionSummary {
     status: "active",
     steps: [],
     execution_dir: "/tmp/exec-1",
+    seq: 1,
     ...overrides,
   };
 }
@@ -30,6 +31,7 @@ function fakeApi(overrides: Partial<ExecutionApi> = {}): ExecutionApi {
     startExecution: async () => summary(),
     getExecutionState: async () => summary(),
     recordAction: async () => summary(),
+    watchExecution: () => () => {},
     ...overrides,
   };
 }
@@ -137,6 +139,100 @@ describe("ExecutionStore", () => {
       { event_id: "id-1", recorded_by: "Operator A", device: "browser-1" },
       { event_id: "id-2", recorded_by: "Operator A", device: "browser-1" },
     ]);
+  });
+
+  test("a live update ahead of the held state triggers one refetch", async () => {
+    let onSeq: (seq: number) => void = () => {};
+    let fetches = 0;
+    const store = new ExecutionStore(
+      fakeApi({
+        watchExecution: (_id, callback) => {
+          onSeq = callback;
+          return () => {};
+        },
+        getExecutionState: async () => {
+          fetches++;
+          return summary({ seq: 5, name: "from another client" });
+        },
+      }),
+      () => ({}),
+    );
+    store.setSummary(summary({ seq: 4 }));
+    store.watch("exec-1");
+
+    onSeq(4); // not ahead: ignored
+    onSeq(5);
+    await vi.waitFor(() => expect(store.getState().summary?.seq).toBe(5));
+
+    expect(fetches).toBe(1);
+    expect(store.getState().summary?.name).toBe("from another client");
+  });
+
+  test("live updates for another execution are ignored", () => {
+    let onSeq: (seq: number) => void = () => {};
+    let fetches = 0;
+    const store = new ExecutionStore(
+      fakeApi({
+        watchExecution: (_id, callback) => {
+          onSeq = callback;
+          return () => {};
+        },
+        getExecutionState: async () => {
+          fetches++;
+          return summary();
+        },
+      }),
+      () => ({}),
+    );
+    store.setSummary(summary({ execution_id: "exec-2", seq: 1 }));
+    store.watch("exec-1");
+
+    onSeq(9);
+
+    expect(fetches).toBe(0);
+  });
+
+  test("an older response never replaces a newer state", async () => {
+    const slowAction = deferred<ExecutionSummary>();
+    const store = new ExecutionStore(
+      fakeApi({
+        recordAction: () => slowAction.promise,
+        getExecutionState: async () => summary({ seq: 7, name: "newer" }),
+      }),
+      () => ({}),
+    );
+    store.setSummary(summary({ seq: 5 }));
+
+    const acted = store.act(rename("mine"));
+    await store.refresh();
+    slowAction.resolve(summary({ seq: 6, name: "mine" }));
+    await acted;
+
+    expect(store.getState().summary).toMatchObject({ seq: 7, name: "newer" });
+  });
+
+  test("overlapping refreshes are coalesced", async () => {
+    const first = deferred<ExecutionSummary>();
+    let fetches = 0;
+    const store = new ExecutionStore(
+      fakeApi({
+        getExecutionState: () => {
+          fetches++;
+          return fetches === 1 ? first.promise : Promise.resolve(summary({ seq: 3 }));
+        },
+      }),
+      () => ({}),
+    );
+    store.setSummary(summary({ seq: 1 }));
+
+    const running = store.refresh();
+    void store.refresh();
+    void store.refresh();
+    first.resolve(summary({ seq: 2 }));
+    await running;
+
+    expect(fetches).toBe(2);
+    expect(store.getState().summary?.seq).toBe(3);
   });
 
   test("subscribers are notified with a new snapshot on every change", () => {
