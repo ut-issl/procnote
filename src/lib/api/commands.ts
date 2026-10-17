@@ -6,6 +6,7 @@ import type {
   AttachmentSource,
   ExecutionAction,
   ExecutionSummary,
+  ProcedureTemplate,
   TemplateSummary,
 } from "#lib/types/index.js";
 
@@ -41,6 +42,11 @@ function desktopOnly(command: string): never {
 export async function listTemplates(): Promise<TemplateSummary[]> {
   if (isDesktop) return invoke("list_templates");
   return request("/templates");
+}
+
+export async function getTemplate(templatePath: string): Promise<ProcedureTemplate> {
+  if (isDesktop) return invoke("get_template", { templatePath });
+  return request(`/templates/content?${new URLSearchParams({ path: templatePath })}`);
 }
 
 export async function startExecution(templatePath: string): Promise<ExecutionSummary> {

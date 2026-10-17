@@ -2,7 +2,9 @@ use std::path::Path;
 
 use serde::Serialize;
 
+use crate::path_security::resolve_template_path;
 use procnote_core::template::parse_template;
+use procnote_core::template::types::ProcedureTemplate;
 
 /// Summary of a template for listing.
 #[derive(Debug, Serialize, ts_rs::TS)]
@@ -73,4 +75,14 @@ pub fn list_templates(dir: &Path) -> Result<Vec<TemplateSummary>, String> {
 
     log::info!("list_templates: returning {} templates", summaries.len());
     Ok(summaries)
+}
+
+/// Read and parse one procedure template under `procedures_dir`.
+pub fn get_template(
+    procedures_dir: &Path,
+    template_path: &Path,
+) -> Result<ProcedureTemplate, String> {
+    let template_path = resolve_template_path(procedures_dir, template_path)?;
+    let source = std::fs::read_to_string(&template_path).map_err(|e| e.to_string())?;
+    parse_template(&source).map_err(|e| e.to_string())
 }
