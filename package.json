@@ -13,9 +13,10 @@
   },
   "scripts": {
     "dev": "vp dev",
-    "build": "vp build",
+    "build": "pnpm run build:wasm && vp build",
     "build:launcher": "node scripts/prepare-launcher.mjs",
     "build:collab": "vp pack collab/main.ts -d collab/dist --no-config",
+    "build:wasm": "node scripts/build-wasm.mjs",
     "collab": "node collab/dist/main.mjs",
     "preview": "vp preview",
     "tauri": "node scripts/tauri.mjs",

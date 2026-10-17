@@ -1,0 +1,28 @@
+[package]
+name = "procnote-wasm"
+edition = "2024"
+version.workspace = true
+description.workspace = true
+readme.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+chrono = { workspace = true, features = ["wasmbind"] }
+# rand 0.8 (via names) needs getrandom 0.2 to know it runs in a browser.
+getrandom = { workspace = true, features = ["js"] }
+procnote-app = { path = "../procnote-app", default-features = false }
+procnote-core = { path = "../procnote-core" }
+serde.workspace = true
+serde_json.workspace = true
+uuid = { workspace = true, features = ["js"] }
+wasm-bindgen.workspace = true
+
+[lints]
+workspace = true

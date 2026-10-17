@@ -63,6 +63,11 @@ jobs:
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
+      # The frontend build compiles crates/procnote-wasm and generates its bindings.
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: wasm-bindgen@0.2.129
+
       - run: pnpm install
 
       - name: Remove cached package artifacts

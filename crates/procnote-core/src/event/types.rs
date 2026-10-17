@@ -5,7 +5,8 @@ use uuid::Uuid;
 use crate::template::types::StepContent;
 
 /// Metadata for a single file stored as an attachment.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ts_rs::TS)]
+#[ts(export)]
 pub struct AttachmentRecord {
     pub filename: String,
     pub path: String,
@@ -20,26 +21,42 @@ pub type ExecutionId = Uuid;
 ///
 /// Stored on the same JSONL line as the event's own fields. Every field is
 /// optional so logs written before these fields existed read unchanged.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, ts_rs::TS)]
+#[ts(export)]
 pub struct EventMeta {
     /// Client-generated ID; a request carrying an already-recorded ID is a retry.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub event_id: Option<Uuid>,
     /// Name of the operator who performed the action.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub recorded_by: Option<String>,
     /// Stable identifier of the device the action was performed on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub device: Option<String>,
 }
 
 /// One line of an event log: an event plus its [`EventMeta`].
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct EventRecord {
     #[serde(flatten)]
     pub event: Event,
     #[serde(flatten)]
     pub meta: EventMeta,
+}
+
+impl EventRecord {
+    /// Read a log line from JSON, as the log reader does: the event and its
+    /// metadata from the same object.
+    pub fn from_value(value: &serde_json::Value) -> Result<Self, serde_json::Error> {
+        Ok(Self {
+            event: Event::deserialize(value)?,
+            meta: EventMeta::deserialize(value)?,
+        })
+    }
 }
 
 impl From<Event> for EventRecord {
@@ -65,7 +82,8 @@ pub enum CompletionStatus {
 ///
 /// Events are internally tagged with `"type"` for JSON serialization,
 /// and every event carries an `at` timestamp.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ts_rs::TS)]
+#[ts(export)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
     // -- Lifecycle --
