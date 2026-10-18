@@ -328,6 +328,18 @@ export function blocksToTemplate(
   return { template: { metadata, steps }, issues };
 }
 
+/** Problems with metadata as stored in a document (fields may be missing or mistyped). */
+export function metadataIssues(metadata: Record<string, unknown>): ConversionIssue[] {
+  const required = [
+    ["id", "ID"],
+    ["title", "title"],
+    ["version", "version"],
+  ] as const;
+  return required
+    .filter(([key]) => typeof metadata[key] !== "string" || !metadata[key].trim())
+    .map(([, name]) => ({ message: `The procedure has no ${name}.` }));
+}
+
 // --- Editor structure ---
 
 /**

@@ -8,6 +8,7 @@ import {
   inlineText,
   inputToProps,
   type MarkdownConverter,
+  metadataIssues,
   propsToInput,
   templateToBlocks,
 } from "./convert.js";
@@ -275,4 +276,14 @@ test("diffPaths lists differing leaves", () => {
     "a[1].b",
     "a[2]",
   ]);
+});
+
+describe("metadataIssues", () => {
+  test.each([
+    [{ id: "P-1", title: "T", version: "1" }, []],
+    [{ id: "P-1", title: " ", version: "1" }, ["The procedure has no title."]],
+    [{ title: "T", version: 1 }, ["The procedure has no ID.", "The procedure has no version."]],
+  ])("%o", (metadata, expected) => {
+    expect(metadataIssues(metadata).map((issue) => issue.message)).toEqual(expected);
+  });
 });

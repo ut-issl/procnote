@@ -8,10 +8,13 @@ export default function TemplateList({
   templates,
   onstart,
   onedit,
+  onshare,
 }: {
   templates: TemplateSummary[];
   onstart: (t: TemplateSummary) => void;
   onedit?: (t: TemplateSummary) => void;
+  /** Copy the template into a shared, collaboratively edited one. */
+  onshare?: (t: TemplateSummary) => void;
 }) {
   return (
     <div className={c("template-list")}>
@@ -26,6 +29,11 @@ export default function TemplateList({
           {onedit && (
             <button className={c("btn-edit")} onClick={() => onedit(template)}>
               Edit (prototype)
+            </button>
+          )}
+          {onshare && (
+            <button className={c("btn-edit")} onClick={() => onshare(template)}>
+              Edit together
             </button>
           )}
           <button className={c("btn-start")} onClick={() => onstart(template)}>
