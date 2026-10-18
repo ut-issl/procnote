@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { isUnreachable } from "#lib/offline/localExecutions.js";
-import { listTemplates, UnreachableError } from "./commands.js";
+import { listTemplates, LoginRequiredError, UnreachableError } from "./commands.js";
 
 function respond(status: number, body: unknown) {
   vi.stubGlobal(
@@ -41,5 +41,23 @@ describe("reaching the server", () => {
 
     expect(error).toBe("collab service is unreachable");
     expect(isUnreachable(error)).toBe(false);
+  });
+
+  test("a redirect to Access's login means signing in again", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ type: "opaqueredirect", ok: false, status: 0 }) as Response),
+    );
+
+    const error = await listTemplates().catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(LoginRequiredError);
+    expect(isUnreachable(error)).toBe(true);
+  });
+
+  test("the server refusing the token means signing in again", async () => {
+    respond(401, { error: "missing Access token" });
+
+    expect(await listTemplates().catch((e: unknown) => e)).toBeInstanceOf(LoginRequiredError);
   });
 });

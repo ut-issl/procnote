@@ -6,7 +6,7 @@
 //
 // What the server refuses later because the execution had moved on is kept
 // there as a conflict (see procnote_app::sync), not dropped here.
-import { type PushResult, UnreachableError } from "#lib/api/commands.js";
+import { LoginRequiredError, type PushResult, UnreachableError } from "#lib/api/commands.js";
 import type {
   ActionMeta,
   AttachmentRecord,
@@ -64,6 +64,9 @@ interface KeptFile {
   type: string;
   data: ArrayBuffer;
 }
+
+/** Why the last sync didn't get through, if it didn't. */
+export type SyncProblem = "unreachable" | "login" | null;
 
 /** An execution as kept on this device. */
 export interface LocalExecution {
@@ -127,6 +130,62 @@ function procedureOf(templatePath: string): string {
   return parts.at(-2) ?? "procedure";
 }
 
+/** Unsynced recordings written to a file, to survive losing this browser's storage. */
+export interface OfflineBackup {
+  format: "procnote-offline-backup";
+  version: 1;
+  /** ISO 8601 timestamp. */
+  created_at: string;
+  executions: LocalExecution[];
+  /** Content of attached files, by SHA-256. */
+  files: Record<string, { name: string; type: string; base64: string }>;
+}
+
+function eventIds(records: EventRecord[]): Set<string> {
+  return new Set(records.flatMap((record) => (record.event_id ? [record.event_id] : [])));
+}
+
+/**
+ * A kept execution with a backed-up copy merged in: recordings missing here
+ * are added back, and nothing is doubled (events are matched by event ID;
+ * the server deduplicates the same way).
+ */
+export function mergeBackup(
+  kept: LocalExecution | undefined,
+  backup: LocalExecution,
+): LocalExecution {
+  if (!kept) return backup;
+  const known = eventIds([...kept.records, ...kept.pending]);
+  const knownRejected = eventIds(kept.rejected.map((r) => r.record));
+  return {
+    ...kept,
+    pending: [
+      ...kept.pending,
+      ...backup.pending.filter((record) => !record.event_id || !known.has(record.event_id)),
+    ],
+    rejected: [
+      ...kept.rejected,
+      ...backup.rejected.filter((r) => !r.record.event_id || !knownRejected.has(r.record.event_id)),
+    ],
+  };
+}
+
+function toBase64(data: ArrayBuffer): string {
+  const bytes = new Uint8Array(data);
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  }
+  return btoa(binary);
+}
+
+function fromBase64(text: string): ArrayBuffer {
+  const binary = atob(text);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes.buffer;
+}
+
 export class LocalExecutions implements ExecutionApi {
   readonly #store: KeyValueStore;
   readonly #server: SyncServer;
@@ -136,6 +195,7 @@ export class LocalExecutions implements ExecutionApi {
   #locks = new Map<string, Promise<unknown>>();
   #listeners = new Set<(executionId: string, summary: ExecutionSummary) => void>();
   #pendingListeners = new Set<() => void>();
+  #problem: SyncProblem = null;
 
   /** `online` is the plain server API, used when the server can be reached. */
   constructor(store: KeyValueStore, server: SyncServer, online: ExecutionApi, core: Core) {
@@ -356,9 +416,25 @@ export class LocalExecutions implements ExecutionApi {
   }
 
   #syncSoon(executionId: string) {
-    void this.sync(executionId).catch((error: unknown) => {
-      if (!isUnreachable(error)) console.warn(`[sync] ${executionId}: ${String(error)}`);
-    });
+    this.sync(executionId).then(
+      () => this.#setProblem(null),
+      (error: unknown) => {
+        if (error instanceof LoginRequiredError) this.#setProblem("login");
+        else if (isUnreachable(error)) this.#setProblem("unreachable");
+        else console.warn(`[sync] ${executionId}: ${String(error)}`);
+      },
+    );
+  }
+
+  #setProblem(problem: SyncProblem) {
+    if (this.#problem === problem) return;
+    this.#problem = problem;
+    for (const listener of this.#pendingListeners) listener();
+  }
+
+  /** Why the last sync didn't get through (null when it did). */
+  syncProblem(): SyncProblem {
+    return this.#problem;
   }
 
   /** Upload the kept content of files the events attach; returns upload tokens. */
@@ -401,8 +477,7 @@ export class LocalExecutions implements ExecutionApi {
     const kept = await this.#store.get<KeptFile>(FILE_KEY + attachment.sha256);
     if (!kept) return undefined;
     if (!PREVIEWABLE.includes(attachment.content_type)) return null;
-    const binary = [...new Uint8Array(kept.data)].map((b) => String.fromCharCode(b)).join("");
-    return `data:${attachment.content_type};base64,${btoa(binary)}`;
+    return `data:${attachment.content_type};base64,${toBase64(kept.data)}`;
   }
 
   /** Sync every execution with something waiting; quietly gives up when unreachable. */
@@ -437,12 +512,64 @@ export class LocalExecutions implements ExecutionApi {
       .map(([, local]) => this.#summary(local));
   }
 
+  // --- Backups of what isn't synced ---
+
+  /** Everything not yet on the server (and refused events), with attached files. */
+  async backup(now = new Date()): Promise<OfflineBackup> {
+    const executions = (await this.#store.entries<LocalExecution>())
+      .filter(([key]) => key.startsWith(EXECUTION_KEY))
+      .map(([, local]) => local)
+      .filter(
+        (local) =>
+          local.pending.length > 0 || local.unregistered !== undefined || local.rejected.length > 0,
+      );
+    const files: OfflineBackup["files"] = {};
+    const attached = executions.flatMap((local) => [
+      ...local.pending.flatMap(attachmentsOf),
+      ...local.rejected.flatMap((r) => attachmentsOf(r.record)),
+    ]);
+    for (const attachment of attached) {
+      const kept = await this.#store.get<KeptFile>(FILE_KEY + attachment.sha256);
+      if (kept)
+        files[attachment.sha256] = {
+          name: kept.name,
+          type: kept.type,
+          base64: toBase64(kept.data),
+        };
+    }
+    return {
+      format: "procnote-offline-backup",
+      version: 1,
+      created_at: now.toISOString(),
+      executions,
+      files,
+    };
+  }
+
+  /** Put a backup's recordings back on this device; they sync like any others. */
+  async restore(backup: OfflineBackup): Promise<number> {
+    if (backup.format !== "procnote-offline-backup" || backup.version !== 1) {
+      throw "This file isn't a procnote backup of unsynced records.";
+    }
+    for (const [sha256, file] of Object.entries(backup.files)) {
+      const kept: KeptFile = { name: file.name, type: file.type, data: fromBase64(file.base64) };
+      await this.#store.set(FILE_KEY + sha256, kept);
+    }
+    for (const execution of backup.executions) {
+      await this.#exclusive(execution.id, async () =>
+        this.#save(mergeBackup(await this.#load(execution.id), execution)),
+      );
+    }
+    await this.syncAll();
+    return backup.executions.length;
+  }
+
   /** Events of an execution the server refused as malformed. */
   async rejected(executionId: string): Promise<LocalExecution["rejected"]> {
     return (await this.#load(executionId))?.rejected ?? [];
   }
 
-  /** Be told whenever what's waiting changes. */
+  /** Be told whenever what's waiting, or why it's waiting, changes. */
   onWaitingChange(listener: () => void): () => void {
     this.#pendingListeners.add(listener);
     return () => this.#pendingListeners.delete(listener);
