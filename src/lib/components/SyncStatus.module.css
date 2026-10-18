@@ -1,0 +1,20 @@
+.sync {
+  align-self: center;
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  color: #a5d6a7;
+  border: 1px solid #2e7d32;
+}
+
+.offline {
+  color: #ffcc80;
+  border-color: #e65100;
+}
+
+.waiting {
+  color: #1a1a2e;
+  background: #ffcc80;
+  border-color: #ffcc80;
+  font-weight: 600;
+}

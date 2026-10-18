@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router";
 import * as api from "#lib/api/commands.js";
 import AddStepDialog from "#lib/components/AddStepDialog.js";
+import ConflictsPanel from "#lib/components/ConflictsPanel.js";
 import InboxPanel from "#lib/components/InboxPanel.js";
 import Modal from "#lib/components/Modal.js";
 import PhoneUploadDialog from "#lib/components/PhoneUploadDialog.js";
@@ -298,6 +299,8 @@ export default function ExecutionPage() {
                   </button>
                 </div>
               )}
+
+              <ConflictsPanel summary={summary} />
 
               <InboxPanel summary={summary} executionActive={isActive} onaction={handleAction} />
 
