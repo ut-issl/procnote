@@ -40,6 +40,26 @@ function desktopOnly(command: string): never {
   throw `${command} is only available in the desktop app`;
 }
 
+/** Who the server says the caller is. */
+export interface Me {
+  /** `"access"` when Cloudflare Access authenticates users, else `"none"`. */
+  auth: "access" | "none";
+  email: string | null;
+}
+
+/**
+ * The signed-in user, if the server knows one. The desktop app and pages
+ * outside the login (the phone upload page) get no email.
+ */
+export async function getMe(): Promise<Me> {
+  if (isDesktop) return { auth: "none", email: null };
+  try {
+    return await request<Me>("/me");
+  } catch {
+    return { auth: "none", email: null };
+  }
+}
+
 export async function listTemplates(): Promise<TemplateSummary[]> {
   if (isDesktop) return invoke("list_templates");
   return request("/templates");
