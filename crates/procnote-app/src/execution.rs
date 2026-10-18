@@ -5,13 +5,13 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use serde::Serialize;
 use ts_rs::TS;
 
-use crate::action::ExecutionAction;
+use crate::action::{ActionMeta, ExecutionAction};
 use crate::path_security::resolve_template_path;
 use crate::persistence::event_log::EventLog;
 use crate::persistence::execution_store::{
     ExecutionStore, find_execution_dir, is_temp_execution_dir,
 };
-use procnote_core::event::types::{CompletionStatus, Event, ExecutionId};
+use procnote_core::event::types::{CompletionStatus, ExecutionId};
 use procnote_core::execution::{
     ExecutionState, ExecutionStepContent, RecordedAttachment, StepStatus,
 };
@@ -417,6 +417,7 @@ pub fn start_execution(
     procedures_dir: &Path,
     template_path: &Path,
     tool_version: String,
+    meta: ActionMeta,
 ) -> Result<ExecutionSummary, String> {
     let template_path = resolve_template_path(procedures_dir, template_path)?;
     let source = std::fs::read_to_string(&template_path).map_err(|e| e.to_string())?;
@@ -425,26 +426,12 @@ pub fn start_execution(
     let mut exec_state = ExecutionState::new();
     let events = exec_state.start(&template).map_err(|e| e.to_string())?;
 
-    let execution_id = exec_state
-        .execution_id
-        .ok_or_else(|| "start() did not set execution_id".to_string())?;
-
-    // Extract the timestamp from the ExecutionStarted event.
-    let started_at = events
-        .iter()
-        .find_map(|e| match e {
-            Event::ExecutionStarted { at, .. } => Some(*at),
-            _ => None,
-        })
-        .ok_or_else(|| "start() did not produce an ExecutionStarted event".to_string())?;
-
     let recorded = ExecutionStore::new(procedures_dir.to_path_buf()).create_execution(
         &template_path,
         exec_state,
         events,
-        started_at,
-        execution_id,
         tool_version,
+        &meta.into_event_meta(),
     )?;
 
     summarize(&recorded.state, &recorded.execution_dir)
@@ -457,10 +444,14 @@ pub fn record_action(
     procedures_dir: &Path,
     execution_id: ExecutionId,
     action: ExecutionAction,
+    meta: ActionMeta,
 ) -> Result<ExecutionSummary, String> {
-    log::debug!("record_action: execution={execution_id}, action={action:?}");
-    let recorded =
-        ExecutionStore::new(procedures_dir.to_path_buf()).record_action(execution_id, action)?;
+    log::debug!("record_action: execution={execution_id}, action={action:?}, meta={meta:?}");
+    let recorded = ExecutionStore::new(procedures_dir.to_path_buf()).record_action(
+        execution_id,
+        action,
+        meta.into_event_meta(),
+    )?;
     summarize(&recorded.state, &recorded.execution_dir)
 }
 

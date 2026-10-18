@@ -2,8 +2,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use fs2::FileExt;
-use procnote_core::event::types::Event;
-use procnote_core::event::{EventLogError, read_log};
+use procnote_core::event::types::{Event, EventRecord};
+use procnote_core::event::{EventLogError, read_log, read_log_records};
 
 /// Filesystem-backed append-only JSONL event log.
 ///
@@ -27,6 +27,11 @@ impl EventLog {
 
     pub fn read_locked(&self) -> Result<Vec<Event>, EventLogError> {
         self.with_shared_lock(|| self.read())?
+    }
+
+    /// Read every event together with its metadata (who, where, event ID).
+    pub fn read_records(&self) -> Result<Vec<EventRecord>, EventLogError> {
+        read_log_records(&self.path)
     }
 
     /// Run a closure while holding an exclusive advisory lock for this event log.
@@ -53,7 +58,7 @@ impl EventLog {
     ///
     /// A successful return means Procnote has asked the OS to persist both the
     /// file contents and, for newly-created logs, the parent directory entry.
-    pub fn append_durable(&self, event: &Event) -> Result<(), EventLogError> {
+    pub fn append_durable(&self, event: &EventRecord) -> Result<(), EventLogError> {
         self.append_batch_durable(std::slice::from_ref(event))
     }
 
@@ -62,7 +67,7 @@ impl EventLog {
     /// Events are written as complete JSONL lines in order. Readers already
     /// tolerate a truncated final line after a crash; syncing here reduces the
     /// window where a reported-successful append can still be lost.
-    pub fn append_batch_durable(&self, events: &[Event]) -> Result<(), EventLogError> {
+    pub fn append_batch_durable(&self, events: &[EventRecord]) -> Result<(), EventLogError> {
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -88,7 +93,7 @@ impl EventLog {
     ///
     /// This is intended for initial execution creation, where appending to a
     /// pre-existing log would indicate a storage bug.
-    pub fn create_with_events_durable(&self, events: &[Event]) -> Result<(), EventLogError> {
+    pub fn create_with_events_durable(&self, events: &[EventRecord]) -> Result<(), EventLogError> {
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -143,7 +148,7 @@ impl EventLog {
     }
 }
 
-fn write_events(file: &mut std::fs::File, events: &[Event]) -> Result<(), EventLogError> {
+fn write_events(file: &mut std::fs::File, events: &[EventRecord]) -> Result<(), EventLogError> {
     for event in events {
         let json = serde_json::to_string(event)?;
         writeln!(file, "{json}")?;
@@ -201,7 +206,7 @@ mod tests {
         let path = dir.path().join("nested").join("events.jsonl");
         let log = EventLog::new(path);
 
-        log.append_durable(&log_meta()).unwrap();
+        log.append_durable(&log_meta().into()).unwrap();
 
         let events = log.read().unwrap();
         assert_eq!(events.len(), 1);
@@ -219,7 +224,7 @@ mod tests {
             name: "new-name".to_string(),
         };
 
-        log.append_batch_durable(&[first.clone(), second.clone()])
+        log.append_batch_durable(&[first.clone().into(), second.clone().into()])
             .unwrap();
 
         assert_eq!(log.read().unwrap(), vec![first, second]);

@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 use procnote_core::event::SUPPORTED_VERSION;
-use procnote_core::event::types::{AttachmentRecord, Event, ExecutionId};
+use procnote_core::event::types::{AttachmentRecord, Event, EventMeta, EventRecord, ExecutionId};
 use procnote_core::execution::ExecutionState;
 use procnote_core::snapshot::render_execution_markdown;
 
@@ -41,10 +41,12 @@ impl ExecutionStore {
         template_path: &Path,
         state: ExecutionState,
         initial_events: Vec<Event>,
-        started_at: DateTime<Utc>,
-        execution_id: ExecutionId,
         tool_version: String,
+        meta: &EventMeta,
     ) -> Result<RecordedExecution, String> {
+        let (Some(execution_id), Some(started_at)) = (state.execution_id, state.started_at) else {
+            return Err("execution state has not been started".to_string());
+        };
         let procedure_dir = template_path
             .parent()
             .ok_or("template_path has no parent directory")?;
@@ -78,8 +80,11 @@ impl ExecutionStore {
             version: SUPPORTED_VERSION,
             tool_version,
         };
-        let mut events = vec![log_meta];
-        events.extend(initial_events);
+        let mut events = vec![EventRecord::from(log_meta)];
+        events.extend(initial_events.into_iter().map(|event| EventRecord {
+            event,
+            meta: meta.clone(),
+        }));
         EventLog::new(temp_dir.join("events.jsonl"))
             .create_with_events_durable(&events)
             .map_err(|e| e.to_string())?;
@@ -100,12 +105,17 @@ impl ExecutionStore {
     /// The full read/replay/validate/append sequence runs under the event log's
     /// exclusive lock. The command layer should treat the durable append inside
     /// this method as the commit point.
+    ///
+    /// When `meta.event_id` is already in the log, the request is a retry of
+    /// an action that was recorded: nothing is appended and the current state
+    /// is returned.
     pub fn record_action(
         &self,
         execution_id: ExecutionId,
         action: ExecutionAction,
+        meta: EventMeta,
     ) -> Result<RecordedExecution, String> {
-        self.with_log_transaction(execution_id, |state, execution_dir| {
+        self.with_log_transaction(execution_id, meta, |state, execution_dir| {
             build_event_for_action(state, execution_dir, action)
         })
     }
@@ -159,7 +169,7 @@ impl ExecutionStore {
                     .map_err(|error| error.to_string())?;
                 state.apply(&event).map_err(|error| error.to_string())?;
                 transaction_log
-                    .append_durable(&event)
+                    .append_durable(&event.clone().into())
                     .map_err(|error| error.to_string())?;
                 if let Err(error) = write_execution_snapshot_durable(&execution_dir, &state) {
                     log::warn!(
@@ -177,6 +187,7 @@ impl ExecutionStore {
     fn with_log_transaction(
         &self,
         execution_id: ExecutionId,
+        meta: EventMeta,
         build_action: impl FnOnce(&ExecutionState, &Path) -> Result<BuiltAction, String>,
     ) -> Result<RecordedExecution, String> {
         let execution_dir = find_execution_dir(&self.procedures_dir, execution_id)?
@@ -190,14 +201,25 @@ impl ExecutionStore {
 
         event_log
             .with_exclusive_lock(|| {
-                let events = transaction_log.read().map_err(|e| e.to_string())?;
+                let records = transaction_log.read_records().map_err(|e| e.to_string())?;
+                let events: Vec<Event> = records.iter().map(|r| r.event.clone()).collect();
                 let mut state = ExecutionState::from_events(&events).map_err(|e| e.to_string())?;
+
+                if is_retry(&records, &meta) {
+                    return Ok(RecordedExecution {
+                        state,
+                        execution_dir,
+                    });
+                }
 
                 let built = build_action(&state, &execution_dir)?;
                 state.apply(&built.event).map_err(|e| e.to_string())?;
                 commit_pending_attachments(&execution_dir, built.pending_attachments)?;
                 transaction_log
-                    .append_durable(&built.event)
+                    .append_durable(&EventRecord {
+                        event: built.event,
+                        meta,
+                    })
                     .map_err(|e| e.to_string())?;
                 if let Err(e) = write_execution_snapshot_durable(&execution_dir, &state) {
                     log::warn!(
@@ -211,6 +233,15 @@ impl ExecutionStore {
             })
             .map_err(|e| e.to_string())?
     }
+}
+
+/// Whether `meta` carries an event ID that is already recorded.
+fn is_retry(records: &[EventRecord], meta: &EventMeta) -> bool {
+    meta.event_id.is_some_and(|id| {
+        records
+            .iter()
+            .any(|record| record.meta.event_id == Some(id))
+    })
 }
 
 struct BuiltAction {
@@ -608,13 +639,6 @@ version: 1.0.0
         let mut state = ExecutionState::new();
         let events = state.start(&template).unwrap();
         let execution_id = state.execution_id.unwrap();
-        let started_at = events
-            .iter()
-            .find_map(|event| match event {
-                Event::ExecutionStarted { at, .. } => Some(*at),
-                _ => None,
-            })
-            .unwrap();
 
         let store = ExecutionStore::new(temp.path().to_path_buf());
         let recorded = store
@@ -622,9 +646,8 @@ version: 1.0.0
                 &template_path,
                 state,
                 events,
-                started_at,
-                execution_id,
                 "test".to_string(),
+                &EventMeta::default(),
             )
             .unwrap();
 
@@ -642,12 +665,101 @@ version: 1.0.0
                     checkbox_id: "step-0/cb-0".to_string(),
                     checked: true,
                 },
+                EventMeta::default(),
             )
             .unwrap();
 
         let updated_readme = std::fs::read_to_string(readme_path).unwrap();
         assert!(updated_readme.contains("- [x] Ready"));
         assert!(updated_readme.contains("Toggled at:"));
+    }
+
+    fn create_snapshot_test_execution(root: &Path, meta: &EventMeta) -> ExecutionId {
+        let procedure_dir = root.join("snapshot-test");
+        std::fs::create_dir(&procedure_dir).unwrap();
+        let template_path = procedure_dir.join("template.md");
+        std::fs::write(&template_path, TEMPLATE).unwrap();
+        let template = parse_template(TEMPLATE).unwrap();
+        let mut state = ExecutionState::new();
+        let events = state.start(&template).unwrap();
+        let execution_id = state.execution_id.unwrap();
+        ExecutionStore::new(root.to_path_buf())
+            .create_execution(&template_path, state, events, "test".to_string(), meta)
+            .unwrap();
+        execution_id
+    }
+
+    fn toggle() -> ExecutionAction {
+        ExecutionAction::ToggleCheckbox {
+            step_id: "step-0".to_string(),
+            checkbox_id: "step-0/cb-0".to_string(),
+            checked: true,
+        }
+    }
+
+    #[test]
+    fn records_who_and_where_with_each_event() {
+        let temp = tempfile::tempdir().unwrap();
+        let starter = EventMeta {
+            event_id: None,
+            recorded_by: Some("starter".to_string()),
+            device: Some("desk".to_string()),
+        };
+        let execution_id = create_snapshot_test_execution(temp.path(), &starter);
+        let store = ExecutionStore::new(temp.path().to_path_buf());
+        let toggler = EventMeta {
+            event_id: Some(uuid::Uuid::new_v4()),
+            recorded_by: Some("toggler".to_string()),
+            device: Some("phone".to_string()),
+        };
+
+        let recorded = store
+            .record_action(execution_id, toggle(), toggler.clone())
+            .unwrap();
+
+        let records = EventLog::new(recorded.execution_dir.join("events.jsonl"))
+            .read_records()
+            .unwrap();
+        assert_eq!(
+            records[0].meta,
+            EventMeta::default(),
+            "LogMeta has no author"
+        );
+        assert_eq!(records[1].meta, starter);
+        assert_eq!(records.last().unwrap().meta, toggler);
+    }
+
+    #[test]
+    fn a_retried_event_id_is_recorded_once() {
+        let temp = tempfile::tempdir().unwrap();
+        let execution_id = create_snapshot_test_execution(temp.path(), &EventMeta::default());
+        let store = ExecutionStore::new(temp.path().to_path_buf());
+        let meta = EventMeta {
+            event_id: Some(uuid::Uuid::new_v4()),
+            ..EventMeta::default()
+        };
+
+        store
+            .record_action(execution_id, toggle(), meta.clone())
+            .unwrap();
+        let retried = store.record_action(execution_id, toggle(), meta).unwrap();
+
+        assert!(
+            retried.state.steps["step-0"]
+                .content
+                .iter()
+                .any(|c| matches!(
+                    c,
+                    procnote_core::execution::ExecutionStepContent::Checkbox(cb) if cb.checked
+                ))
+        );
+        let toggles = EventLog::new(retried.execution_dir.join("events.jsonl"))
+            .read()
+            .unwrap()
+            .into_iter()
+            .filter(|event| matches!(event, Event::CheckboxToggled { .. }))
+            .count();
+        assert_eq!(toggles, 1);
     }
 
     #[test]
@@ -662,22 +774,14 @@ version: 1.0.0
         let mut state = ExecutionState::new();
         let events = state.start(&template).unwrap();
         let execution_id = state.execution_id.unwrap();
-        let started_at = events
-            .iter()
-            .find_map(|event| match event {
-                Event::ExecutionStarted { at, .. } => Some(*at),
-                _ => None,
-            })
-            .unwrap();
         let store = ExecutionStore::new(temporary.path().to_path_buf());
         let created = store
             .create_execution(
                 &template_path,
                 state,
                 events,
-                started_at,
-                execution_id,
                 "test".to_string(),
+                &EventMeta::default(),
             )
             .unwrap();
 
