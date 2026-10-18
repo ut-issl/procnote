@@ -205,17 +205,18 @@ export default function ExecutionPage() {
                       {summary.procedure_title} ({summary.procedure_id}) v
                       {summary.procedure_version}
                     </span>
-                    {isDesktop ? (
-                      <button
-                        className={c("execution-dir")}
-                        onClick={openDirectory}
-                        title="Open in Finder"
-                      >
-                        {summary.execution_dir}
-                      </button>
-                    ) : (
-                      <span className={c("execution-dir")}>{summary.execution_dir}</span>
-                    )}
+                    {summary.execution_dir &&
+                      (isDesktop ? (
+                        <button
+                          className={c("execution-dir")}
+                          onClick={openDirectory}
+                          title="Open in Finder"
+                        >
+                          {summary.execution_dir}
+                        </button>
+                      ) : (
+                        <span className={c("execution-dir")}>{summary.execution_dir}</span>
+                      ))}
                   </div>
                 </div>
                 <div className={c("header-right")}>

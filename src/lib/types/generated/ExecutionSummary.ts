@@ -30,9 +30,9 @@ export type ExecutionSummary = {
    */
   inbox: Array<AttachmentState>;
   /**
-   * Absolute path to the execution directory on disk.
+   * Absolute path to the execution directory, when stored on a filesystem.
    */
-  execution_dir: string;
+  execution_dir?: string;
   /**
    * Number of events recorded so far; a larger value is a newer state.
    */

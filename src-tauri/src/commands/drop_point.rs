@@ -290,12 +290,10 @@ pub async fn import_attachment_drop_point_upload(
         }
     }
     let (current, log_path) = load_execution_from_disk(&state.procedures_dir, execution_id)?;
-    summarize(
-        &current,
-        log_path
-            .parent()
-            .ok_or_else(|| "event log path has no parent".to_string())?,
-    )
+    let execution_dir = log_path
+        .parent()
+        .ok_or_else(|| "event log path has no parent".to_string())?;
+    summarize(&current, Some(&execution_dir.display().to_string()))
 }
 
 async fn acknowledge_submission(
@@ -488,7 +486,10 @@ fn record_one_submission(
             &session.input_id,
             sources,
         )?;
-    let summary = summarize(&recorded.state, &recorded.execution_dir)?;
+    let summary = summarize(
+        &recorded.state,
+        Some(&recorded.execution_dir.display().to_string()),
+    )?;
     *session = session.with_submission_recorded(submission_id)?;
     sessions.persist(session)?;
     Ok(Some(summary))
@@ -795,6 +796,7 @@ mod tests {
 
     use super::*;
     use procnote_app::persistence::event_log::EventLog;
+    use procnote_app::repository::{ExecutionRepository, NewExecution};
 
     const TEMPLATE: &str = r"---
 id: drop-point-restart
@@ -836,21 +838,22 @@ version: 1.0.0
         let workspace = workspace.canonicalize().unwrap();
         let procedure_dir = workspace.join("drop-point-restart");
         std::fs::create_dir(&procedure_dir).unwrap();
-        let template_path = procedure_dir.join("template.md");
-        std::fs::write(&template_path, TEMPLATE).unwrap();
+        std::fs::write(procedure_dir.join("template.md"), TEMPLATE).unwrap();
         let template = parse_template(TEMPLATE).unwrap();
         let mut execution_state = ExecutionState::new();
         let initial_events = execution_state.start(&template).unwrap();
         let execution_id = execution_state.execution_id.unwrap();
-        let recorded = ExecutionStore::new(workspace.clone())
-            .create_execution(
-                &template_path,
-                execution_state,
+        let created = ExecutionStore::new(workspace.clone())
+            .create(NewExecution {
+                procedure: "drop-point-restart".to_string(),
+                template_source: TEMPLATE.to_string(),
+                state: execution_state,
                 initial_events,
-                "test".to_string(),
-                &EventMeta::default(),
-            )
+                tool_version: "test".to_string(),
+                meta: EventMeta::default(),
+            })
             .unwrap();
+        let execution_dir = std::path::PathBuf::from(created.location.unwrap());
 
         let state_root = temporary.path().join("private/drop-point-sessions");
         let sessions = DropPointSessions::new(state_root.clone(), &workspace).unwrap();
@@ -880,7 +883,7 @@ version: 1.0.0
             input_id: "evidence".to_string(),
             expires_at,
             max_bytes: 1024,
-            execution_dir: recorded.execution_dir.clone(),
+            execution_dir: execution_dir.clone(),
             workspace_root: workspace.clone(),
         });
         sessions.insert(&session).unwrap();
@@ -968,7 +971,7 @@ version: 1.0.0
             std::fs::read(installed_path.join("scan-01.txt")).unwrap(),
             b"hello drop point\n"
         );
-        let events = EventLog::new(recorded.execution_dir.join("events.jsonl"))
+        let events = EventLog::new(execution_dir.join("events.jsonl"))
             .read()
             .unwrap();
         let attachment_events = events
@@ -1051,7 +1054,7 @@ version: 1.0.0
         let recovered = restarted.get(&recovery.session_id).unwrap();
         assert!(recovered.submissions[&second_id].recorded);
         assert!(recovered.recipient_private_key().is_err());
-        let events = EventLog::new(recorded.execution_dir.join("events.jsonl"))
+        let events = EventLog::new(execution_dir.join("events.jsonl"))
             .read()
             .unwrap();
         assert_eq!(
