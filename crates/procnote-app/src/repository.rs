@@ -8,13 +8,15 @@
 
 use std::path::{Path, PathBuf};
 
-use procnote_core::event::types::{AttachmentRecord, Event, EventMeta, ExecutionId};
+use procnote_core::event::types::{AttachmentRecord, Event, EventMeta, EventRecord, ExecutionId};
 use procnote_core::execution::ExecutionState;
 use procnote_core::template::types::ProcedureTemplate;
+use uuid::Uuid;
 
 use crate::action::ExecutionAction;
 use crate::attachment::{compute_sha256, sanitize_attachment_filename};
 use crate::execution::infer_attachment_content_type;
+use crate::sync::{Conflict, Resolution};
 
 /// An execution as stored: its replayed state and, for file storage, the
 /// directory it lives in.
@@ -151,6 +153,24 @@ pub trait ExecutionRepository: Send + Sync {
 
     /// The content of a stored attachment, by its stored path.
     fn read_attachment(&self, execution_id: ExecutionId, path: &str) -> Result<Vec<u8>, String>;
+
+    /// The execution's log lines, starting with its `LogMeta`.
+    fn records(&self, execution_id: ExecutionId) -> Result<Vec<EventRecord>, String>;
+
+    /// Pushed events that didn't apply ([`crate::sync`]), resolved or not.
+    fn conflicts(&self, execution_id: ExecutionId) -> Result<Vec<Conflict>, String>;
+
+    /// Keep a pushed event that didn't apply. Adding one whose event ID is
+    /// already kept does nothing.
+    fn add_conflict(&self, execution_id: ExecutionId, conflict: &Conflict) -> Result<(), String>;
+
+    /// Mark the conflict of `event_id` as dealt with.
+    fn resolve_conflict(
+        &self,
+        execution_id: ExecutionId,
+        event_id: Uuid,
+        resolution: &Resolution,
+    ) -> Result<(), String>;
 }
 
 /// Apply a decision's events to `state` in order, validating each.
@@ -274,7 +294,7 @@ pub fn decide_receive(state: &ExecutionState, files: Vec<StagedFile>) -> Result<
 }
 
 /// Whether the execution already holds a file with this content.
-fn has_content(state: &ExecutionState, sha256: &str) -> bool {
+pub(crate) fn has_content(state: &ExecutionState, sha256: &str) -> bool {
     state
         .inbox
         .iter()

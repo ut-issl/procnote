@@ -12,13 +12,14 @@
 
 use std::sync::Arc;
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use object_store::{ObjectStore, ObjectStoreExt, PutMode};
 use procnote_app::attachment::sha256_hex;
 use procnote_app::repository::{
     Decide, ExecutionRepository, NewExecution, StagedFile, StoredExecution, TemplateSnapshot,
     apply_decision,
 };
+use procnote_app::sync::{self, Conflict, Resolution};
 use procnote_core::event::SUPPORTED_VERSION;
 use procnote_core::event::types::{AttachmentRecord, Event, EventMeta, EventRecord, ExecutionId};
 use procnote_core::execution::ExecutionState;
@@ -62,7 +63,7 @@ impl PostgresStore {
         self.pool.clone()
     }
 
-    async fn records(
+    async fn read_records(
         &self,
         executor: impl sqlx::PgExecutor<'_>,
         execution_id: ExecutionId,
@@ -96,7 +97,7 @@ impl PostgresStore {
         if exists.is_none() {
             return Err(format!("Execution not found: {execution_id}"));
         }
-        let records = self.records(&mut *tx, execution_id).await?;
+        let records = self.read_records(&mut *tx, execution_id).await?;
         let mut state = replay(&records)?;
 
         let is_retry = meta.event_id.is_some_and(|id| {
@@ -243,7 +244,7 @@ impl PostgresStore {
             .await
             .map_err(db_error)?
             .ok_or_else(|| format!("Execution not found: {execution_id}"))?;
-        let records = self.records(&self.pool, execution_id).await?;
+        let records = self.read_records(&self.pool, execution_id).await?;
         let attachments: Vec<(String, String)> = sqlx::query_as(
             "SELECT path, sha256 FROM attachments WHERE execution_id = $1 ORDER BY path",
         )
@@ -283,28 +284,12 @@ impl PostgresStore {
 #[must_use]
 pub fn referenced_files(records: &[EventRecord]) -> Vec<AttachmentRecord> {
     let mut files: Vec<AttachmentRecord> = Vec::new();
-    for record in records {
-        let referenced = match &record.event {
-            Event::AttachmentsAdded { attachments, .. } => attachments.clone(),
-            Event::AttachmentReceived { attachment, .. } => vec![attachment.clone()],
-            Event::AttachmentAdded {
-                filename,
-                path,
-                content_type,
-                sha256,
-                ..
-            } => vec![AttachmentRecord {
-                filename: filename.clone(),
-                path: path.clone(),
-                content_type: content_type.clone(),
-                sha256: sha256.clone(),
-            }],
-            _ => Vec::new(),
-        };
-        for file in referenced {
-            if !files.iter().any(|known| known.path == file.path) {
-                files.push(file);
-            }
+    for file in records
+        .iter()
+        .flat_map(|record| sync::referenced_files(&record.event))
+    {
+        if !files.iter().any(|known| known.path == file.path) {
+            files.push(file);
         }
     }
     files
@@ -320,7 +305,7 @@ impl ExecutionRepository for PostgresStore {
                     .map_err(db_error)?;
             let mut executions = Vec::with_capacity(ids.len());
             for id in ids {
-                match replay(&self.records(&self.pool, id).await?) {
+                match replay(&self.read_records(&self.pool, id).await?) {
                     Ok(state) => executions.push(stored(state)),
                     Err(e) => log::warn!("skipping unreadable execution {id}: {e}"),
                 }
@@ -331,7 +316,7 @@ impl ExecutionRepository for PostgresStore {
 
     fn load(&self, execution_id: ExecutionId) -> Result<StoredExecution, String> {
         self.runtime.block_on(async {
-            let records = self.records(&self.pool, execution_id).await?;
+            let records = self.read_records(&self.pool, execution_id).await?;
             if records.is_empty() {
                 return Err(format!("Execution not found: {execution_id}"));
             }
@@ -384,6 +369,94 @@ impl ExecutionRepository for PostgresStore {
     ) -> Result<StoredExecution, String> {
         self.runtime
             .block_on(self.record_async(execution_id, meta, decide))
+    }
+
+    fn records(&self, execution_id: ExecutionId) -> Result<Vec<EventRecord>, String> {
+        let records = self
+            .runtime
+            .block_on(self.read_records(&self.pool, execution_id))?;
+        if records.is_empty() {
+            return Err(format!("Execution not found: {execution_id}"));
+        }
+        Ok(records)
+    }
+
+    fn conflicts(&self, execution_id: ExecutionId) -> Result<Vec<Conflict>, String> {
+        type Row = (
+            serde_json::Value,
+            String,
+            DateTime<Utc>,
+            Option<DateTime<Utc>>,
+            Option<String>,
+        );
+        let rows: Vec<Row> = self.runtime.block_on(async {
+            sqlx::query_as(
+                "SELECT record, reason, received_at, resolved_at, resolved_by FROM conflicts \
+                 WHERE execution_id = $1 ORDER BY received_at, event_id",
+            )
+            .bind(execution_id)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(db_error)
+        })?;
+        rows.into_iter()
+            .map(|(record, reason, received_at, resolved_at, resolved_by)| {
+                Ok(Conflict {
+                    record: parse_record(&record)?,
+                    reason,
+                    received_at,
+                    resolved: resolved_at.map(|at| Resolution {
+                        at,
+                        by: resolved_by,
+                    }),
+                })
+            })
+            .collect()
+    }
+
+    fn add_conflict(&self, execution_id: ExecutionId, conflict: &Conflict) -> Result<(), String> {
+        let event_id = conflict
+            .record
+            .meta
+            .event_id
+            .ok_or("conflicts need an event ID")?;
+        self.runtime.block_on(async {
+            sqlx::query(
+                "INSERT INTO conflicts (execution_id, event_id, record, reason, received_at) \
+                 VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING",
+            )
+            .bind(execution_id)
+            .bind(event_id)
+            .bind(Json(&conflict.record))
+            .bind(&conflict.reason)
+            .bind(conflict.received_at)
+            .execute(&self.pool)
+            .await
+            .map_err(db_error)?;
+            Ok(())
+        })
+    }
+
+    fn resolve_conflict(
+        &self,
+        execution_id: ExecutionId,
+        event_id: uuid::Uuid,
+        resolution: &Resolution,
+    ) -> Result<(), String> {
+        self.runtime.block_on(async {
+            sqlx::query(
+                "UPDATE conflicts SET resolved_at = $3, resolved_by = $4 \
+                 WHERE execution_id = $1 AND event_id = $2",
+            )
+            .bind(execution_id)
+            .bind(event_id)
+            .bind(resolution.at)
+            .bind(&resolution.by)
+            .execute(&self.pool)
+            .await
+            .map_err(db_error)?;
+            Ok(())
+        })
     }
 
     fn read_attachment(&self, execution_id: ExecutionId, path: &str) -> Result<Vec<u8>, String> {
