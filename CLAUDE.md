@@ -44,6 +44,7 @@
 
 - Routes under `/api` mirror the IPC commands; other paths serve the built frontend (`--static-dir`) with an SPA fallback.
 - No authentication yet: it listens on `127.0.0.1` by default and is meant for trusted networks only.
+- `GET /api/executions/{id}/live` is a WebSocket sending `{"seq": n}` on connect and after each write through this server. `seq` (`ExecutionSummary.seq`, `ExecutionState::applied_events`) counts recorded events; the frontend store refetches only when a `seq` is ahead of its state and never replaces its state with an older one. Writes by another process (e.g. the desktop app on the same directory) are not announced.
 - Browsers upload attachments to `/api/uploads` first and receive single-use upload tokens. Attachment actions may only reference files by such tokens, mirroring the desktop's file picker grants, so clients can never make the server read arbitrary paths.
 - `just dev-server` + `just dev-frontend` for development (Vite proxies `/api`), `just serve` to build and serve.
 

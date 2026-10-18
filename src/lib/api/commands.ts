@@ -77,6 +77,48 @@ export async function listExecutions(): Promise<ExecutionSummary[]> {
   return request("/executions");
 }
 
+/**
+ * Call `onSeq` with the execution's event count now and after every change
+ * recorded through the server, reconnecting as needed. Returns a function
+ * that stops watching. The desktop app has a single writer, so it does not
+ * watch.
+ */
+export function watchExecution(executionId: string, onSeq: (seq: number) => void): () => void {
+  if (isDesktop) return () => {};
+  let socket: WebSocket | null = null;
+  let retryTimer: number | undefined;
+  let retryDelayMs = 1000;
+  let stopped = false;
+
+  const connect = () => {
+    const scheme = window.location.protocol === "https:" ? "wss" : "ws";
+    socket = new WebSocket(
+      `${scheme}://${window.location.host}/api/executions/${encodeURIComponent(executionId)}/live`,
+    );
+    socket.addEventListener("open", () => {
+      retryDelayMs = 1000;
+    });
+    socket.addEventListener("message", (event) => {
+      const data: unknown = JSON.parse(String(event.data));
+      if (data && typeof data === "object" && "seq" in data && typeof data.seq === "number") {
+        onSeq(data.seq);
+      }
+    });
+    socket.addEventListener("close", () => {
+      if (stopped) return;
+      retryTimer = window.setTimeout(connect, retryDelayMs);
+      retryDelayMs = Math.min(retryDelayMs * 2, 10_000);
+    });
+  };
+
+  connect();
+  return () => {
+    stopped = true;
+    window.clearTimeout(retryTimer);
+    socket?.close();
+  };
+}
+
 export async function getAttachmentPreviewDataUrl(
   executionId: string,
   path: string,

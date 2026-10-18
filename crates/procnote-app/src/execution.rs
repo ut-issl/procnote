@@ -41,6 +41,9 @@ pub struct ExecutionSummary {
     pub steps: Vec<StepSummary>,
     /// Absolute path to the execution directory on disk.
     pub execution_dir: String,
+    /// Number of events recorded so far; a larger value is a newer state.
+    #[ts(type = "number")]
+    pub seq: u64,
 }
 
 #[derive(Debug, Serialize, TS)]
@@ -263,6 +266,7 @@ pub fn summarize(state: &ExecutionState, execution_dir: &Path) -> Result<Executi
         updated_at: datetime_string(state.updated_at),
         steps,
         execution_dir: execution_dir.display().to_string(),
+        seq: state.applied_events,
     })
 }
 
