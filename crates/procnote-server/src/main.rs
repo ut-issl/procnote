@@ -3,7 +3,10 @@ use std::path::PathBuf;
 
 use clap::Parser;
 
+use procnote_app::persistence::execution_store::ExecutionStore;
+use procnote_app::repository::ExecutionRepository;
 use procnote_server::access::AccessConfig;
+use procnote_server::postgres::PostgresStore;
 use procnote_server::{Auth, ServerConfig, router};
 
 /// Arguments accepted by the API server.
@@ -37,6 +40,13 @@ struct Args {
     /// For local development only.
     #[arg(long, conflicts_with = "access_team_domain")]
     insecure_no_auth: bool,
+    /// PostgreSQL URL to store executions in, instead of the workspace
+    /// directory. Templates are still read from the workspace.
+    #[arg(long, env = "PROCNOTE_DATABASE_URL", requires = "attachment_dir")]
+    database_url: Option<String>,
+    /// Directory for attachment content when storing executions in PostgreSQL.
+    #[arg(long, requires = "database_url")]
+    attachment_dir: Option<PathBuf>,
 }
 
 impl Args {
@@ -95,8 +105,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     })?;
     let upload_dir =
         std::env::temp_dir().join(format!("procnote-uploads-{}", uuid::Uuid::new_v4()));
+    let executions: Box<dyn ExecutionRepository> = match (&args.database_url, &args.attachment_dir)
+    {
+        (Some(url), Some(attachment_dir)) => {
+            log::info!("storing executions in PostgreSQL");
+            Box::new(PostgresStore::connect(url, attachment_dir.clone()).await?)
+        }
+        _ => Box::new(ExecutionStore::new(procedures_dir.clone())),
+    };
     let app = router(ServerConfig {
         procedures_dir: procedures_dir.clone(),
+        executions,
         upload_dir,
         static_dir: args.static_dir,
         state_dir: args.state_dir.unwrap_or_else(default_state_dir),

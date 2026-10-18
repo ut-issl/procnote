@@ -16,6 +16,12 @@ dev-frontend:
 dev-server *args='':
     cargo run -p procnote-server -- {{ justfile_directory() }}/procedures --insecure-no-auth {{ args }}
 
+# URL: postgres://postgres:procnote@localhost:55432/procnote. Use it as dev-server's
+# --database-url (with --attachment-dir), or as PROCNOTE_TEST_DATABASE_URL for `just test`.
+# Start a throwaway PostgreSQL for development and tests
+dev-db:
+    docker run -d --rm --name procnote-dev-db -e POSTGRES_PASSWORD=procnote -e POSTGRES_DB=procnote -p 55432:5432 postgres:18
+
 # Build the frontend and serve it locally without authentication (pass --listen 0.0.0.0:5181 for other devices on a trusted network)
 serve *args='': build-frontend
     cargo run --release -p procnote-server -- {{ justfile_directory() }}/procedures --static-dir {{ justfile_directory() }}/build --insecure-no-auth {{ args }}
