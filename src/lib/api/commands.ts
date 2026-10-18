@@ -24,22 +24,32 @@ import type {
  */
 export class UnreachableError extends Error {}
 
+/**
+ * The server can't be used until this browser signs in again: Cloudflare
+ * Access redirected the request to its login, or the server refused the
+ * missing or expired token. Nothing is lost; it is unreachable until then.
+ */
+export class LoginRequiredError extends UnreachableError {}
+
 /** Gateway errors, which mean the server itself didn't answer. */
 const GATEWAY_STATUSES = new Set([502, 503, 504, 520, 521, 522, 523, 524, 525, 526, 527, 530]);
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response;
   try {
-    response = await fetch(`/api${path}`, init);
+    // procnote's API never redirects; a redirect is Access sending us to log in.
+    response = await fetch(`/api${path}`, { redirect: "manual", ...init });
   } catch (error) {
     throw new UnreachableError(String(error));
   }
+  if (response.type === "opaqueredirect") throw new LoginRequiredError("sign in required");
   const body: unknown = await response.json().catch(() => null);
   if (!response.ok) {
     const serverMessage =
       body && typeof body === "object" && "error" in body && typeof body.error === "string"
         ? body.error
         : null;
+    if (response.status === 401) throw new LoginRequiredError(serverMessage ?? "sign in required");
     // procnote-server explains its errors; a bare gateway error came from in front of it.
     if (serverMessage === null && GATEWAY_STATUSES.has(response.status)) {
       throw new UnreachableError(`HTTP ${response.status}`);

@@ -4,7 +4,12 @@ import type { PushResult } from "#lib/api/commands.js";
 import type { ExecutionApi } from "#lib/stores/execution.js";
 import type { EventRecord, ExecutionSummary, ProcedureTemplate } from "#lib/types/index.js";
 import * as core from "#lib/wasm/core.js";
-import { type KeyValueStore, LocalExecutions, type SyncServer } from "./localExecutions.js";
+import {
+  type KeyValueStore,
+  LocalExecutions,
+  mergeBackup,
+  type SyncServer,
+} from "./localExecutions.js";
 
 const TEMPLATE: ProcedureTemplate = {
   metadata: { id: "LOCAL-1", title: "Local", version: "1", equipment: [], requirement_traces: [] },
@@ -314,5 +319,61 @@ describe("local-first executions", () => {
     expect([...server.stored.values()]).toEqual(["bench reading"]);
     // The server has it now; previews come from there.
     expect(await local.preview(id, path as string)).toBeUndefined();
+  });
+
+  test("a backup brings back what this browser lost, without doubling anything", async () => {
+    const { server, local } = setup();
+    await local.keepTemplates([PATH]);
+    server.reachable = false;
+    const { execution_id: id } = await local.startExecution(PATH, meta());
+    await local.recordAction(id, check(0), meta());
+    const sources = await local.keepFiles([new File(["evidence"], "e.txt")]);
+    await local.recordAction(
+      id,
+      { action: "add_attachments", step_id: "step-0", input_id: "photo", files: sources },
+      meta(),
+    );
+    const backup = JSON.parse(JSON.stringify(await local.backup()));
+
+    // The browser's storage is lost; a fresh one restores from the file, twice.
+    const fresh = new LocalExecutions(memoryStore(), server, onlineApi(server), realCore);
+    await fresh.restore(backup);
+    await fresh.restore(backup);
+    const restoredWaiting = await fresh.waitingCount();
+    server.reachable = true;
+    await fresh.sync(id);
+
+    expect(restoredWaiting).toBe(await local.waitingCount());
+    const onServer = server.logs.get(id) ?? [];
+    expect(onServer.filter((r) => r.type === "checkbox_toggled")).toHaveLength(1);
+    expect([...server.stored.values()]).toEqual(["evidence"]);
+    await expect(fresh.restore({ ...backup, format: "other" })).rejects.toBeTruthy();
+  });
+});
+
+describe("mergeBackup", () => {
+  const line = (event_id: string): EventRecord => ({
+    type: "execution_renamed",
+    at: "2026-10-18T00:00:00Z",
+    execution_id: "e",
+    name: event_id,
+    event_id,
+  });
+  const execution = (pending: string[], records: string[] = []) => ({
+    id: "e",
+    records: records.map(line),
+    pending: pending.map(line),
+    rejected: [],
+  });
+
+  test("adds only recordings missing here", () => {
+    const merged = mergeBackup(execution(["b"], ["a"]), execution(["a", "b", "c"]));
+
+    expect(merged.pending.map((r) => r.event_id)).toEqual(["b", "c"]);
+    expect(merged.records.map((r) => r.event_id)).toEqual(["a"]);
+  });
+
+  test("takes the backup as it is when nothing is kept", () => {
+    expect(mergeBackup(undefined, execution(["x"]))).toEqual(execution(["x"]));
   });
 });
