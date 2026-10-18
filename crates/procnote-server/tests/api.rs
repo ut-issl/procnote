@@ -119,6 +119,37 @@ async fn lists_templates() {
 }
 
 #[tokio::test]
+async fn reads_a_template_as_structured_data() {
+    let fixture = fixture(None);
+    let query = format!(
+        "/api/templates/content?path={}",
+        fixture.template_path.replace('/', "%2F")
+    );
+
+    let (status, template) = send(&fixture.app, get(&query)).await;
+
+    assert_eq!(status, StatusCode::OK, "{template}");
+    assert_eq!(template["metadata"]["id"], "api-test");
+    assert_eq!(
+        template["steps"][1]["content"][0]["inputs"][0]["id"],
+        "evidence"
+    );
+}
+
+#[tokio::test]
+async fn rejects_templates_outside_the_workspace() {
+    let fixture = fixture(None);
+
+    let (status, _) = send(
+        &fixture.app,
+        get("/api/templates/content?path=%2Fetc%2Fhosts"),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn records_actions_and_reads_them_back() {
     let fixture = fixture(None);
     let id = start(&fixture).await;

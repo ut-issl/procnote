@@ -22,6 +22,7 @@ use procnote_app::action::{AttachmentSource, ExecutionAction};
 use procnote_app::execution::{ExecutionSummary, infer_attachment_content_type};
 use procnote_app::template::TemplateSummary;
 use procnote_core::event::types::ExecutionId;
+use procnote_core::template::types::ProcedureTemplate;
 use uploads::UploadStore;
 
 /// Largest accepted multipart upload request.
@@ -52,6 +53,7 @@ pub fn router(config: ServerConfig) -> std::io::Result<Router> {
 
     let api = Router::new()
         .route("/templates", get(list_templates))
+        .route("/templates/content", get(get_template))
         .route("/executions", get(list_executions).post(start_execution))
         .route("/executions/{id}", get(get_execution))
         .route("/executions/{id}/actions", post(record_action))
@@ -129,6 +131,25 @@ async fn list_executions(
     blocking(move || procnote_app::execution::list_executions(&state.procedures_dir))
         .await
         .map(Json)
+}
+
+#[derive(Deserialize)]
+struct TemplateQuery {
+    path: String,
+}
+
+async fn get_template(
+    State(state): State<SharedState>,
+    Query(query): Query<TemplateQuery>,
+) -> Result<Json<ProcedureTemplate>, ApiError> {
+    blocking(move || {
+        procnote_app::template::get_template(
+            &state.procedures_dir,
+            std::path::Path::new(&query.path),
+        )
+    })
+    .await
+    .map(Json)
 }
 
 #[derive(Deserialize)]
