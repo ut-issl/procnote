@@ -110,6 +110,18 @@ export async function startSharedExecution(
   return postJson(`/collab/templates/${encodeURIComponent(id)}/executions`, { meta });
 }
 
+/** Shared template `id` as procnote Markdown (`template.md`). */
+export async function getSharedTemplateMarkdown(id: string): Promise<string> {
+  const response = await fetch(`/api/collab/templates/${encodeURIComponent(id)}/markdown`);
+  if (!response.ok) {
+    const body: unknown = await response.json().catch(() => null);
+    throw body && typeof body === "object" && "error" in body && typeof body.error === "string"
+      ? body.error
+      : `HTTP ${response.status}`;
+  }
+  return response.text();
+}
+
 /** A short-lived token for editing template `id` through the collab service. */
 export async function getCollabToken(id: string): Promise<string> {
   const { token } = await postJson<{ token: string }>(

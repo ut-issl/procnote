@@ -16,17 +16,26 @@ import {
   type MarkdownConverter,
 } from "./convert.js";
 import type { ProcnoteEditor } from "./schema.js";
+import { readTableAlignments, writeTableAlignments } from "./tables.js";
 import styles from "./TemplateEditor.module.css";
 
 const c = scoped(styles);
 
 export type Blocks = Parameters<ProcnoteEditor["replaceBlocks"]>[1];
 
-/** Prose conversion backed by BlockNote's own (lossy) Markdown support. */
+/**
+ * Prose conversion backed by BlockNote's own (lossy) Markdown support, with
+ * table column alignment carried across (tables.ts).
+ */
 export function markdownConverter(editor: ProcnoteEditor): MarkdownConverter {
   return {
-    toBlocks: (markdown) => editor.tryParseMarkdownToBlocks(markdown) as unknown as DocBlock[],
-    fromBlocks: (blocks) => editor.blocksToMarkdownLossy(blocks as unknown as Blocks),
+    toBlocks: (markdown) =>
+      readTableAlignments(
+        markdown,
+        editor.tryParseMarkdownToBlocks(markdown) as unknown as DocBlock[],
+      ),
+    fromBlocks: (blocks) =>
+      writeTableAlignments(editor.blocksToMarkdownLossy(blocks as unknown as Blocks), blocks),
   };
 }
 

@@ -12,6 +12,7 @@ import {
   type MarkdownConverter,
   templateToBlocks,
 } from "../src/lib/blocknote/convert.js";
+import { readTableAlignments, writeTableAlignments } from "../src/lib/blocknote/tables.js";
 import type { ProcedureMetadata, ProcedureTemplate } from "../src/lib/types/index.js";
 import { serverSchema } from "./schema.js";
 
@@ -58,11 +59,18 @@ export async function withAsyncMarkdown<T>(
   });
 }
 
+/** BlockNote's Markdown conversion, with table column alignment carried across. */
 function markdownOf(editor: Editor): AsyncMarkdownConverter {
   return {
-    toBlocks: async (text) => (await editor.tryParseMarkdownToBlocks(text)) as DocBlock[],
-    fromBlocks: (blocks) =>
-      editor.blocksToMarkdownLossy(blocks as PartialBlock<typeof serverSchema.blockSchema>[]),
+    toBlocks: async (text) =>
+      readTableAlignments(text, (await editor.tryParseMarkdownToBlocks(text)) as DocBlock[]),
+    fromBlocks: async (blocks) =>
+      writeTableAlignments(
+        await editor.blocksToMarkdownLossy(
+          blocks as PartialBlock<typeof serverSchema.blockSchema>[],
+        ),
+        blocks,
+      ),
   };
 }
 
