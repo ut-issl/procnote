@@ -48,6 +48,7 @@ pub fn render_execution_markdown(state: &ExecutionState) -> String {
 
     render_summary_table(state, &mut output);
     render_global_notes(state, &mut output);
+    render_inbox(state, &mut output);
 
     push_fmt(&mut output, format_args!("## Steps\n\n"));
     for (index, step_id) in state.step_order.iter().enumerate() {
@@ -138,6 +139,31 @@ fn render_global_notes(state: &ExecutionState, output: &mut String) {
         );
     }
     push_fmt(output, format_args!("\n"));
+}
+
+fn render_inbox(state: &ExecutionState, output: &mut String) {
+    if state.inbox.is_empty() {
+        return;
+    }
+
+    push_fmt(
+        output,
+        format_args!(
+            "## Unassigned files
+
+"
+        ),
+    );
+    for file in &state.inbox {
+        render_attachment(file, output);
+    }
+    push_fmt(
+        output,
+        format_args!(
+            "
+"
+        ),
+    );
 }
 
 fn render_step(number: usize, step: &StepState, output: &mut String) {
@@ -582,6 +608,23 @@ mod tests {
             },
         );
         state
+    }
+
+    #[test]
+    fn renders_unassigned_inbox_files() {
+        let mut state = sample_state();
+        state.inbox.push(RecordedAttachment {
+            filename: "from phone.jpg".to_string(),
+            path: "attachments/def5678-from phone.jpg".to_string(),
+            content_type: "image/jpeg".to_string(),
+            sha256: "def5678".to_string(),
+            at: state.started_at.unwrap(),
+        });
+
+        let markdown = render_execution_markdown(&state);
+
+        assert!(markdown.contains("## Unassigned files"));
+        assert!(markdown.contains("[from phone.jpg](attachments/def5678-from%20phone.jpg)"));
     }
 
     #[test]

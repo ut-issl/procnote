@@ -11,6 +11,7 @@ function summary(overrides: Partial<ExecutionSummary> = {}): ExecutionSummary {
     status: "active",
     steps: [],
     execution_dir: "/tmp/exec-1",
+    inbox: [],
     seq: 1,
     ...overrides,
   };

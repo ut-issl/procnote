@@ -85,6 +85,7 @@ export default function AttachmentField({
   onattach,
   onpick,
   onremovefile,
+  onunassign,
   onclear,
   onpreview,
   onstartdrop,
@@ -99,6 +100,8 @@ export default function AttachmentField({
   onattach: (files: AttachmentSource[]) => void;
   onpick?: () => Promise<AttachmentSource[]>;
   onremovefile?: (path: string) => void;
+  /** Return a file to the execution's inbox. */
+  onunassign?: (path: string) => void;
   onclear?: () => void;
   onpreview?: (path: string) => Promise<string | null>;
   onstartdrop?: () => Promise<AttachmentDropPointSessionSummary>;
@@ -202,6 +205,16 @@ export default function AttachmentField({
                 </span>
                 <span className={c("hash")}>{file.sha256.slice(0, 7)}</span>
                 {file.at && <span className={c("timestamp")}>{formatTimestamp(file.at)}</span>}
+                {onunassign && (
+                  <button
+                    className={c("btn-unassign")}
+                    title="Move back to the inbox"
+                    onClick={() => onunassign(file.path)}
+                    disabled={disabled}
+                  >
+                    ↩
+                  </button>
+                )}
                 {onremovefile && (
                   <button
                     className={c("btn-delete")}

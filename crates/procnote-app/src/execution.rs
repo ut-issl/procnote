@@ -39,6 +39,8 @@ pub struct ExecutionSummary {
     #[ts(optional)]
     pub updated_at: Option<String>,
     pub steps: Vec<StepSummary>,
+    /// Files received through the upload link and not yet assigned to an input.
+    pub inbox: Vec<AttachmentState>,
     /// Absolute path to the execution directory on disk.
     pub execution_dir: String,
     /// Number of events recorded so far; a larger value is a newer state.
@@ -151,14 +153,20 @@ fn step_status_string(status: &StepStatus) -> String {
     }
 }
 
+fn attachment_state(file: &RecordedAttachment) -> AttachmentState {
+    AttachmentState {
+        filename: file.filename.clone(),
+        path: file.path.clone(),
+        content_type: file.content_type.clone(),
+        sha256: file.sha256.clone(),
+        at: Some(file.at.to_rfc3339()),
+    }
+}
+
 fn datetime_string(value: Option<chrono::DateTime<chrono::Utc>>) -> Option<String> {
     value.map(|at| at.to_rfc3339())
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "DTO conversion handles all execution content variants"
-)]
 pub fn summarize(state: &ExecutionState, execution_dir: &Path) -> Result<ExecutionSummary, String> {
     let steps = state
         .step_order
@@ -196,16 +204,7 @@ pub fn summarize(state: &ExecutionState, execution_dir: &Path) -> Result<Executi
                                             .attachments
                                             .get(&def.id)
                                             .map(|files| {
-                                                files
-                                                    .iter()
-                                                    .map(|file| AttachmentState {
-                                                        filename: file.filename.clone(),
-                                                        path: file.path.clone(),
-                                                        content_type: file.content_type.clone(),
-                                                        sha256: file.sha256.clone(),
-                                                        at: Some(file.at.to_rfc3339()),
-                                                    })
-                                                    .collect()
+                                                files.iter().map(attachment_state).collect()
                                             })
                                             .unwrap_or_default();
                                         InputDefinitionSummary {
@@ -265,6 +264,7 @@ pub fn summarize(state: &ExecutionState, execution_dir: &Path) -> Result<Executi
         finished_at: datetime_string(state.finished_at),
         updated_at: datetime_string(state.updated_at),
         steps,
+        inbox: state.inbox.iter().map(attachment_state).collect(),
         execution_dir: execution_dir.display().to_string(),
         seq: state.applied_events,
     })
@@ -298,6 +298,7 @@ fn find_attachment<'a>(
         .filter_map(|step_id| state.steps.get(step_id))
         .flat_map(|step| step.attachments.values())
         .flat_map(|files| files.iter())
+        .chain(state.inbox.iter())
         .find(|file| file.path == attachment_path)
 }
 
@@ -457,6 +458,27 @@ pub fn record_action(
         meta.into_event_meta(),
     )?;
     summarize(&recorded.state, &recorded.execution_dir)
+}
+
+/// Receive files into the execution's inbox (see [`ExecutionStore::receive_files`]).
+///
+/// Returns the new summary and how many files were received; files whose
+/// content the execution already has are skipped.
+pub fn receive_files(
+    procedures_dir: &Path,
+    execution_id: ExecutionId,
+    files: Vec<(PathBuf, String)>,
+    meta: ActionMeta,
+) -> Result<(ExecutionSummary, usize), String> {
+    let (recorded, received) = ExecutionStore::new(procedures_dir.to_path_buf()).receive_files(
+        execution_id,
+        files,
+        &meta.into_event_meta(),
+    )?;
+    Ok((
+        summarize(&recorded.state, &recorded.execution_dir)?,
+        received,
+    ))
 }
 
 /// Get the current state of an execution.

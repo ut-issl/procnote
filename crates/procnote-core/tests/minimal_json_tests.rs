@@ -166,3 +166,24 @@ fn extra_fields_on_known_event_are_ignored() {
     let event: Event = serde_json::from_str(json).unwrap();
     assert!(matches!(event, Event::StepSkipped { .. }));
 }
+
+#[test]
+fn minimal_attachment_received() {
+    round_trip(
+        r#"{"type":"attachment_received","at":"2025-01-01T00:00:00Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","attachment":{"filename":"a.jpg","path":"attachments/a.jpg","content_type":"image/jpeg","sha256":"abc"}}"#,
+    );
+}
+
+#[test]
+fn minimal_attachment_assigned() {
+    round_trip(
+        r#"{"type":"attachment_assigned","at":"2025-01-01T00:00:00Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","step_id":"step-1","input_id":"photos","path":"attachments/a.jpg"}"#,
+    );
+}
+
+#[test]
+fn minimal_attachment_unassigned() {
+    round_trip(
+        r#"{"type":"attachment_unassigned","at":"2025-01-01T00:00:00Z","execution_id":"550e8400-e29b-41d4-a716-446655440000","step_id":"step-1","input_id":"photos","path":"attachments/a.jpg"}"#,
+    );
+}

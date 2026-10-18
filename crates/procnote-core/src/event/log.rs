@@ -184,6 +184,9 @@ fn is_known_event_type(type_name: &str) -> bool {
             | "attachment_file_removed"
             | "attachments_cleared"
             | "attachment_removed"
+            | "attachment_received"
+            | "attachment_assigned"
+            | "attachment_unassigned"
             | "execution_renamed"
             | "log_meta"
     )
