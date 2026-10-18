@@ -1,7 +1,11 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::Arc;
 
-use clap::Parser;
+use clap::{ArgGroup, Parser};
+use object_store::ObjectStore;
+use object_store::aws::AmazonS3Builder;
+use object_store::local::LocalFileSystem;
 
 use procnote_app::persistence::execution_store::ExecutionStore;
 use procnote_app::repository::ExecutionRepository;
@@ -14,7 +18,8 @@ use procnote_server::{Auth, ServerConfig, router};
 #[command(
     name = "procnote-server",
     version,
-    about = "procnote API server for using the procnote UI from a browser."
+    about = "procnote API server for using the procnote UI from a browser.",
+    group(ArgGroup::new("attachment_store").args(["attachment_dir", "attachment_bucket"])),
 )]
 struct Args {
     /// Workspace directory containing procedure subdirectories.
@@ -42,11 +47,45 @@ struct Args {
     insecure_no_auth: bool,
     /// PostgreSQL URL to store executions in, instead of the workspace
     /// directory. Templates are still read from the workspace.
-    #[arg(long, env = "PROCNOTE_DATABASE_URL", requires = "attachment_dir")]
+    #[arg(long, env = "PROCNOTE_DATABASE_URL", requires = "attachment_store")]
     database_url: Option<String>,
     /// Directory for attachment content when storing executions in PostgreSQL.
     #[arg(long, requires = "database_url")]
     attachment_dir: Option<PathBuf>,
+    /// S3-compatible bucket (e.g. Cloudflare R2) for attachment content when
+    /// storing executions in PostgreSQL. Configured by the `AWS_*` environment
+    /// variables; for R2, `AWS_ENDPOINT=https://<account>.r2.cloudflarestorage.com`,
+    /// `AWS_DEFAULT_REGION=auto`, `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`.
+    #[arg(long, requires = "database_url")]
+    attachment_bucket: Option<String>,
+}
+
+impl Args {
+    /// Where attachment content goes when executions are in PostgreSQL.
+    fn attachment_store(&self) -> Result<Option<Arc<dyn ObjectStore>>, String> {
+        match (&self.attachment_dir, &self.attachment_bucket) {
+            (Some(dir), _) => {
+                std::fs::create_dir_all(dir).map_err(|e| {
+                    format!(
+                        "failed to create attachment directory {}: {e}",
+                        dir.display()
+                    )
+                })?;
+                let store = LocalFileSystem::new_with_prefix(dir)
+                    .map_err(|e| e.to_string())?
+                    .with_fsync(true);
+                Ok(Some(Arc::new(store)))
+            }
+            (None, Some(bucket)) => {
+                let store = AmazonS3Builder::from_env()
+                    .with_bucket_name(bucket)
+                    .build()
+                    .map_err(|e| format!("invalid attachment bucket configuration: {e}"))?;
+                Ok(Some(Arc::new(store)))
+            }
+            (None, None) => Ok(None),
+        }
+    }
 }
 
 impl Args {
@@ -105,14 +144,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     })?;
     let upload_dir =
         std::env::temp_dir().join(format!("procnote-uploads-{}", uuid::Uuid::new_v4()));
-    let executions: Box<dyn ExecutionRepository> = match (&args.database_url, &args.attachment_dir)
-    {
-        (Some(url), Some(attachment_dir)) => {
-            log::info!("storing executions in PostgreSQL");
-            Box::new(PostgresStore::connect(url, attachment_dir.clone()).await?)
-        }
-        _ => Box::new(ExecutionStore::new(procedures_dir.clone())),
-    };
+    let executions: Box<dyn ExecutionRepository> =
+        match (&args.database_url, args.attachment_store()?) {
+            (Some(url), Some(attachments)) => {
+                log::info!("storing executions in PostgreSQL");
+                Box::new(PostgresStore::connect(url, attachments).await?)
+            }
+            _ => Box::new(ExecutionStore::new(procedures_dir.clone())),
+        };
     let app = router(ServerConfig {
         procedures_dir: procedures_dir.clone(),
         executions,
