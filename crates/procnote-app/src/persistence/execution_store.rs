@@ -8,6 +8,7 @@ use procnote_core::execution::ExecutionState;
 use procnote_core::snapshot::render_execution_markdown;
 
 use crate::action::{AttachmentSource, ExecutionAction};
+use crate::execution::infer_attachment_content_type;
 use crate::persistence::attachment_store::{AttachmentStore, PendingStoredAttachment};
 use crate::persistence::event_log::{EventLog, sync_dir};
 
@@ -35,10 +36,6 @@ impl ExecutionStore {
 
     /// Create an execution directory and publish it atomically after its core
     /// files have been durably written.
-    #[expect(
-        clippy::unused_self,
-        reason = "ExecutionStore groups filesystem creation operations"
-    )]
     pub fn create_execution(
         &self,
         template_path: &Path,
@@ -423,29 +420,9 @@ fn attachment_record(pending: &PendingStoredAttachment) -> AttachmentRecord {
     AttachmentRecord {
         filename: pending.stored.filename.clone(),
         path: pending.stored.relative_path.clone(),
-        content_type: attachment_content_type(&pending.stored.filename),
+        content_type: infer_attachment_content_type(&pending.stored.filename),
         sha256: pending.stored.sha256.clone(),
     }
-}
-
-fn attachment_content_type(filename: &str) -> String {
-    let extension = Path::new(filename)
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .map(str::to_ascii_lowercase);
-    match extension.as_deref() {
-        Some("jpg" | "jpeg") => "image/jpeg",
-        Some("png") => "image/png",
-        Some("gif") => "image/gif",
-        Some("webp") => "image/webp",
-        Some("bmp") => "image/bmp",
-        Some("txt" | "log") => "text/plain",
-        Some("csv") => "text/csv",
-        Some("json") => "application/json",
-        Some("pdf") => "application/pdf",
-        _ => "application/octet-stream",
-    }
-    .to_string()
 }
 
 fn commit_pending_attachments(
@@ -513,6 +490,7 @@ pub fn find_execution_dir(
     }
 }
 
+#[must_use]
 pub fn is_temp_execution_dir(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())

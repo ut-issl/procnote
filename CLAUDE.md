@@ -10,10 +10,11 @@
 ## Architecture
 
 - Event-sourced Tauri 2 desktop app: Rust backend + Svelte 5 frontend.
-- Three layers with strict dependency direction:
+- Four layers with strict dependency direction:
   1. **`crates/procnote-core/`** — Pure Rust domain logic. No Tauri dependency. Contains event types, execution state machine, and template parser.
-  2. **`src-tauri/`** — Tauri shell. Bridges core to desktop via IPC commands. Owns serialization DTOs (`ExecutionSummary`, `StepSummary`, etc.) and filesystem I/O.
-  3. **`src/`** — SvelteKit + Svelte 5 frontend. Uses runes (`$state`, `$derived`, `$props`), not stores.
+  2. **`crates/procnote-app/`** — Tauri-free application layer shared by the desktop shell and the future server. Owns serialization DTOs (`ExecutionSummary`, `StepSummary`, etc.), `ExecutionAction` → event mapping, and filesystem I/O (`persistence/`). Must never depend on Tauri.
+  3. **`src-tauri/`** — Thin Tauri shell. Exposes `procnote-app` operations as IPC commands and owns desktop-only concerns: the native file picker and its attachment grants, revealing directories, and DropPoint.
+  4. **`src/`** — SvelteKit + Svelte 5 frontend. Uses runes (`$state`, `$derived`, `$props`), not stores.
 - **`crates/procnote-launcher/`** is a Tauri-free console adapter outside those domain layers. It owns `procnote [WORKSPACE]`, prints help/version synchronously, and detaches the packaged GUI. It must never depend on `procnote-tauri`, Tauri, or GUI/dialog libraries.
 
 ### Core domain (`procnote-core`)
@@ -25,18 +26,23 @@
 - `ExecutionState::apply()` exhaustively handles every event variant, so new event types must define their state-machine behavior explicitly.
 - Procedure templates are Markdown files with YAML frontmatter, parsed by `template/parser.rs` using `pulldown-cmark`.
 
-### Tauri shell (`src-tauri`)
+### Application layer (`procnote-app`)
 
-- `AppState` holds a single `procedures_dir` path. Each procedure is a subdirectory containing `template.md` and `.executions/`.
+- Operations take `procedures_dir: &Path` explicitly. Each procedure is a subdirectory containing `template.md` and `.executions/`.
 - `summarize()` converts `ExecutionState` + raw events into `ExecutionSummary` DTO for the frontend, building timestamp maps from the replayed event stream.
 - Every `record_action` call re-reads and replays the full event log from disk (no in-memory cache, by design).
 - Attachments are stored as `attachments/{sha256_7}-{filename}` inside the execution directory.
+
+### Tauri shell (`src-tauri`)
+
+- `AppState` holds the `procedures_dir` path, DropPoint configuration, and the attachment grants issued by the native file picker.
+- Attachment actions are authorized against those grants before being passed to `procnote_app::execution::record_action`.
 
 ### Frontend (`src/`)
 
 - `executionStore` (in `lib/stores/execution.svelte.ts`) is a Svelte 5 runes-based reactive store wrapping `ExecutionSummary`.
 - TypeScript types in `lib/types/generated/` are auto-generated from Rust via `ts-rs`. Regenerate with `cargo test --workspace export_bindings_`. CI enforces they stay in sync.
-- `chrono` is a dependency of `procnote-core` but NOT of `procnote-tauri`; timestamps cross the IPC boundary as ISO 8601 strings.
+- Timestamps cross the IPC boundary as ISO 8601 strings.
 
 ### Storage layout
 
