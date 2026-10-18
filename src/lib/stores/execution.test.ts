@@ -30,6 +30,7 @@ function deferred<T>() {
 function fakeApi(overrides: Partial<ExecutionApi> = {}): ExecutionApi {
   return {
     startExecution: async () => summary(),
+    startSharedExecution: async () => summary(),
     getExecutionState: async () => summary(),
     recordAction: async () => summary(),
     watchExecution: () => () => {},

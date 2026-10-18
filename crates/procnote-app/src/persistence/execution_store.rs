@@ -85,8 +85,8 @@ impl ExecutionRepository for ExecutionStore {
         sync_dir(&executions_dir).map_err(|e| e.to_string())?;
 
         write_file_durable(
-            &temp_dir.join("template.md"),
-            new.template_source.as_bytes(),
+            &temp_dir.join(new.template.file_name()),
+            new.template.text().as_bytes(),
         )
         .map_err(|e| e.to_string())?;
 
@@ -482,7 +482,7 @@ pub fn execution_dir_name(at: &DateTime<Utc>, execution_id: ExecutionId) -> Stri
 mod tests {
     use super::*;
     use crate::action::ExecutionAction;
-    use crate::repository::{receive_files, record_action};
+    use crate::repository::{TemplateSnapshot, receive_files, record_action};
     use procnote_core::template::parse_template;
 
     /// Start an execution of `source` in `procedure` (created under `root`).
@@ -502,7 +502,7 @@ mod tests {
         let created = store
             .create(NewExecution {
                 procedure: procedure.to_string(),
-                template_source: source.to_string(),
+                template: TemplateSnapshot::Markdown(source.to_string()),
                 state,
                 initial_events,
                 tool_version: "test".to_string(),

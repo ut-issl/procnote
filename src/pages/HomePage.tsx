@@ -83,6 +83,11 @@ export default function HomePage() {
     }
   }
 
+  async function handleStartShared(templateId: string) {
+    const started = await executionStore.startShared(templateId);
+    if (started) navigate(`/execution/${started.execution_id}`);
+  }
+
   async function handleStart(template: TemplateSummary) {
     const started = await executionStore.start(template.path);
     if (started) navigate(`/execution/${started.execution_id}`);
@@ -121,23 +126,30 @@ export default function HomePage() {
           ) : (
             <div className={c("execution-list")}>
               {shared.map((template) => (
-                <button
-                  key={template.id}
-                  className={c("execution-card")}
-                  onClick={() => navigate(`/templates/shared/${template.id}`)}
-                >
-                  <div className={c("exec-header")}>
-                    <span className={c("exec-name")}>{template.title || "Untitled"}</span>
-                  </div>
-                  <div className={c("exec-meta")}>
-                    <span>
-                      {template.procedure_id} v{template.version}
-                    </span>
-                    <span className={c("exec-time")}>
-                      Updated {formatTimestamp(template.updated_at)}
-                    </span>
-                  </div>
-                </button>
+                <div key={template.id} className={c("shared-card")}>
+                  <button
+                    className={c("execution-card")}
+                    onClick={() => navigate(`/templates/shared/${template.id}`)}
+                  >
+                    <div className={c("exec-header")}>
+                      <span className={c("exec-name")}>{template.title || "Untitled"}</span>
+                    </div>
+                    <div className={c("exec-meta")}>
+                      <span>
+                        {template.procedure_id} v{template.version}
+                      </span>
+                      <span className={c("exec-time")}>
+                        Updated {formatTimestamp(template.updated_at)}
+                      </span>
+                    </div>
+                  </button>
+                  <button
+                    className="btn btn-primary"
+                    onClick={() => handleStartShared(template.id)}
+                  >
+                    Start
+                  </button>
+                </div>
               ))}
             </div>
           )}

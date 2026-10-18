@@ -143,6 +143,27 @@ describe.skipIf(!DATABASE_URL)("collab service", () => {
     }
   });
 
+  it("tells procnote-server what a document describes and what keeps it from running", async () => {
+    const id = await newTemplate();
+    await seed(id);
+    const get = () =>
+      fetch(`http://${base}/internal/templates/${id}/template`, {
+        headers: { Authorization: `Bearer ${SECRET}` },
+      }).then((response) => response.json());
+
+    const runnable = await get();
+    const editor = connect(id, token(id));
+    await waitFor(async () => (editor.provider.isSynced ? true : undefined));
+    editor.document.getMap(METADATA_MAP).set("title", "");
+    // Give the change time to reach the service.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const broken = await get();
+    editor.provider.destroy();
+
+    expect(runnable).toEqual({ template: TEMPLATE, issues: [] });
+    expect(broken.issues).toEqual(["The procedure has no title."]);
+  });
+
   it("seeds only with the shared secret, and only once", async () => {
     const id = await newTemplate();
 

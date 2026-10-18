@@ -48,7 +48,16 @@ interface Session {
  * Collaborative template editor: the template's Y.Doc, shared through the
  * collab service. Changes are saved as they are made.
  */
-export default function CollabTemplateEditor({ id, user }: { id: string; user: string }) {
+export default function CollabTemplateEditor({
+  id,
+  user,
+  onStart,
+}: {
+  id: string;
+  user: string;
+  /** Start an execution of the template as it is now. */
+  onStart: () => void;
+}) {
   const [session, setSession] = useState<Session | null>(null);
   const [synced, setSynced] = useState(false);
   const [status, setStatus] = useState("connecting");
@@ -81,7 +90,7 @@ export default function CollabTemplateEditor({ id, user }: { id: string; user: s
         {error ?? (status === "connected" ? "Connected — changes are saved as you type" : status)}
       </p>
       {session && synced ? (
-        <SharedEditor session={session} user={user} />
+        <SharedEditor session={session} user={user} onStart={onStart} />
       ) : (
         !error && <p>Loading template...</p>
       )}
@@ -138,7 +147,15 @@ const METADATA_FIELDS = [
   ["author", "Author"],
 ] as const;
 
-function SharedEditor({ session, user }: { session: Session; user: string }) {
+function SharedEditor({
+  session,
+  user,
+  onStart,
+}: {
+  session: Session;
+  user: string;
+  onStart: () => void;
+}) {
   const { doc, provider } = session;
   const metadataMap = useMemo(() => doc.getMap<unknown>(METADATA_MAP), [doc]);
   const metadata = useMetadata(metadataMap);
@@ -195,6 +212,16 @@ function SharedEditor({ session, user }: { session: Session; user: string }) {
         </BlockNoteView>
       </div>
       <aside className={c("panel")}>
+        <section>
+          <button
+            className="btn btn-primary"
+            disabled={!result || result.issues.length > 0}
+            onClick={onStart}
+            title={result?.issues.length ? "Fix the issues below first" : undefined}
+          >
+            Start execution
+          </button>
+        </section>
         <IssuesSection issues={result?.issues} />
         <TemplateJsonSection template={result?.template} />
       </aside>

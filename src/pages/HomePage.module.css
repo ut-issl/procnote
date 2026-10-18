@@ -100,3 +100,13 @@
 .exec-time {
   color: #999;
 }
+
+.shared-card {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.shared-card > .execution-card {
+  flex: 1;
+}

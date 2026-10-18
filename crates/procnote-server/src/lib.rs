@@ -33,7 +33,7 @@ use collab::{CollabTemplateSummary, CollabTemplates};
 use live::LiveUpdates;
 use procnote_app::action::{ActionMeta, AttachmentSource, ExecutionAction};
 use procnote_app::execution::{ExecutionSummary, infer_attachment_content_type};
-use procnote_app::repository::ExecutionRepository;
+use procnote_app::repository::{ExecutionRepository, TemplateSnapshot};
 use procnote_app::template::TemplateSummary;
 use procnote_core::event::types::ExecutionId;
 use procnote_core::template::types::ProcedureTemplate;
@@ -117,6 +117,10 @@ pub fn router(config: ServerConfig) -> std::io::Result<Router> {
             get(list_collab_templates).post(create_collab_template),
         )
         .route("/collab/templates/{id}/token", post(collab_token))
+        .route(
+            "/collab/templates/{id}/executions",
+            post(start_collab_execution),
+        )
         .route("/executions", get(list_executions).post(start_execution))
         .route("/executions/{id}", get(get_execution))
         .route("/executions/{id}/actions", post(record_action))
@@ -347,6 +351,48 @@ async fn create_collab_template(
         .await
         .map_err(|e| ApiError::new(StatusCode::BAD_GATEWAY, e))?;
     Ok(Json(CreatedCollabTemplate { id }))
+}
+
+#[derive(Deserialize)]
+struct StartCollabExecutionRequest {
+    #[serde(default)]
+    meta: ActionMeta,
+}
+
+/// Start an execution of a shared template as it is now, keeping it as JSON.
+async fn start_collab_execution(
+    State(state): State<SharedState>,
+    Path(id): Path<uuid::Uuid>,
+    identity: Option<Extension<Identity>>,
+    Json(request): Json<StartCollabExecutionRequest>,
+) -> Result<Json<ExecutionSummary>, ApiError> {
+    let current = collab(&state)?
+        .current(id)
+        .await
+        .map_err(|e| ApiError::new(StatusCode::BAD_GATEWAY, e))?;
+    if !current.issues.is_empty() {
+        return Err(ApiError::bad_request(format!(
+            "the template can't be executed yet: {}",
+            current.issues.join(" ")
+        )));
+    }
+    let procedure =
+        collab::procedure_name(&current.template.metadata.id).map_err(ApiError::bad_request)?;
+    let snapshot =
+        TemplateSnapshot::of_template(&current.template).map_err(ApiError::bad_request)?;
+    let meta = attribute(request.meta, identity);
+    blocking(move || {
+        procnote_app::execution::start_execution_of(
+            state.executions.as_ref(),
+            procedure,
+            &current.template,
+            snapshot,
+            env!("CARGO_PKG_VERSION").to_string(),
+            meta,
+        )
+    })
+    .await
+    .map(Json)
 }
 
 #[derive(Serialize)]

@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 
 use procnote_core::event::types::{AttachmentRecord, Event, EventMeta, ExecutionId};
 use procnote_core::execution::ExecutionState;
+use procnote_core::template::types::ProcedureTemplate;
 
 use crate::action::ExecutionAction;
 use crate::execution::infer_attachment_content_type;
@@ -56,12 +57,66 @@ pub struct Decision {
     pub files: Vec<StagedFile>,
 }
 
+/// The template an execution was started from, kept as it was.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TemplateSnapshot {
+    /// A workspace `template.md`.
+    Markdown(String),
+    /// A shared template, as `ProcedureTemplate` JSON.
+    Json(String),
+}
+
+impl TemplateSnapshot {
+    pub const MARKDOWN_FILE: &str = "template.md";
+    pub const JSON_FILE: &str = "template.json";
+
+    /// The snapshot of a template that only exists as data.
+    pub fn of_template(template: &ProcedureTemplate) -> Result<Self, String> {
+        serde_json::to_string_pretty(template)
+            .map(Self::Json)
+            .map_err(|e| e.to_string())
+    }
+
+    /// The snapshot stored as `format` (see [`Self::format`]).
+    pub fn from_format(format: &str, text: String) -> Result<Self, String> {
+        match format {
+            "markdown" => Ok(Self::Markdown(text)),
+            "json" => Ok(Self::Json(text)),
+            other => Err(format!("unknown template snapshot format: {other}")),
+        }
+    }
+
+    #[must_use]
+    pub const fn format(&self) -> &'static str {
+        match self {
+            Self::Markdown(_) => "markdown",
+            Self::Json(_) => "json",
+        }
+    }
+
+    /// The file name of the snapshot in an execution directory.
+    #[must_use]
+    pub const fn file_name(&self) -> &'static str {
+        match self {
+            Self::Markdown(_) => Self::MARKDOWN_FILE,
+            Self::Json(_) => Self::JSON_FILE,
+        }
+    }
+
+    #[must_use]
+    pub fn text(&self) -> &str {
+        match self {
+            Self::Markdown(text) | Self::Json(text) => text,
+        }
+    }
+}
+
 /// A new execution to store.
 pub struct NewExecution {
     /// The procedure's directory name under the procedures directory.
     pub procedure: String,
-    /// The template source at execution start, kept as a snapshot.
-    pub template_source: String,
+    /// The template at execution start.
+    pub template: TemplateSnapshot,
     /// State after applying `initial_events`.
     pub state: ExecutionState,
     pub initial_events: Vec<Event>,

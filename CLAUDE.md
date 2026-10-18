@@ -58,6 +58,7 @@
 - The document holds the blocks in the `blocks` XML fragment and the `ProcedureMetadata` fields in the `metadata` map (`src/lib/blocknote/blocks.ts`). Block configs and the block ⇄ `ProcedureTemplate` conversion (`convert.ts`) are shared with the browser; `collab/schema.ts` builds the same schema without React.
 - procnote-server creates templates (`POST /api/collab/templates`, which seeds the document through the collab service's internal API) and issues short-lived HMAC tokens (`/api/collab/templates/{id}/token`, `collab.rs`) that the collab service checks in `onAuthenticate`, so Cloudflare Access is verified only in Rust. Both share `PROCNOTE_COLLAB_SECRET`; the server enables collab with `--collab-secret` (needs `--database-url`).
 - Editors connect to `/collab` on the same origin: Vite proxies it in development, Cloudflare Tunnel routes it to the service (port 5182) in production. The internal API (`/internal/...`) must not be routed publicly.
+- Executions start from a shared template as it is at that moment (`POST /api/collab/templates/{id}/executions`): the collab service converts the document (`GET /internal/templates/{id}/template`, with the issues that block execution), and the server starts the execution filed under the procedure ID, keeping the template as `template.json` (a `TemplateSnapshot::Json`) instead of `template.md`. Snapshots are archival; execution state comes from the events.
 - Bundled with `pnpm run build:collab` (`vp pack`); `just dev-collab` builds and runs it. Its tests (`collab/*.test.ts`) run with `pnpm test`; the database ones need `PROCNOTE_TEST_DATABASE_URL`.
 
 ### Frontend (`src/`)
@@ -80,6 +81,7 @@ procedures/
 │       └── {YYYYMMDD}T{HHMMSS}-{uuid_8}/
 │           ├── events.jsonl        # Append-only event log
 │           ├── template.md         # Snapshot of procedure template at execution start
+│           │                       #   (template.json for executions of shared templates)
 │           └── attachments/
 │               └── {sha256_7}-{filename}
 ```

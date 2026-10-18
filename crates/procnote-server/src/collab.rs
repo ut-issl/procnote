@@ -78,6 +78,31 @@ struct ListedMetadata {
     version: String,
 }
 
+/// A shared template as it is now.
+#[derive(Debug, Deserialize)]
+pub struct CurrentTemplate {
+    pub template: ProcedureTemplate,
+    /// Why it can't be executed; empty when it can.
+    pub issues: Vec<String>,
+}
+
+/// The procedure name executions of a shared template are filed under: its
+/// procedure ID, which must be usable as a directory name.
+pub fn procedure_name(procedure_id: &str) -> Result<String, String> {
+    let usable = !procedure_id.is_empty()
+        && !procedure_id.starts_with('.')
+        && !procedure_id
+            .chars()
+            .any(|c| matches!(c, '/' | '\\') || c.is_control());
+    if usable {
+        Ok(procedure_id.to_string())
+    } else {
+        Err(format!(
+            "procedure ID \"{procedure_id}\" can't be used as a directory name"
+        ))
+    }
+}
+
 pub struct CollabTemplates {
     pool: PgPool,
     config: CollabConfig,
@@ -171,6 +196,35 @@ impl CollabTemplates {
         }
     }
 
+    /// What template `id` describes now, and the reasons it can't be executed.
+    pub async fn current(&self, id: Uuid) -> Result<CurrentTemplate, String> {
+        let url = format!(
+            "{}/internal/templates/{id}/template",
+            self.config.service_url.trim_end_matches('/')
+        );
+        let response = self
+            .client
+            .get(url)
+            .header(
+                INTERNAL_AUTH_HEADER,
+                format!("Bearer {}", self.config.secret),
+            )
+            .send()
+            .await
+            .map_err(|e| format!("collab service is unreachable: {e}"))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(format!(
+                "collab service could not read the template ({status}): {body}"
+            ));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("collab service sent an invalid template: {e}"))
+    }
+
     /// A token for editing template `id` as `subject`, if the template exists.
     pub async fn token(&self, id: Uuid, subject: &str) -> Result<Option<String>, String> {
         let exists: Option<i32> = sqlx::query_scalar("SELECT 1 FROM templates WHERE id = $1")
@@ -226,6 +280,16 @@ mod tests {
         mac.verify_slice(&URL_SAFE_NO_PAD.decode(signature).unwrap())
             .unwrap();
         assert_eq!(token, KNOWN_TOKEN);
+    }
+
+    #[test]
+    fn procedure_ids_must_be_directory_names() {
+        assert_eq!(procedure_name("TVT-001"), Ok("TVT-001".to_string()));
+        for bad in [
+            "", ".", "..", ".hidden", "a/b", "/abs", "a/", "a\\b", "a\nb",
+        ] {
+            assert!(procedure_name(bad).is_err(), "{bad:?}");
+        }
     }
 
     #[test]
