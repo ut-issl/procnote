@@ -1,5 +1,6 @@
 mod commands;
 mod drop_point;
+mod server_sync;
 mod state;
 
 use std::collections::HashSet;
@@ -18,8 +19,13 @@ use commands::execution::{
     get_attachment_preview_data_url, get_execution_state, list_executions, pick_attachment_sources,
     record_action, reveal_execution_dir, start_execution,
 };
+use commands::server::{
+    connect_server, disconnect_server, get_sync_status, list_conflicts, list_rejected,
+    resolve_conflict, sync_now,
+};
 use commands::template::{get_template, list_templates};
 use drop_point::{DropPointClient, DropPointConfig, DropPointSessions};
+use server_sync::ServerSync;
 use state::AppState;
 
 /// Arguments accepted by the desktop executable.
@@ -98,6 +104,16 @@ fn run_with_workspace(workspace: &Path) {
                 DropPointSessions::new(drop_point_state_root, &procedures_dir)
                     .map_err(std::io::Error::other)?;
 
+            app.manage(ServerSync::new(
+                procedures_dir.clone(),
+                app.path().app_config_dir()?.join("servers.json"),
+            ));
+            let handle = app.handle().clone();
+            let sync_dir = procedures_dir.clone();
+            tauri::async_runtime::spawn(async move {
+                handle.state::<ServerSync>().run(&sync_dir).await;
+            });
+
             app.manage(AppState {
                 procedures_dir,
                 drop_point_config,
@@ -123,6 +139,13 @@ fn run_with_workspace(workspace: &Path) {
             poll_attachment_drop_point_session,
             import_attachment_drop_point_upload,
             cancel_attachment_drop_point_session,
+            get_sync_status,
+            connect_server,
+            disconnect_server,
+            sync_now,
+            list_conflicts,
+            resolve_conflict,
+            list_rejected,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

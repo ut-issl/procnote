@@ -45,7 +45,7 @@ pub struct Resolution {
 }
 
 /// What happened to one pushed event.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 #[serde(tag = "outcome", rename_all = "snake_case")]
 pub enum PushOutcome {

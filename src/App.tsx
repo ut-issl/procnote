@@ -1,6 +1,8 @@
 import { Link, Route, Routes } from "react-router";
 import OperatorName from "#lib/components/OperatorName.js";
+import DesktopSyncStatus from "#lib/components/DesktopSyncStatus.js";
 import SyncStatus from "#lib/components/SyncStatus.js";
+import { isDesktop } from "#lib/platform.js";
 import { scoped } from "#lib/utils/cx.js";
 import DeviceConnectPage from "./pages/DeviceConnectPage.js";
 import ExecutionPage from "./pages/ExecutionPage.js";
@@ -21,7 +23,7 @@ export default function App() {
         </Link>
         <span className={c("app-subtitle")}>Procedure Execution</span>
         <OperatorName />
-        <SyncStatus />
+        {isDesktop ? <DesktopSyncStatus /> : <SyncStatus />}
       </header>
       <main className={c("app-main")}>
         <Routes>

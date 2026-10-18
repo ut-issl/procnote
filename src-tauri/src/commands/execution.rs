@@ -3,6 +3,7 @@ use std::path::Path;
 use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
 
+use crate::server_sync::ServerSync;
 use crate::state::AppState;
 use procnote_app::action::{ActionMeta, AttachmentSource, ExecutionAction};
 use procnote_app::execution::{ExecutionSummary, infer_attachment_content_type};
@@ -123,16 +124,24 @@ pub fn reveal_execution_dir(
 )]
 pub fn start_execution(
     state: State<'_, AppState>,
+    sync: State<'_, ServerSync>,
     template_path: String,
     meta: Option<ActionMeta>,
 ) -> Result<ExecutionSummary, String> {
-    procnote_app::execution::start_execution(
-        &state.executions(),
+    let store = state.executions();
+    let summary = procnote_app::execution::start_execution(
+        &store,
         &state.procedures_dir,
         Path::new(&template_path),
         env!("CARGO_PKG_VERSION").to_string(),
         meta.unwrap_or_default(),
-    )
+    )?;
+    // In a workspace connected to a server, new executions sync.
+    if sync.link()?.is_some() {
+        store.link(summary.execution_id, false)?;
+        sync.wake();
+    }
+    Ok(summary)
 }
 
 /// Record an action on an active execution.
@@ -143,17 +152,20 @@ pub fn start_execution(
 )]
 pub fn record_action(
     state: State<'_, AppState>,
+    sync: State<'_, ServerSync>,
     execution_id: ExecutionId,
     mut action: ExecutionAction,
     meta: Option<ActionMeta>,
 ) -> Result<ExecutionSummary, String> {
     authorize_attachment_action(&state, &mut action)?;
-    procnote_app::execution::record_action(
+    let summary = procnote_app::execution::record_action(
         &state.executions(),
         execution_id,
         action,
         meta.unwrap_or_default(),
-    )
+    )?;
+    sync.wake();
+    Ok(summary)
 }
 
 /// Get the current state of an execution.
