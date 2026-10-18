@@ -38,6 +38,7 @@
 - Execution storage is behind the `ExecutionRepository` trait (`repository.rs`); `ExecutionStore` is the filesystem implementation. What to record is decided by pure functions there (`decide_action`, `decide_receive`), and `record` applies the decision atomically, skipping retried `event_id`s.
 - Every `record_action` call re-reads and replays the full event log from storage (no in-memory cache, by design).
 - Attachments are stored as `attachments/{sha256_7}-{filename}` inside the execution directory.
+- An execution directory with a `sync.json` is **linked** to a server (desktop sync, stage 7; `persistence/outbox.rs`): `events.jsonl` then holds the server-ordered log, events recorded locally are appended to `pending.jsonl` (append-only, fsynced) instead, and the state is the log plus the pending lines the server hasn't dealt with (`sync.json`'s `handled`). `ExecutionStore::outbox`/`settle` take a sync's input and outcome: settling appends pulled lines, keeps refused events in `rejected.jsonl`, and only then advances `handled`, so a crash midway only causes a re-push (deduplicated by event ID). `import_remote` keeps a copy of a server execution; `store_attachment` stores downloaded content after checking its hash.
 
 ### Tauri shell (`src-tauri`)
 
