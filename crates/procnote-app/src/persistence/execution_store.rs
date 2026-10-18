@@ -12,7 +12,7 @@ use crate::persistence::attachment_store::AttachmentStore;
 use crate::persistence::conflict_log;
 use crate::persistence::event_log::{EventLog, sync_dir};
 use crate::repository::{
-    Decide, ExecutionRepository, NewExecution, StoredExecution, apply_decision,
+    Decide, ExecutionRepository, NewExecution, StoredExecution, TemplateSnapshot, apply_decision,
 };
 use crate::sync::{Conflict, Resolution};
 
@@ -185,6 +185,20 @@ impl ExecutionRepository for ExecutionStore {
 
     fn conflicts(&self, execution_id: ExecutionId) -> Result<Vec<Conflict>, String> {
         conflict_log::read(&self.existing_dir(execution_id)?)
+    }
+
+    fn template_snapshot(&self, execution_id: ExecutionId) -> Result<TemplateSnapshot, String> {
+        let execution_dir = self.existing_dir(execution_id)?;
+        let read = |name: &str| std::fs::read_to_string(execution_dir.join(name));
+        match read(TemplateSnapshot::JSON_FILE) {
+            Ok(text) => Ok(TemplateSnapshot::Json(text)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                read(TemplateSnapshot::MARKDOWN_FILE)
+                    .map(TemplateSnapshot::Markdown)
+                    .map_err(|e| e.to_string())
+            }
+            Err(e) => Err(e.to_string()),
+        }
     }
 
     fn add_conflict(&self, execution_id: ExecutionId, conflict: &Conflict) -> Result<(), String> {

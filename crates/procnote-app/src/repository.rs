@@ -158,6 +158,9 @@ pub trait ExecutionRepository: Send + Sync {
     /// The execution's log lines, starting with its `LogMeta`.
     fn records(&self, execution_id: ExecutionId) -> Result<Vec<EventRecord>, String>;
 
+    /// The template the execution was started from, as kept then.
+    fn template_snapshot(&self, execution_id: ExecutionId) -> Result<TemplateSnapshot, String>;
+
     /// Pushed events that didn't apply ([`crate::sync`]), resolved or not.
     fn conflicts(&self, execution_id: ExecutionId) -> Result<Vec<Conflict>, String>;
 

@@ -381,6 +381,18 @@ impl ExecutionRepository for PostgresStore {
         Ok(records)
     }
 
+    fn template_snapshot(&self, execution_id: ExecutionId) -> Result<TemplateSnapshot, String> {
+        let row: Option<(String, String)> = self.runtime.block_on(async {
+            sqlx::query_as("SELECT template_source, template_format FROM executions WHERE id = $1")
+                .bind(execution_id)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(db_error)
+        })?;
+        let (text, format) = row.ok_or_else(|| format!("Execution not found: {execution_id}"))?;
+        TemplateSnapshot::from_format(&format, text)
+    }
+
     fn conflicts(&self, execution_id: ExecutionId) -> Result<Vec<Conflict>, String> {
         type Row = (
             serde_json::Value,

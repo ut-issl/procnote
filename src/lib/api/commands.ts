@@ -286,6 +286,32 @@ export function uploadToLink(
   });
 }
 
+// --- Device tokens for desktop apps (browser only) ---
+
+export interface DeviceToken {
+  id: string;
+  email: string;
+  device: string;
+  /** ISO 8601 timestamp. */
+  created_at: string;
+}
+
+/** Issue a token for a desktop app to sync as the signed-in user. */
+export function issueDeviceToken(device: string): Promise<DeviceToken & { token: string }> {
+  return postJson("/device-tokens", { device });
+}
+
+export function listDeviceTokens(): Promise<DeviceToken[]> {
+  return request("/device-tokens");
+}
+
+export async function revokeDeviceToken(id: string): Promise<void> {
+  const response = await fetch(`/api/device-tokens/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+  if (!response.ok) throw `HTTP ${response.status}`;
+}
+
 // --- Sync for offline recording (browser only) ---
 
 /** Log lines of an execution from position `after` on, and how many there are. */

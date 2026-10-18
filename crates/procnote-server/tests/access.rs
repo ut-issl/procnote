@@ -295,3 +295,101 @@ async fn concurrent_first_requests_all_wait_for_the_key_fetch() {
         "{statuses:?}"
     );
 }
+
+fn bearer(uri: &str, token: &str) -> Request<Body> {
+    Request::get(uri)
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap()
+}
+
+#[tokio::test]
+async fn desktop_apps_sync_with_device_tokens_their_owners_issue() {
+    let fixture = fixture().await;
+    let alice = token(&fixture, "alice@example.ac.jp");
+    let bob = token(&fixture, "bob@example.ac.jp");
+    let summary = start(&fixture, &alice).await;
+    let id = summary["execution_id"].as_str().unwrap();
+
+    let (status, issued) = send(
+        &fixture.app,
+        post_json(
+            "/api/device-tokens",
+            &json!({ "device": "bench PC" }),
+            Some(&alice),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{issued}");
+    let device_token = issued["token"].as_str().unwrap().to_string();
+    assert_eq!(issued["email"], "alice@example.ac.jp");
+
+    // The device routes take the device token, without an Access session.
+    let (status, me) = send(&fixture.app, bearer("/api/device/me", &device_token)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(me["device"], "bench PC");
+    let (status, execution) = send(
+        &fixture.app,
+        bearer(&format!("/api/device/executions/{id}"), &device_token),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{execution}");
+    assert_eq!(execution["template_format"], "markdown");
+    assert_eq!(execution["records"][0]["type"], "log_meta");
+    let (without, _) = send(&fixture.app, get("/api/device/me", None)).await;
+    let (with_access_only, _) = send(&fixture.app, get("/api/device/me", Some(&alice))).await;
+    assert_eq!(without, StatusCode::UNAUTHORIZED);
+    assert_eq!(with_access_only, StatusCode::UNAUTHORIZED);
+
+    // What the device pushes is recorded as its owner.
+    let state_id = uuid::Uuid::new_v4();
+    let push = Request::post(format!("/api/device/executions/{id}/events"))
+        .header(header::AUTHORIZATION, format!("Bearer {device_token}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(
+            json!({ "events": [{
+                "type": "execution_renamed",
+                "at": "2026-10-18T00:00:00Z",
+                "execution_id": id,
+                "name": "renamed on the bench",
+                "event_id": state_id,
+                "recorded_by": "someone else",
+            }]})
+            .to_string(),
+        ))
+        .unwrap();
+    let (status, pushed) = send(&fixture.app, push).await;
+    assert_eq!(status, StatusCode::OK, "{pushed}");
+    let (_, pulled) = send(
+        &fixture.app,
+        bearer(
+            &format!("/api/device/executions/{id}/events?after=1"),
+            &device_token,
+        ),
+    )
+    .await;
+    let renamed = pulled["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|record| record["event_id"] == state_id.to_string())
+        .unwrap();
+    assert_eq!(renamed["recorded_by"], "alice@example.ac.jp");
+
+    // Only the owner sees and revokes it; revoked tokens stop working.
+    let (_, bobs) = send(&fixture.app, get("/api/device-tokens", Some(&bob))).await;
+    assert_eq!(bobs, json!([]));
+    let token_id = issued["id"].as_str().unwrap();
+    let revoke = |as_whom: &str| {
+        Request::delete(format!("/api/device-tokens/{token_id}"))
+            .header(TOKEN_HEADER, as_whom)
+            .body(Body::empty())
+            .unwrap()
+    };
+    let (by_bob, _) = send(&fixture.app, revoke(&bob)).await;
+    let (by_alice, _) = send(&fixture.app, revoke(&alice)).await;
+    let (after, _) = send(&fixture.app, bearer("/api/device/me", &device_token)).await;
+    assert_eq!(by_bob, StatusCode::NOT_FOUND);
+    assert_eq!(by_alice, StatusCode::NO_CONTENT);
+    assert_eq!(after, StatusCode::UNAUTHORIZED);
+}
