@@ -4,13 +4,12 @@ use std::sync::Arc;
 
 use clap::{ArgGroup, Parser};
 use object_store::ObjectStore;
-use object_store::aws::AmazonS3Builder;
-use object_store::local::LocalFileSystem;
 
 use procnote_app::persistence::execution_store::ExecutionStore;
 use procnote_app::repository::ExecutionRepository;
 use procnote_server::access::AccessConfig;
 use procnote_server::postgres::PostgresStore;
+use procnote_server::transfer::attachment_store;
 use procnote_server::{Auth, ServerConfig, router};
 
 /// Arguments accepted by the API server.
@@ -63,32 +62,12 @@ struct Args {
 impl Args {
     /// Where attachment content goes when executions are in PostgreSQL.
     fn attachment_store(&self) -> Result<Option<Arc<dyn ObjectStore>>, String> {
-        match (&self.attachment_dir, &self.attachment_bucket) {
-            (Some(dir), _) => {
-                std::fs::create_dir_all(dir).map_err(|e| {
-                    format!(
-                        "failed to create attachment directory {}: {e}",
-                        dir.display()
-                    )
-                })?;
-                let store = LocalFileSystem::new_with_prefix(dir)
-                    .map_err(|e| e.to_string())?
-                    .with_fsync(true);
-                Ok(Some(Arc::new(store)))
-            }
-            (None, Some(bucket)) => {
-                let store = AmazonS3Builder::from_env()
-                    .with_bucket_name(bucket)
-                    .build()
-                    .map_err(|e| format!("invalid attachment bucket configuration: {e}"))?;
-                Ok(Some(Arc::new(store)))
-            }
-            (None, None) => Ok(None),
-        }
+        attachment_store(
+            self.attachment_dir.as_deref(),
+            self.attachment_bucket.as_deref(),
+        )
     }
-}
 
-impl Args {
     fn auth(&self) -> Result<Auth, String> {
         match (&self.access_team_domain, &self.access_aud) {
             (Some(team_domain), Some(audience)) => Ok(Auth::Access(AccessConfig {
@@ -169,4 +148,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::CommandFactory;
+
+    #[test]
+    fn the_command_line_is_well_formed() {
+        super::Args::command().debug_assert();
+    }
 }

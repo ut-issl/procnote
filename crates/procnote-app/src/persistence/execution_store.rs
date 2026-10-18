@@ -32,8 +32,7 @@ pub struct InstalledAttachmentSource {
 
 impl ExecutionRepository for ExecutionStore {
     fn list(&self) -> Result<Vec<StoredExecution>, String> {
-        Ok(self
-            .execution_dirs()?
+        Ok(execution_dirs(&self.procedures_dir)?
             .into_iter()
             .filter_map(|dir| match read_state(&dir) {
                 Ok(state) => Some(stored(state, &dir)),
@@ -249,35 +248,36 @@ impl ExecutionStore {
             .filter(|dir| dir.join("events.jsonl").exists())
             .ok_or_else(|| format!("Execution not found: {execution_id}"))
     }
+}
 
-    /// Every published execution directory that has an event log.
-    fn execution_dirs(&self) -> Result<Vec<PathBuf>, String> {
-        if !self.procedures_dir.exists() {
-            return Ok(Vec::new());
+/// Every published execution directory under `procedures_dir` that has an
+/// event log.
+pub fn execution_dirs(procedures_dir: &Path) -> Result<Vec<PathBuf>, String> {
+    if !procedures_dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut dirs = Vec::new();
+    let proc_entries = std::fs::read_dir(procedures_dir).map_err(|e| e.to_string())?;
+    for proc_entry in proc_entries.flatten() {
+        let exec_base = proc_entry.path().join(".executions");
+        if !exec_base.is_dir() {
+            continue;
         }
-        let mut dirs = Vec::new();
-        let proc_entries = std::fs::read_dir(&self.procedures_dir).map_err(|e| e.to_string())?;
-        for proc_entry in proc_entries.flatten() {
-            let exec_base = proc_entry.path().join(".executions");
-            if !exec_base.is_dir() {
+        let entries = match std::fs::read_dir(&exec_base) {
+            Ok(entries) => entries,
+            Err(e) => {
+                log::warn!(
+                    "skipping unreadable executions directory {}: {e}",
+                    exec_base.display()
+                );
                 continue;
             }
-            let entries = match std::fs::read_dir(&exec_base) {
-                Ok(entries) => entries,
-                Err(e) => {
-                    log::warn!(
-                        "skipping unreadable executions directory {}: {e}",
-                        exec_base.display()
-                    );
-                    continue;
-                }
-            };
-            dirs.extend(entries.flatten().map(|entry| entry.path()).filter(|path| {
-                path.is_dir() && !is_temp_execution_dir(path) && path.join("events.jsonl").exists()
-            }));
-        }
-        Ok(dirs)
+        };
+        dirs.extend(entries.flatten().map(|entry| entry.path()).filter(|path| {
+            path.is_dir() && !is_temp_execution_dir(path) && path.join("events.jsonl").exists()
+        }));
     }
+    Ok(dirs)
 }
 
 fn stored(state: ExecutionState, execution_dir: &Path) -> StoredExecution {
@@ -429,7 +429,8 @@ pub fn is_temp_execution_dir(path: &Path) -> bool {
         .is_some_and(|name| name.starts_with('.') || name.contains(".tmp-"))
 }
 
-fn write_execution_snapshot_durable(
+/// Write the human-readable `README.md` snapshot of an execution.
+pub fn write_execution_snapshot_durable(
     execution_dir: &Path,
     state: &ExecutionState,
 ) -> Result<(), String> {
@@ -467,7 +468,8 @@ fn write_file_durable(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 }
 
 /// Format the execution directory name as `{YYYYMMDD}T{HHMMSS}-{uuid_8}`.
-fn execution_dir_name(at: &DateTime<Utc>, execution_id: ExecutionId) -> String {
+#[must_use]
+pub fn execution_dir_name(at: &DateTime<Utc>, execution_id: ExecutionId) -> String {
     format!(
         "{}-{}",
         at.format("%Y%m%dT%H%M%S"),

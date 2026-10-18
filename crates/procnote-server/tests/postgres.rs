@@ -14,13 +14,16 @@ use tower::ServiceExt;
 
 use object_store::local::LocalFileSystem;
 use object_store::memory::InMemory;
-use procnote_app::action::ExecutionAction;
+use procnote_app::action::{AttachmentSource, ExecutionAction};
 use procnote_app::execution::summarize;
+use procnote_app::persistence::event_log::EventLog;
+use procnote_app::persistence::execution_store::ExecutionStore;
 use procnote_app::repository::{ExecutionRepository, NewExecution, receive_files, record_action};
 use procnote_core::event::types::{EventMeta, ExecutionId};
 use procnote_core::execution::ExecutionState;
 use procnote_core::template::parse_template;
 use procnote_server::postgres::PostgresStore;
+use procnote_server::transfer::{export_workspace, import_workspace};
 use procnote_server::{Auth, ServerConfig, router};
 
 const TEMPLATE: &str = r"---
@@ -254,4 +257,121 @@ async fn the_api_runs_on_postgres_without_writing_to_the_workspace() {
     assert!(toggled.get("execution_id").is_some());
     assert!(started["execution_dir"].is_null(), "{started}");
     assert!(!procedure_dir.join(".executions").exists());
+}
+
+/// A workspace with one file-stored execution that has a checked box, an
+/// attached file, and a file in its inbox. Returns the workspace, the
+/// execution directory, and the execution ID.
+fn file_workspace(temp: &tempfile::TempDir) -> (PathBuf, PathBuf, ExecutionId) {
+    let workspace = temp.path().join("workspace");
+    std::fs::create_dir_all(workspace.join("postgres-test")).unwrap();
+    std::fs::write(workspace.join("postgres-test/template.md"), TEMPLATE).unwrap();
+    let scan = temp.path().join("scan.txt");
+    std::fs::write(&scan, "scanned").unwrap();
+    let photo = temp.path().join("photo.jpg");
+    std::fs::write(&photo, "photo").unwrap();
+    let files = ExecutionStore::new(workspace.clone());
+    let mut state = ExecutionState::new();
+    let initial_events = state.start(&parse_template(TEMPLATE).unwrap()).unwrap();
+    let id = state.execution_id.unwrap();
+    let created = files
+        .create(NewExecution {
+            procedure: "postgres-test".to_string(),
+            template_source: TEMPLATE.to_string(),
+            state,
+            initial_events,
+            tool_version: "test".to_string(),
+            meta: EventMeta::default(),
+        })
+        .unwrap();
+    let source_dir = PathBuf::from(created.location.unwrap());
+    let operator = EventMeta {
+        event_id: Some(uuid::Uuid::new_v4()),
+        recorded_by: Some("operator".to_string()),
+        device: Some("desk".to_string()),
+    };
+    record_action(&files, id, toggle(), &operator).unwrap();
+    record_action(
+        &files,
+        id,
+        ExecutionAction::AddAttachments {
+            step_id: "step-0".to_string(),
+            input_id: "evidence".to_string(),
+            files: vec![AttachmentSource {
+                filename: "scan.txt".to_string(),
+                path: scan.to_string_lossy().to_string(),
+                content_type: "text/plain".to_string(),
+            }],
+        },
+        &EventMeta::default(),
+    )
+    .unwrap();
+    receive_files(
+        &files,
+        id,
+        &[(photo, "photo.jpg".to_string())],
+        &EventMeta::default(),
+    )
+    .unwrap();
+    (workspace, source_dir, id)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_workspace_round_trips_through_import_and_export() {
+    let Some(url) = database_url() else { return };
+    let temp = tempfile::tempdir().unwrap();
+    let (workspace, source_dir, id) = file_workspace(&temp);
+    let source_log = std::fs::read(source_dir.join("events.jsonl")).unwrap();
+    let store = store(&url).await;
+
+    let imported = import_workspace(&store, &workspace).await.unwrap();
+    let again = import_workspace(&store, &workspace).await.unwrap();
+    let exported_root = temp.path().join("exported");
+    let exported = export_workspace(&store, &exported_root).await.unwrap();
+
+    assert_eq!(imported.transferred, std::slice::from_ref(&source_dir));
+    assert!(imported.failed.is_empty(), "{:?}", imported.failed);
+    assert_eq!(again.skipped, std::slice::from_ref(&source_dir));
+    assert_eq!(
+        std::fs::read(source_dir.join("events.jsonl")).unwrap(),
+        source_log,
+        "the source is not modified"
+    );
+    // The database is shared with other tests, so only this execution is checked.
+    assert!(
+        exported
+            .failed
+            .iter()
+            .all(|(failed, _)| *failed != id.to_string()),
+        "{:?}",
+        exported.failed
+    );
+    let relative = source_dir.strip_prefix(&workspace).unwrap();
+    let exported_dir = exported_root.join(relative);
+    assert!(exported.transferred.contains(&exported_dir));
+    let records = |dir: &std::path::Path| {
+        EventLog::new(dir.join("events.jsonl"))
+            .read_records()
+            .unwrap()
+    };
+    assert_eq!(records(&exported_dir), records(&source_dir));
+    assert_eq!(
+        std::fs::read_to_string(exported_dir.join("template.md")).unwrap(),
+        TEMPLATE
+    );
+    let stored = ExecutionStore::new(exported_root.clone()).load(id).unwrap();
+    for file in stored
+        .state
+        .inbox
+        .iter()
+        .chain(&stored.state.steps["step-0"].attachments["evidence"])
+    {
+        assert_eq!(
+            std::fs::read(exported_dir.join(&file.path)).unwrap(),
+            std::fs::read(source_dir.join(&file.path)).unwrap(),
+            "{}",
+            file.path
+        );
+    }
+    assert_eq!(stored.state.inbox.len(), 1);
 }
