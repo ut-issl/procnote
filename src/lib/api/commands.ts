@@ -18,15 +18,33 @@ import type {
 // procnote-server HTTP API on the same origin. Both reject with a string
 // message on failure.
 
+/**
+ * The server can't be reached: the network is down, or a gateway in front of
+ * it (Cloudflare Tunnel, a proxy) answered for it.
+ */
+export class UnreachableError extends Error {}
+
+/** Gateway errors, which mean the server itself didn't answer. */
+const GATEWAY_STATUSES = new Set([502, 503, 504, 520, 521, 522, 523, 524, 525, 526, 527, 530]);
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`/api${path}`, init);
+  let response: Response;
+  try {
+    response = await fetch(`/api${path}`, init);
+  } catch (error) {
+    throw new UnreachableError(String(error));
+  }
   const body: unknown = await response.json().catch(() => null);
   if (!response.ok) {
-    const message =
+    const serverMessage =
       body && typeof body === "object" && "error" in body && typeof body.error === "string"
         ? body.error
-        : `HTTP ${response.status}`;
-    throw message;
+        : null;
+    // procnote-server explains its errors; a bare gateway error came from in front of it.
+    if (serverMessage === null && GATEWAY_STATUSES.has(response.status)) {
+      throw new UnreachableError(`HTTP ${response.status}`);
+    }
+    throw serverMessage ?? `HTTP ${response.status}`;
   }
   return body as T;
 }
@@ -274,7 +292,7 @@ export type PushResult = PushOutcome & { event_id: string | null };
 export function pushEvents(
   executionId: string,
   events: EventRecord[],
-  uploads: string[] = [],
+  uploads: string[],
 ): Promise<{ results: PushResult[] }> {
   return postJson(`/executions/${encodeURIComponent(executionId)}/events`, { events, uploads });
 }
@@ -324,6 +342,13 @@ export async function getAttachmentPreviewDataUrl(
  * In a browser the chosen files are uploaded right away, and the returned
  * sources reference them by upload token instead of a filesystem path.
  */
+/** Upload files to the server; their sources carry single-use upload tokens as paths. */
+export function uploadFiles(files: { name: string; blob: Blob }[]): Promise<AttachmentSource[]> {
+  const form = new FormData();
+  for (const file of files) form.append("file", file.blob, file.name);
+  return request("/uploads", { method: "POST", body: form });
+}
+
 export async function pickAttachmentSources(title: string): Promise<AttachmentSource[]> {
   if (isDesktop) return invoke("pick_attachment_sources", { title });
   const files = await chooseBrowserFiles();
@@ -333,7 +358,8 @@ export async function pickAttachmentSources(title: string): Promise<AttachmentSo
   return request("/uploads", { method: "POST", body: form });
 }
 
-function chooseBrowserFiles(): Promise<File[]> {
+/** Let the user choose files with the browser's file dialog. */
+export function chooseBrowserFiles(): Promise<File[]> {
   return new Promise((resolve) => {
     const input = document.createElement("input");
     input.type = "file";

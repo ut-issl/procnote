@@ -1,5 +1,6 @@
 import type { MouseEvent } from "react";
 import * as api from "#lib/api/commands.js";
+import { attachmentPreview, pickAttachmentSources } from "#lib/offline/index.js";
 import { renderMarkdown } from "#lib/markdown.js";
 import { logWarn, openExternalUrl } from "#lib/platform.js";
 import type {
@@ -148,7 +149,7 @@ export default function StepBody({
                         disabled={!isInteractable}
                         dropPointEnabled={dropPointEnabled && isInteractable}
                         onattach={(files) => attachFiles(inputId, files)}
-                        onpick={() => api.pickAttachmentSources(input.definition.label)}
+                        onpick={() => pickAttachmentSources(input.definition.label)}
                         onremovefile={
                           isInteractable ? (path) => removeAttachmentFile(inputId, path) : undefined
                         }
@@ -156,7 +157,7 @@ export default function StepBody({
                           isInteractable ? (path) => unassignAttachment(inputId, path) : undefined
                         }
                         onclear={isInteractable ? () => clearAttachments(inputId) : undefined}
-                        onpreview={(path) => api.getAttachmentPreviewDataUrl(executionId, path)}
+                        onpreview={(path) => attachmentPreview(executionId, path)}
                         onstartdrop={() =>
                           api.startAttachmentDropPointSession(executionId, stepId, inputId)
                         }

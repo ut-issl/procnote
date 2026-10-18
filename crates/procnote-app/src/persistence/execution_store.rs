@@ -138,15 +138,15 @@ impl ExecutionRepository for ExecutionStore {
                 }
 
                 let decision = decide(&state)?;
-                if decision.events.is_empty() {
-                    return Ok(stored(state, &execution_dir));
-                }
                 apply_decision(&mut state, &decision)?;
                 let attachments = AttachmentStore::new(execution_dir.clone());
                 decision
                     .files
                     .iter()
                     .try_for_each(|file| attachments.store(file))?;
+                if decision.events.is_empty() {
+                    return Ok(stored(state, &execution_dir));
+                }
                 let appended: Vec<EventRecord> = decision
                     .events
                     .into_iter()

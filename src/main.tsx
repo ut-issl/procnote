@@ -3,8 +3,9 @@ import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router";
 import "./global.css";
 import App from "./App.js";
-import { startSyncing } from "#lib/offline/index.js";
+import { registerServiceWorker, startSyncing } from "#lib/offline/index.js";
 
+registerServiceWorker();
 startSyncing();
 
 const root = document.getElementById("root");
