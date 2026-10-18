@@ -28,6 +28,7 @@ use crate::drop_point::storage::{
     InstalledBundle, discover_installed_bundles, encrypted_bundle_identity, install_bundle,
     verify_installed_bundle,
 };
+use crate::server_sync::ServerSync;
 use crate::state::AppState;
 use procnote_app::execution::{load_execution_from_disk, summarize};
 use procnote_app::persistence::execution_store::{ExecutionStore, InstalledAttachmentSource};
@@ -78,8 +79,12 @@ impl From<String> for AttachmentDropPointPollError {
 pub fn is_drop_point_configured(
     state: State<'_, AppState>,
     sessions: State<'_, DropPointSessions>,
+    sync: State<'_, ServerSync>,
 ) -> bool {
-    state.drop_point_client.is_some()
+    // Connected to a server, phones send through its upload links instead;
+    // DropPoint is for standalone use (sessions in progress still finish).
+    let standalone = sync.link().ok().flatten().is_none();
+    (state.drop_point_client.is_some() && standalone)
         || sessions.has_resumable_sessions().unwrap_or_else(|error| {
             log::warn!("failed to inspect resumable DropPoint private state: {error}");
             false

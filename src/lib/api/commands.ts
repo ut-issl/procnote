@@ -268,15 +268,21 @@ export async function getUploadLink(executionId: string): Promise<string | null>
   return token;
 }
 
+/**
+ * The execution's phone upload link, created if it has none, as the URL a
+ * phone opens. The desktop app gets it from the server it syncs with.
+ */
 export async function createUploadLink(executionId: string): Promise<string> {
+  if (isDesktop) return invoke("create_upload_link", { executionId });
   const { token } = await postJson<{ token: string }>(
     `/executions/${encodeURIComponent(executionId)}/upload-link`,
     {},
   );
-  return token;
+  return `${window.location.origin}/upload/${token}`;
 }
 
 export async function revokeUploadLink(executionId: string): Promise<void> {
+  if (isDesktop) return invoke("revoke_upload_link", { executionId });
   await request(`/executions/${encodeURIComponent(executionId)}/upload-link`, {
     method: "DELETE",
   });
@@ -352,6 +358,22 @@ export function disconnectServer(): Promise<SyncStatus> {
 
 export function syncNow(): Promise<SyncStatus> {
   return invoke("sync_now");
+}
+
+/** Whether an execution syncs with the server (null when it doesn't; true once the server has it). */
+export async function executionLink(executionId: string): Promise<boolean | null> {
+  if (!isDesktop) return null;
+  return invoke("execution_link", { executionId });
+}
+
+/** The server's executions not kept in this workspace yet. */
+export function listServerExecutions(): Promise<ExecutionSummary[]> {
+  return invoke("list_server_executions");
+}
+
+/** Keep a copy of a server execution in this workspace; it syncs from then on. */
+export function openServerExecution(executionId: string): Promise<ExecutionSummary> {
+  return invoke("open_server_execution", { executionId });
 }
 
 /** Events of a linked execution the server refused as malformed. */

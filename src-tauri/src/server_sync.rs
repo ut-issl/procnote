@@ -7,6 +7,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use procnote_app::persistence::execution_store::ExecutionStore;
+use procnote_core::event::types::ExecutionId;
 use procnote_sync::client::DeviceClient;
 use procnote_sync::engine::{SyncError, sync_all, waiting};
 use procnote_sync::link::{Links, ServerLink};
@@ -144,6 +145,33 @@ impl ServerSync {
             Err(e) => self.record(Err(SyncError::Failed(e))),
         }
         self.status(store)
+    }
+
+    /// Sync one linked execution now (one sync at a time with the loop).
+    pub async fn sync_execution(
+        &self,
+        store: &ExecutionStore,
+        id: ExecutionId,
+    ) -> Result<(), String> {
+        let _running = self.running.lock().await;
+        let link = self
+            .link()?
+            .ok_or("this workspace isn't connected to a server")?;
+        procnote_sync::engine::sync_execution(store, &DeviceClient::new(link), id)
+            .await
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
+    /// Keep a copy of a server execution here (one sync at a time with the loop).
+    pub async fn open_remote(&self, store: &ExecutionStore, id: ExecutionId) -> Result<(), String> {
+        let _running = self.running.lock().await;
+        let link = self
+            .link()?
+            .ok_or("this workspace isn't connected to a server")?;
+        procnote_sync::engine::open_remote(store, &DeviceClient::new(link), id)
+            .await
+            .map_err(|e| e.to_string())
     }
 
     /// Sync now and then every [`SYNC_INTERVAL`], or sooner when woken.

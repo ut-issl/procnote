@@ -2,7 +2,9 @@
 
 use std::time::Duration;
 
+use procnote_app::execution::ExecutionSummary;
 use procnote_app::persistence::outbox::Rejected;
+use procnote_app::repository::ExecutionRepository;
 use procnote_core::event::types::ExecutionId;
 use procnote_sync::client::DeviceClient;
 use procnote_sync::connect;
@@ -113,4 +115,94 @@ pub fn list_rejected(
     execution_id: ExecutionId,
 ) -> Result<Vec<Rejected>, String> {
     state.executions().rejected(execution_id)
+}
+
+/// Whether an execution syncs with the server: `Some(registered)` when linked.
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri command handlers require owned parameters"
+)]
+pub fn execution_link(
+    state: State<'_, AppState>,
+    execution_id: ExecutionId,
+) -> Result<Option<bool>, String> {
+    Ok(state
+        .executions()
+        .sync_state(execution_id)?
+        .map(|sync| sync.registered))
+}
+
+/// The phone upload link of a linked execution, as the URL to open: files
+/// sent there reach this app on the next sync.
+#[tauri::command]
+pub async fn create_upload_link(
+    state: State<'_, AppState>,
+    sync: State<'_, ServerSync>,
+    execution_id: ExecutionId,
+) -> Result<String, String> {
+    let store = state.executions();
+    match store.sync_state(execution_id)? {
+        None => return Err("This execution isn't shared with the server.".to_string()),
+        Some(linked) if !linked.registered => {
+            // The server must have the execution before phones can send to it.
+            sync.sync_execution(&store, execution_id).await?;
+        }
+        Some(_) => {}
+    }
+    let client = client(&sync)?;
+    let token = client
+        .upload_link(execution_id, true)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or("the server didn't create a link")?;
+    Ok(format!(
+        "{}/upload/{token}",
+        client.link().server.trim_end_matches('/')
+    ))
+}
+
+#[tauri::command]
+pub async fn revoke_upload_link(
+    sync: State<'_, ServerSync>,
+    execution_id: ExecutionId,
+) -> Result<(), String> {
+    client(&sync)?
+        .revoke_upload_link(execution_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The server's executions that aren't kept here yet.
+#[tauri::command]
+pub async fn list_server_executions(
+    state: State<'_, AppState>,
+    sync: State<'_, ServerSync>,
+) -> Result<Vec<serde_json::Value>, String> {
+    let summaries = client(&sync)?
+        .execution_summaries()
+        .await
+        .map_err(|e| e.to_string())?;
+    let store = state.executions();
+    Ok(summaries
+        .into_iter()
+        .filter(|summary| {
+            summary["execution_id"]
+                .as_str()
+                .and_then(|id| id.parse::<ExecutionId>().ok())
+                .is_some_and(|id| store.load(id).is_err())
+        })
+        .collect())
+}
+
+/// Keep a copy of a server execution here, linked, and return it.
+#[tauri::command]
+pub async fn open_server_execution(
+    state: State<'_, AppState>,
+    sync: State<'_, ServerSync>,
+    execution_id: ExecutionId,
+) -> Result<ExecutionSummary, String> {
+    let store = state.executions();
+    sync.open_remote(&store, execution_id).await?;
+    procnote_app::execution::get_execution(&store, execution_id)
 }

@@ -325,3 +325,37 @@ impl World {
         self.temp_dir.path().join("server").canonicalize().unwrap()
     }
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn photos_sent_to_the_servers_upload_link_reach_the_desktop_inbox() {
+    let world = world().await;
+    let id = start_here(&world);
+    sync_execution(&world.desktop, &world.client, id)
+        .await
+        .unwrap();
+    let token = world.client.upload_link(id, true).await.unwrap().unwrap();
+
+    // A phone sends a photo to the link (no login, as on the upload page).
+    let form = reqwest::multipart::Form::new().part(
+        "file",
+        reqwest::multipart::Part::bytes(b"photo bytes".to_vec()).file_name("bench.jpg"),
+    );
+    let sent = reqwest::Client::new()
+        .post(format!("{}/api/upload-links/{token}/files", world.server))
+        .multipart(form)
+        .send()
+        .await
+        .unwrap();
+    assert!(sent.status().is_success(), "{}", sent.text().await.unwrap());
+    sync_execution(&world.desktop, &world.client, id)
+        .await
+        .unwrap();
+
+    let inbox = world.desktop.load(id).unwrap().state.inbox;
+    assert_eq!(inbox.len(), 1);
+    assert_eq!(inbox[0].filename, "bench.jpg");
+    assert_eq!(
+        world.desktop.read_attachment(id, &inbox[0].path).unwrap(),
+        b"photo bytes"
+    );
+}
