@@ -3999,6 +3999,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "procnote-sync"
+version = "0.0.5"
+dependencies = [
+ "axum",
+ "chrono",
+ "log",
+ "procnote-app",
+ "procnote-core",
+ "procnote-server",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "procnote-tauri"
 version = "0.0.5"
 dependencies = [
@@ -4012,6 +4031,7 @@ dependencies = [
  "mailparse",
  "procnote-app",
  "procnote-core",
+ "procnote-sync",
  "proptest",
  "qrcode",
  "reqwest",
@@ -4392,6 +4412,7 @@ dependencies = [
  "hyper-util",
  "js-sys",
  "log",
+ "mime_guess",
  "percent-encoding",
  "pin-project-lite",
  "quinn",
@@ -4400,6 +4421,7 @@ dependencies = [
  "rustls-platform-verifier",
  "serde",
  "serde_json",
+ "serde_urlencoded",
  "sync_wrapper",
  "tokio",
  "tokio-rustls",

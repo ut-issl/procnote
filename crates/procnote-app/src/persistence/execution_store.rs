@@ -378,6 +378,18 @@ impl ExecutionStore {
             .map_err(|e| e.to_string())?
     }
 
+    /// The procedure (directory) an execution is filed under.
+    pub fn procedure_of(&self, execution_id: ExecutionId) -> Result<String, String> {
+        let execution_dir = self.existing_dir(execution_id)?;
+        execution_dir
+            .parent()
+            .and_then(Path::parent)
+            .and_then(Path::file_name)
+            .and_then(|name| name.to_str())
+            .map(str::to_string)
+            .ok_or_else(|| format!("execution {execution_id} isn't in a procedure directory"))
+    }
+
     /// The sync state, or `None` when the execution isn't linked.
     pub fn sync_state(&self, execution_id: ExecutionId) -> Result<Option<SyncState>, String> {
         outbox::read_state(&self.existing_dir(execution_id)?)

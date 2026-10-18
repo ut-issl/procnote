@@ -4,6 +4,7 @@ import { describeEvent } from "#lib/offline/describe.js";
 import { localExecutions } from "#lib/offline/index.js";
 import type { LocalExecution } from "#lib/offline/localExecutions.js";
 import { newActionMeta } from "#lib/operator.js";
+import { isDesktop } from "#lib/platform.js";
 import type { Conflict, ExecutionSummary } from "#lib/types/index.js";
 import { scoped } from "#lib/utils/cx.js";
 import { formatTimestamp } from "#lib/utils/format.js";
@@ -15,7 +16,7 @@ const c = scoped(styles);
  * Recordings that didn't make it into the execution: events that reached the
  * server after the execution had moved on (conflicts), and events this
  * device couldn't send (rejected). They really happened, so they stay until
- * someone re-records what still matters and dismisses them. Browser only.
+ * someone re-records what still matters and dismisses them.
  */
 export default function ConflictsPanel({ summary }: { summary: ExecutionSummary }) {
   const id = summary.execution_id;
@@ -24,8 +25,13 @@ export default function ConflictsPanel({ summary }: { summary: ExecutionSummary 
   const [error, setError] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
-    if (!localExecutions) return;
-    setRejected(await localExecutions.rejected(id));
+    if (isDesktop) {
+      setRejected(await api.listRejected(id).catch(() => []));
+    } else if (localExecutions) {
+      setRejected(await localExecutions.rejected(id));
+    } else {
+      return;
+    }
     try {
       setConflicts(await api.listConflicts(id));
     } catch {
@@ -48,7 +54,7 @@ export default function ConflictsPanel({ summary }: { summary: ExecutionSummary 
   }
 
   const open = conflicts.filter((conflict) => !conflict.resolved);
-  if (!localExecutions || (open.length === 0 && rejected.length === 0)) return null;
+  if ((!isDesktop && !localExecutions) || (open.length === 0 && rejected.length === 0)) return null;
 
   return (
     <section className={c("conflicts")}>

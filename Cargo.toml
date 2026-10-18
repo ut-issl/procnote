@@ -5,6 +5,7 @@ members = [
   "crates/procnote-core",
   "crates/procnote-launcher",
   "crates/procnote-server",
+  "crates/procnote-sync",
   "crates/procnote-wasm",
   "src-tauri",
 ]
@@ -61,6 +62,7 @@ tokio-tungstenite = "0.30.0"
 tower = "0.5.3"
 tower-http = "0.7.1"
 ts-rs = { version = "12.0.1", features = ["chrono-impl", "uuid-impl"] }
+url = "2.5.8"
 uuid = { version = "1.20.0", features = ["serde", "v4"] }
 wasm-bindgen = "0.2.129"
 

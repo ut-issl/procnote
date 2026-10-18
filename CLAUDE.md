@@ -18,6 +18,7 @@
 - **`crates/procnote-server/`** is an axum HTTP shell over `procnote-app`, parallel to `src-tauri`, for using the same UI from a browser. It must never depend on Tauri.
 - **`crates/procnote-wasm/`** builds the execution logic (`procnote-core` and `procnote-app` without its `fs` feature) to WebAssembly for the browser, so actions can be recorded offline with the same state machine as the server. `pnpm run build:wasm` (`just build-wasm`, also run by `pnpm build`) compiles it and generates `src/lib/wasm/pkg/` (git-ignored) with the `wasm-bindgen` CLI, which must match the crate's version; `src/lib/wasm/core.ts` wraps it. Type checking and frontend tests need it built.
 - **`collab/`** is the Node collab service (Hocuspocus) for collaborative template editing on the server; see below.
+- **`crates/procnote-sync/`** is the desktop app's sync client (stage 7): connecting a workspace through the server's `/device/connect` page with a loopback callback (`connect.rs`), the per-workspace links file (`link.rs`, in the app config dir; tokens never go into workspaces), the `/api/device/*` client, and one sync of a linked execution (`engine.rs`: register, upload, push, pull + download attachments, settle). Its tests run against a real `procnote-server` router. Tauri-free.
 - **`crates/procnote-launcher/`** is a Tauri-free console adapter outside those domain layers. It owns `procnote [WORKSPACE]`, prints help/version synchronously, and detaches the packaged GUI. It must never depend on `procnote-tauri`, Tauri, or GUI/dialog libraries.
 
 ### Core domain (`procnote-core`)
@@ -44,6 +45,7 @@
 
 - `AppState` holds the `procedures_dir` path, DropPoint configuration, and the attachment grants issued by the native file picker.
 - Attachment actions are authorized against those grants before being passed to `procnote_app::execution::record_action`.
+- `server_sync.rs` holds the workspace's server link and runs a background loop that syncs linked executions every 30 s and after each action (`commands/server.rs`: connect, disconnect, sync now, status, conflicts, rejected). While connected, new executions are linked (`ExecutionStore::link`). The header shows `DesktopSyncStatus`; the execution page polls so synced changes appear.
 
 ### API server (`procnote-server`)
 

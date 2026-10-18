@@ -11,6 +11,7 @@ import type {
   ExecutionSummary,
   ProcedureTemplate,
   PushOutcome,
+  SyncStatus,
   TemplateSummary,
 } from "#lib/types/index.js";
 
@@ -200,8 +201,30 @@ export async function listExecutions(): Promise<ExecutionSummary[]> {
  * that stops watching. The desktop app has a single writer, so it does not
  * watch.
  */
-export function watchExecution(executionId: string, onSeq: (seq: number) => void): () => void {
-  if (isDesktop) return () => {};
+/** How often the desktop app looks for changes a background sync brought in. */
+const DESKTOP_WATCH_INTERVAL_MS = 5000;
+
+export function watchExecution(
+  executionId: string,
+  onSeq: (seq: number) => void,
+  onSummary?: (summary: ExecutionSummary) => void,
+): () => void {
+  if (isDesktop) {
+    // The desktop app's own writes return their summary; this picks up what
+    // syncing with a server pulled in.
+    let last = "";
+    const timer = window.setInterval(() => {
+      getExecutionState(executionId).then(
+        (summary) => {
+          const json = JSON.stringify(summary);
+          if (last && json !== last) onSummary?.(summary);
+          last = json;
+        },
+        () => undefined,
+      );
+    }, DESKTOP_WATCH_INTERVAL_MS);
+    return () => window.clearInterval(timer);
+  }
   let socket: WebSocket | null = null;
   let retryTimer: number | undefined;
   let retryDelayMs = 1000;
@@ -312,6 +335,32 @@ export async function revokeDeviceToken(id: string): Promise<void> {
   if (!response.ok) throw `HTTP ${response.status}`;
 }
 
+// --- Syncing the desktop app with a server (desktop only) ---
+
+export function getSyncStatus(): Promise<SyncStatus> {
+  return invoke("get_sync_status");
+}
+
+/** Connect the workspace: the browser opens the server's connect page, and this resolves once confirmed there. */
+export function connectServer(server: string, device: string): Promise<SyncStatus> {
+  return invoke("connect_server", { server, device });
+}
+
+export function disconnectServer(): Promise<SyncStatus> {
+  return invoke("disconnect_server");
+}
+
+export function syncNow(): Promise<SyncStatus> {
+  return invoke("sync_now");
+}
+
+/** Events of a linked execution the server refused as malformed. */
+export function listRejected(
+  executionId: string,
+): Promise<{ record: EventRecord; reason: string }[]> {
+  return invoke("list_rejected", { executionId });
+}
+
 // --- Sync for offline recording (browser only) ---
 
 /** Log lines of an execution from position `after` on, and how many there are. */
@@ -349,6 +398,7 @@ export function registerExecution(
 
 /** Events that reached the server after the execution had moved on. */
 export function listConflicts(executionId: string): Promise<Conflict[]> {
+  if (isDesktop) return invoke("list_conflicts", { executionId });
   return request(`/executions/${encodeURIComponent(executionId)}/conflicts`);
 }
 
@@ -357,6 +407,7 @@ export function resolveConflict(
   eventId: string,
   meta: ActionMeta,
 ): Promise<Conflict[]> {
+  if (isDesktop) return invoke("resolve_conflict", { executionId, eventId });
   return postJson(
     `/executions/${encodeURIComponent(executionId)}/conflicts/${encodeURIComponent(eventId)}/resolve`,
     { meta },
