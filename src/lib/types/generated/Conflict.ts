@@ -5,16 +5,18 @@ import type { Resolution } from "./Resolution";
 /**
  * A pushed event that no longer applied to the execution when it arrived.
  */
-export type Conflict = { record: EventRecord, 
-/**
- * Why the execution refused it.
- */
-reason: string, 
-/**
- * ISO 8601 timestamp of when it reached the server.
- */
-received_at: string, 
-/**
- * Set once someone has dealt with it (re-recorded it or decided to drop it).
- */
-resolved?: Resolution, };
+export type Conflict = {
+  record: EventRecord;
+  /**
+   * Why the execution refused it.
+   */
+  reason: string;
+  /**
+   * ISO 8601 timestamp of when it reached the server.
+   */
+  received_at: string;
+  /**
+   * Set once someone has dealt with it (re-recorded it or decided to drop it).
+   */
+  resolved?: Resolution;
+};

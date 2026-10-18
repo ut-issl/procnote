@@ -3,4 +3,9 @@
 /**
  * Metadata for a single file stored as an attachment.
  */
-export type AttachmentRecord = { filename: string, path: string, content_type: string, sha256: string, };
+export type AttachmentRecord = {
+  filename: string;
+  path: string;
+  content_type: string;
+  sha256: string;
+};

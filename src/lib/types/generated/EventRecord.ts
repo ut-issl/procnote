@@ -6,37 +6,156 @@ import type { StepContent } from "./StepContent";
 /**
  * One line of an event log: an event plus its [`EventMeta`].
  */
-export type EventRecord = ({ "type": "execution_started", at: string, execution_id: string, procedure_id: string, procedure_title: string, procedure_version: string, } | { "type": "execution_completed", at: string, execution_id: string, status: CompletionStatus, } | { "type": "execution_aborted", at: string, execution_id: string, reason: string, } | { "type": "execution_reopened", at: string, execution_id: string, reason: string, } | { "type": "step_added", at: string, execution_id: string, 
-/**
- * Stable element ID for this step.
- */
-step_id: string, heading: string, 
-/**
- * Ordered content items from the template (prose, checkboxes, input blocks).
- * Checkbox and input items carry their own IDs.
- */
-content?: Array<StepContent>, 
-/**
- * Insert after this step ID. `None` means append at end.
- */
-after_step_id: string | null, } | { "type": "step_skipped", at: string, execution_id: string, step_id: string, reason: string, } | { "type": "step_unskipped", at: string, execution_id: string, step_id: string, reason: string, } | { "type": "checkbox_toggled", at: string, execution_id: string, step_id: string, checkbox_id: string, checked: boolean, } | { "type": "input_recorded", at: string, execution_id: string, step_id: string, input_id: string, value: string, unit: string | null, } | { "type": "input_cleared", at: string, execution_id: string, step_id: string, input_id: string, reason: string, } | { "type": "note_added", at: string, execution_id: string, note_id: string, text: string, step_id: string | null, } | { "type": "note_removed", at: string, execution_id: string, note_id: string, reason: string, } | { "type": "attachment_added", at: string, execution_id: string, step_id: string, input_id: string, filename: string, path: string, content_type: string, sha256: string, } | { "type": "attachments_added", at: string, execution_id: string, step_id: string, input_id: string, attachments: Array<AttachmentRecord>, } | { "type": "attachment_file_removed", at: string, execution_id: string, step_id: string, input_id: string, path: string, } | { "type": "attachments_cleared", at: string, execution_id: string, step_id: string, input_id: string, } | { "type": "attachment_removed", at: string, execution_id: string, step_id: string, input_id: string, reason: string, } | { "type": "attachment_received", at: string, execution_id: string, attachment: AttachmentRecord, } | { "type": "attachment_assigned", at: string, execution_id: string, step_id: string, input_id: string, path: string, } | { "type": "attachment_unassigned", at: string, execution_id: string, step_id: string, input_id: string, path: string, } | { "type": "execution_renamed", at: string, execution_id: string, name: string, } | { "type": "log_meta", at: string, 
-/**
- * Schema version of the event log (currently 2).
- */
-version: number, 
-/**
- * Version of the procnote tool that created this log.
- */
-tool_version: string, }) & { 
-/**
- * Client-generated ID; a request carrying an already-recorded ID is a retry.
- */
-event_id?: string, 
-/**
- * Name of the operator who performed the action.
- */
-recorded_by?: string, 
-/**
- * Stable identifier of the device the action was performed on.
- */
-device?: string, };
+export type EventRecord = (
+  | {
+      type: "execution_started";
+      at: string;
+      execution_id: string;
+      procedure_id: string;
+      procedure_title: string;
+      procedure_version: string;
+    }
+  | { type: "execution_completed"; at: string; execution_id: string; status: CompletionStatus }
+  | { type: "execution_aborted"; at: string; execution_id: string; reason: string }
+  | { type: "execution_reopened"; at: string; execution_id: string; reason: string }
+  | {
+      type: "step_added";
+      at: string;
+      execution_id: string;
+      /**
+       * Stable element ID for this step.
+       */
+      step_id: string;
+      heading: string;
+      /**
+       * Ordered content items from the template (prose, checkboxes, input blocks).
+       * Checkbox and input items carry their own IDs.
+       */
+      content?: Array<StepContent>;
+      /**
+       * Insert after this step ID. `None` means append at end.
+       */
+      after_step_id: string | null;
+    }
+  | { type: "step_skipped"; at: string; execution_id: string; step_id: string; reason: string }
+  | { type: "step_unskipped"; at: string; execution_id: string; step_id: string; reason: string }
+  | {
+      type: "checkbox_toggled";
+      at: string;
+      execution_id: string;
+      step_id: string;
+      checkbox_id: string;
+      checked: boolean;
+    }
+  | {
+      type: "input_recorded";
+      at: string;
+      execution_id: string;
+      step_id: string;
+      input_id: string;
+      value: string;
+      unit: string | null;
+    }
+  | {
+      type: "input_cleared";
+      at: string;
+      execution_id: string;
+      step_id: string;
+      input_id: string;
+      reason: string;
+    }
+  | {
+      type: "note_added";
+      at: string;
+      execution_id: string;
+      note_id: string;
+      text: string;
+      step_id: string | null;
+    }
+  | { type: "note_removed"; at: string; execution_id: string; note_id: string; reason: string }
+  | {
+      type: "attachment_added";
+      at: string;
+      execution_id: string;
+      step_id: string;
+      input_id: string;
+      filename: string;
+      path: string;
+      content_type: string;
+      sha256: string;
+    }
+  | {
+      type: "attachments_added";
+      at: string;
+      execution_id: string;
+      step_id: string;
+      input_id: string;
+      attachments: Array<AttachmentRecord>;
+    }
+  | {
+      type: "attachment_file_removed";
+      at: string;
+      execution_id: string;
+      step_id: string;
+      input_id: string;
+      path: string;
+    }
+  | {
+      type: "attachments_cleared";
+      at: string;
+      execution_id: string;
+      step_id: string;
+      input_id: string;
+    }
+  | {
+      type: "attachment_removed";
+      at: string;
+      execution_id: string;
+      step_id: string;
+      input_id: string;
+      reason: string;
+    }
+  | { type: "attachment_received"; at: string; execution_id: string; attachment: AttachmentRecord }
+  | {
+      type: "attachment_assigned";
+      at: string;
+      execution_id: string;
+      step_id: string;
+      input_id: string;
+      path: string;
+    }
+  | {
+      type: "attachment_unassigned";
+      at: string;
+      execution_id: string;
+      step_id: string;
+      input_id: string;
+      path: string;
+    }
+  | { type: "execution_renamed"; at: string; execution_id: string; name: string }
+  | {
+      type: "log_meta";
+      at: string;
+      /**
+       * Schema version of the event log (currently 2).
+       */
+      version: number;
+      /**
+       * Version of the procnote tool that created this log.
+       */
+      tool_version: string;
+    }
+) & {
+  /**
+   * Client-generated ID; a request carrying an already-recorded ID is a retry.
+   */
+  event_id?: string;
+  /**
+   * Name of the operator who performed the action.
+   */
+  recorded_by?: string;
+  /**
+   * Stable identifier of the device the action was performed on.
+   */
+  device?: string;
+};

@@ -6,4 +6,36 @@ import type { StepContent } from "./StepContent";
 /**
  * Action payload from the frontend for recording events.
  */
-export type ExecutionAction = { "action": "skip_step", step_id: string, reason: string, } | { "action": "unskip_step", step_id: string, reason: string, } | { "action": "toggle_checkbox", step_id: string, checkbox_id: string, checked: boolean, } | { "action": "record_input", step_id: string, input_id: string, value: string, unit?: string, } | { "action": "clear_input", step_id: string, input_id: string, reason: string, } | { "action": "add_note", text: string, step_id?: string, } | { "action": "remove_note", note_id: string, reason: string, } | { "action": "add_step", step_id: string, heading: string, content: Array<StepContent>, after_step_id?: string, } | { "action": "add_attachment", step_id: string, input_id: string, filename: string, path: string, content_type: string, } | { "action": "add_attachments", step_id: string, input_id: string, files: Array<AttachmentSource>, } | { "action": "remove_attachment_file", step_id: string, input_id: string, path: string, } | { "action": "clear_attachments", step_id: string, input_id: string, } | { "action": "remove_attachment", step_id: string, input_id: string, reason: string, } | { "action": "assign_attachment", step_id: string, input_id: string, path: string, } | { "action": "unassign_attachment", step_id: string, input_id: string, path: string, } | { "action": "complete", status: CompletionStatus, } | { "action": "abort", reason: string, } | { "action": "rename_execution", name: string, } | { "action": "reopen_execution", reason: string, };
+export type ExecutionAction =
+  | { action: "skip_step"; step_id: string; reason: string }
+  | { action: "unskip_step"; step_id: string; reason: string }
+  | { action: "toggle_checkbox"; step_id: string; checkbox_id: string; checked: boolean }
+  | { action: "record_input"; step_id: string; input_id: string; value: string; unit?: string }
+  | { action: "clear_input"; step_id: string; input_id: string; reason: string }
+  | { action: "add_note"; text: string; step_id?: string }
+  | { action: "remove_note"; note_id: string; reason: string }
+  | {
+      action: "add_step";
+      step_id: string;
+      heading: string;
+      content: Array<StepContent>;
+      after_step_id?: string;
+    }
+  | {
+      action: "add_attachment";
+      step_id: string;
+      input_id: string;
+      filename: string;
+      path: string;
+      content_type: string;
+    }
+  | { action: "add_attachments"; step_id: string; input_id: string; files: Array<AttachmentSource> }
+  | { action: "remove_attachment_file"; step_id: string; input_id: string; path: string }
+  | { action: "clear_attachments"; step_id: string; input_id: string }
+  | { action: "remove_attachment"; step_id: string; input_id: string; reason: string }
+  | { action: "assign_attachment"; step_id: string; input_id: string; path: string }
+  | { action: "unassign_attachment"; step_id: string; input_id: string; path: string }
+  | { action: "complete"; status: CompletionStatus }
+  | { action: "abort"; reason: string }
+  | { action: "rename_execution"; name: string }
+  | { action: "reopen_execution"; reason: string };

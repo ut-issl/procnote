@@ -3,4 +3,4 @@
 /**
  * A file selected by the trusted native file picker for attachment storage.
  */
-export type AttachmentSource = { filename: string, path: string, content_type: string, };
+export type AttachmentSource = { filename: string; path: string; content_type: string };

@@ -6,16 +6,17 @@
  * Stored on the same JSONL line as the event's own fields. Every field is
  * optional so logs written before these fields existed read unchanged.
  */
-export type EventMeta = { 
-/**
- * Client-generated ID; a request carrying an already-recorded ID is a retry.
- */
-event_id?: string, 
-/**
- * Name of the operator who performed the action.
- */
-recorded_by?: string, 
-/**
- * Stable identifier of the device the action was performed on.
- */
-device?: string, };
+export type EventMeta = {
+  /**
+   * Client-generated ID; a request carrying an already-recorded ID is a retry.
+   */
+  event_id?: string;
+  /**
+   * Name of the operator who performed the action.
+   */
+  recorded_by?: string;
+  /**
+   * Stable identifier of the device the action was performed on.
+   */
+  device?: string;
+};
