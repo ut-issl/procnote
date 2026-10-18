@@ -15,8 +15,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 chrono = { workspace = true, features = ["wasmbind"] }
-# rand 0.8 (via names) needs getrandom 0.2 to know it runs in a browser.
-getrandom = { workspace = true, features = ["js"] }
+names = { workspace = true, features = ["wasm_js"] }
 procnote-app = { path = "../procnote-app", default-features = false }
 procnote-core = { path = "../procnote-core" }
 serde.workspace = true
