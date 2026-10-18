@@ -59,6 +59,8 @@ export default function ExecutionPage() {
   const [editNameValue, setEditNameValue] = useState("");
   const [savingName, setSavingName] = useState(false);
   const [dropPointEnabled, setDropPointEnabled] = useState(false);
+  // In the desktop app, phones send through the server only for executions that sync with it.
+  const [phoneUploadAvailable, setPhoneUploadAvailable] = useState(!isDesktop);
   const [layout, setLayout] = useLayout();
   const [showPhoneUpload, setShowPhoneUpload] = useState(false);
 
@@ -66,12 +68,16 @@ export default function ExecutionPage() {
     if (!executionId) return;
     let cancelled = false;
     void (async () => {
-      const [dropPointResult] = await Promise.allSettled([
+      const [dropPointResult, linkResult] = await Promise.allSettled([
         api.isDropPointConfigured(),
+        api.executionLink(executionId),
         executionStore.load(executionId),
       ]);
       if (cancelled) return;
       setDropPointEnabled(dropPointResult.status === "fulfilled" ? dropPointResult.value : false);
+      if (isDesktop) {
+        setPhoneUploadAvailable(linkResult.status === "fulfilled" && linkResult.value !== null);
+      }
     })();
     return () => {
       cancelled = true;
@@ -255,7 +261,7 @@ export default function ExecutionPage() {
                   <button className="btn btn-secondary" onClick={() => setShowAddStepDialog(true)}>
                     + Add Step
                   </button>
-                  {!isDesktop && (
+                  {phoneUploadAvailable && (
                     <button className="btn btn-secondary" onClick={() => setShowPhoneUpload(true)}>
                       Phone upload
                     </button>

@@ -20,8 +20,9 @@ use commands::execution::{
     record_action, reveal_execution_dir, start_execution,
 };
 use commands::server::{
-    connect_server, disconnect_server, get_sync_status, list_conflicts, list_rejected,
-    resolve_conflict, sync_now,
+    connect_server, create_upload_link, disconnect_server, execution_link, get_sync_status,
+    list_conflicts, list_rejected, list_server_executions, open_server_execution, resolve_conflict,
+    revoke_upload_link, sync_now,
 };
 use commands::template::{get_template, list_templates};
 use drop_point::{DropPointClient, DropPointConfig, DropPointSessions};
@@ -146,6 +147,11 @@ fn run_with_workspace(workspace: &Path) {
             list_conflicts,
             resolve_conflict,
             list_rejected,
+            execution_link,
+            create_upload_link,
+            revoke_upload_link,
+            list_server_executions,
+            open_server_execution,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

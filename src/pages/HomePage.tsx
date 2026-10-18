@@ -4,7 +4,7 @@ import * as api from "#lib/api/commands.js";
 import TemplateList from "#lib/components/TemplateList.js";
 import { fetchOrKept, localExecutions } from "#lib/offline/index.js";
 import { isUnreachable } from "#lib/offline/localExecutions.js";
-import { logWarn } from "#lib/platform.js";
+import { isDesktop, logWarn } from "#lib/platform.js";
 import { executionStore } from "#lib/stores/execution.js";
 import { useExecutionStore } from "#lib/stores/useExecutionStore.js";
 import type { ExecutionSummary, TemplateSummary } from "#lib/types/index.js";
@@ -40,6 +40,8 @@ export default function HomePage() {
   const [error, setError] = useState<string | null>(null);
   const [selectedProcedure, setSelectedProcedure] = useState("all");
   const [shared, setShared] = useState<api.CollabTemplateSummary[] | null>(null);
+  // Desktop app connected to a server: its executions not kept here yet.
+  const [onServer, setOnServer] = useState<ExecutionSummary[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -63,6 +65,18 @@ export default function HomePage() {
           .catch(() => undefined);
       } catch (e) {
         void logWarn(`[home] listCollabTemplates failed: ${e}`);
+      }
+
+      if (isDesktop) {
+        try {
+          const status = await api.getSyncStatus();
+          if (status.connected) {
+            const listed = await api.listServerExecutions();
+            if (!cancelled) setOnServer(listed);
+          }
+        } catch (e) {
+          void logWarn(`[home] listServerExecutions failed: ${e}`);
+        }
       }
 
       try {
@@ -101,6 +115,15 @@ export default function HomePage() {
     try {
       const id = await api.createCollabTemplate(template.path);
       navigate(`/templates/shared/${id}`);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function openFromServer(executionId: string) {
+    try {
+      await api.openServerExecution(executionId);
+      navigate(`/execution/${executionId}`);
     } catch (e) {
       setError(String(e));
     }
@@ -176,6 +199,39 @@ export default function HomePage() {
               ))}
             </div>
           )}
+        </section>
+      )}
+
+      {onServer.length > 0 && (
+        <section className={c("section")}>
+          <h2 className={c("section-title")}>On the Server</h2>
+          <p className={c("empty")}>
+            Executions recorded elsewhere. Open one here to keep a copy in this workspace; it syncs
+            from then on, also offline.
+          </p>
+          <div className={c("execution-list")}>
+            {onServer.map((exec) => (
+              <div key={exec.execution_id} className={c("shared-card")}>
+                <div className={c("execution-card")}>
+                  <div className={c("exec-header")}>
+                    <span className={c("exec-name")}>{exec.name ?? exec.procedure_id}</span>
+                    <span className={c("exec-status")}>{exec.status}</span>
+                  </div>
+                  <div className={c("exec-meta")}>
+                    <span>
+                      {exec.procedure_title} ({exec.procedure_id}) v{exec.procedure_version}
+                    </span>
+                  </div>
+                </div>
+                <button
+                  className="btn btn-secondary"
+                  onClick={() => openFromServer(exec.execution_id)}
+                >
+                  Open here
+                </button>
+              </div>
+            ))}
+          </div>
         </section>
       )}
 

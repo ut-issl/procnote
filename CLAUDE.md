@@ -45,7 +45,7 @@
 
 - `AppState` holds the `procedures_dir` path, DropPoint configuration, and the attachment grants issued by the native file picker.
 - Attachment actions are authorized against those grants before being passed to `procnote_app::execution::record_action`.
-- `server_sync.rs` holds the workspace's server link and runs a background loop that syncs linked executions every 30 s and after each action (`commands/server.rs`: connect, disconnect, sync now, status, conflicts, rejected). While connected, new executions are linked (`ExecutionStore::link`). The header shows `DesktopSyncStatus`; the execution page polls so synced changes appear.
+- `server_sync.rs` holds the workspace's server link and runs a background loop that syncs linked executions every 30 s and after each action (`commands/server.rs`: connect, disconnect, sync now, status, conflicts, rejected). While connected, new executions are linked (`ExecutionStore::link`). The header shows `DesktopSyncStatus`; the execution page polls so synced changes appear. While connected, the home page lists the server's executions not kept here ("Open here" keeps a linked copy), linked executions get phone upload links from the server (files reach the inbox on the next sync), and DropPoint is offered only when standalone (sessions in progress still finish).
 
 ### API server (`procnote-server`)
 

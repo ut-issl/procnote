@@ -28,8 +28,7 @@ export default function PhoneUploadDialog({
     let cancelled = false;
     void (async () => {
       try {
-        const token = await api.createUploadLink(executionId);
-        const link = `${window.location.origin}/upload/${token}`;
+        const link = await api.createUploadLink(executionId);
         const svg = await QRCode.toString(link, { type: "svg", margin: 1 });
         if (cancelled) return;
         setUrl(link);

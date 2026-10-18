@@ -28,5 +28,6 @@ workspace = true
 [dev-dependencies]
 axum.workspace = true
 procnote-server = { path = "../procnote-server" }
+reqwest = { workspace = true, features = ["multipart"] }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
