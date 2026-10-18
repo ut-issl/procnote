@@ -16,6 +16,7 @@
   3. **`src-tauri/`** — Thin Tauri shell. Exposes `procnote-app` operations as IPC commands and owns desktop-only concerns: the native file picker and its attachment grants, revealing directories, and DropPoint.
   4. **`src/`** — React + Vite SPA frontend (react-router), shared by the desktop app and the browser.
 - **`crates/procnote-server/`** is an axum HTTP shell over `procnote-app`, parallel to `src-tauri`, for using the same UI from a browser. It must never depend on Tauri.
+- **`crates/procnote-wasm/`** builds the execution logic (`procnote-core` and `procnote-app` without its `fs` feature) to WebAssembly for the browser, so actions can be recorded offline with the same state machine as the server. `pnpm run build:wasm` (`just build-wasm`, also run by `pnpm build`) compiles it and generates `src/lib/wasm/pkg/` (git-ignored) with the `wasm-bindgen` CLI, which must match the crate's version; `src/lib/wasm/core.ts` wraps it. Type checking and frontend tests need it built.
 - **`collab/`** is the Node collab service (Hocuspocus) for collaborative template editing on the server; see below.
 - **`crates/procnote-launcher/`** is a Tauri-free console adapter outside those domain layers. It owns `procnote [WORKSPACE]`, prints help/version synchronously, and detaches the packaged GUI. It must never depend on `procnote-tauri`, Tauri, or GUI/dialog libraries.
 
@@ -31,6 +32,7 @@
 
 ### Application layer (`procnote-app`)
 
+- The filesystem storage (`persistence/`, which needs `fs2` file locks) is behind the default `fs` feature, so the rest builds for WebAssembly. Pure attachment helpers (naming, hashing) live in `attachment.rs`.
 - Operations take `procedures_dir: &Path` explicitly. Each procedure is a subdirectory containing `template.md` and `.executions/`.
 - `summarize()` converts `ExecutionState` + raw events into `ExecutionSummary` DTO for the frontend, building timestamp maps from the replayed event stream.
 - Execution storage is behind the `ExecutionRepository` trait (`repository.rs`); `ExecutionStore` is the filesystem implementation. What to record is decided by pure functions there (`decide_action`, `decide_receive`), and `record` applies the decision atomically, skipping retried `event_id`s.

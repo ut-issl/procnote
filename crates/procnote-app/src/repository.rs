@@ -1,7 +1,7 @@
 //! Where executions are stored, independent of the storage technology.
 //!
 //! [`ExecutionRepository`] is implemented by the filesystem store
-//! ([`crate::persistence::execution_store::ExecutionStore`]) and, for the
+//! (`persistence::execution_store::ExecutionStore`) and, for the
 //! server, by database-backed stores. Deciding *what* to record is shared
 //! and pure ([`decide_action`], [`decide_receive`]); the repository decides
 //! *how* to record it atomically.
@@ -13,8 +13,8 @@ use procnote_core::execution::ExecutionState;
 use procnote_core::template::types::ProcedureTemplate;
 
 use crate::action::ExecutionAction;
+use crate::attachment::{compute_sha256, sanitize_attachment_filename};
 use crate::execution::infer_attachment_content_type;
-use crate::persistence::attachment_store::{compute_sha256, sanitize_attachment_filename};
 
 /// An execution as stored: its replayed state and, for file storage, the
 /// directory it lives in.

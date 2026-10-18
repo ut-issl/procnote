@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use object_store::{ObjectStore, ObjectStoreExt, PutMode};
-use procnote_app::persistence::attachment_store::sha256_hex;
+use procnote_app::attachment::sha256_hex;
 use procnote_app::repository::{
     Decide, ExecutionRepository, NewExecution, StagedFile, StoredExecution, TemplateSnapshot,
     apply_decision,
@@ -22,7 +22,6 @@ use procnote_app::repository::{
 use procnote_core::event::SUPPORTED_VERSION;
 use procnote_core::event::types::{AttachmentRecord, Event, EventMeta, EventRecord, ExecutionId};
 use procnote_core::execution::ExecutionState;
-use serde::Deserialize;
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::types::Json;
 use tokio::runtime::Handle;
@@ -443,11 +442,7 @@ async fn insert_event(
 /// Parse a stored log line, as the file log reader does: the event and its
 /// metadata are read from the same JSON object.
 fn parse_record(value: &serde_json::Value) -> Result<EventRecord, String> {
-    let invalid = |e: serde_json::Error| format!("invalid stored event: {e}");
-    Ok(EventRecord {
-        event: Event::deserialize(value).map_err(invalid)?,
-        meta: EventMeta::deserialize(value).map_err(invalid)?,
-    })
+    EventRecord::from_value(value).map_err(|e| format!("invalid stored event: {e}"))
 }
 
 /// Replay a log whose first line is a `LogMeta` of the supported version.
