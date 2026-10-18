@@ -3,17 +3,16 @@
 /**
  * Who performs an action and from where, sent by the frontend with each action.
  */
-export type ActionMeta = {
-  /**
-   * Client-generated ID used to recognize retries of the same action.
-   */
-  event_id?: string;
-  /**
-   * Operator name as entered in the UI.
-   */
-  recorded_by?: string;
-  /**
-   * Stable per-device identifier.
-   */
-  device?: string;
-};
+export type ActionMeta = { 
+/**
+ * Client-generated ID used to recognize retries of the same action.
+ */
+event_id?: string, 
+/**
+ * Operator name as entered in the UI.
+ */
+recorded_by?: string, 
+/**
+ * Stable per-device identifier.
+ */
+device?: string, };

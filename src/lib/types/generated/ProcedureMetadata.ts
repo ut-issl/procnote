@@ -4,11 +4,4 @@ import type { Equipment } from "./Equipment";
 /**
  * YAML frontmatter metadata for a procedure.
  */
-export type ProcedureMetadata = {
-  id: string;
-  title: string;
-  version: string;
-  author?: string;
-  equipment: Array<Equipment>;
-  requirement_traces: Array<string>;
-};
+export type ProcedureMetadata = { id: string, title: string, version: string, author?: string, equipment: Array<Equipment>, requirement_traces: Array<string>, };

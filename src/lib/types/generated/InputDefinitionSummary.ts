@@ -6,8 +6,4 @@ import type { InputState } from "./InputState";
 /**
  * An input definition paired with its optional recorded value.
  */
-export type InputDefinitionSummary = {
-  definition: InputDefinition;
-  recorded?: InputState;
-  attachments: Array<AttachmentState>;
-};
+export type InputDefinitionSummary = { definition: InputDefinition, recorded?: InputState, attachments: Array<AttachmentState>, };

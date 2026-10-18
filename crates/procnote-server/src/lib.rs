@@ -7,6 +7,7 @@
 
 pub mod access;
 pub mod collab;
+pub mod device_tokens;
 mod live;
 pub mod postgres;
 pub mod transfer;
@@ -22,7 +23,7 @@ use axum::extract::{DefaultBodyLimit, Multipart, Path, Query, Request, State};
 use axum::http::StatusCode;
 use axum::middleware::{Next, from_fn_with_state};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::{Extension, Json, Router};
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
@@ -30,6 +31,7 @@ use tower_http::services::{ServeDir, ServeFile};
 
 use access::{AccessConfig, AccessVerifier, Identity, token_from_headers};
 use collab::{CollabTemplateSummary, CollabTemplates};
+use device_tokens::{DeviceToken, DeviceTokens};
 use live::LiveUpdates;
 use procnote_app::action::{ActionMeta, AttachmentSource, ExecutionAction};
 use procnote_app::execution::{ExecutionSummary, infer_attachment_content_type};
@@ -81,6 +83,7 @@ struct AppState {
     live: LiveUpdates,
     access: Option<AccessVerifier>,
     collab: Option<CollabTemplates>,
+    devices: DeviceTokens,
 }
 
 type SharedState = Arc<AppState>;
@@ -98,19 +101,19 @@ pub fn router(config: ServerConfig) -> std::io::Result<Router> {
             Auth::Disabled => None,
         },
         collab: config.collab,
+        devices: DeviceTokens::new(config.state_dir.join("device-tokens"))?,
     });
 
-    // Upload links are reached by phones without logging in (they are an
-    // Access Bypass); the random token in the path is their credential.
-    let link_routes = Router::new()
-        .route("/upload-links/{token}", get(upload_link_target))
-        .route(
-            "/upload-links/{token}/files",
-            post(upload_to_link).layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES)),
-        );
+    let link_routes = link_routes();
+    let device_routes = device_routes(&state);
 
     let api = Router::new()
         .route("/me", get(me))
+        .route(
+            "/device-tokens",
+            get(list_device_tokens).post(issue_device_token),
+        )
+        .route("/device-tokens/{id}", delete(revoke_device_token))
         .route("/templates", get(list_templates))
         .route("/templates/content", get(get_template))
         .route(
@@ -156,6 +159,7 @@ pub fn router(config: ServerConfig) -> std::io::Result<Router> {
         )
         .route_layer(from_fn_with_state(state.clone(), require_identity))
         .merge(link_routes)
+        .merge(device_routes)
         .fallback(|| async { ApiError::new(StatusCode::NOT_FOUND, "no such API endpoint") })
         .with_state(state);
 
@@ -167,6 +171,81 @@ pub fn router(config: ServerConfig) -> std::io::Result<Router> {
         }
         None => app,
     })
+}
+
+/// Upload links are reached by phones without logging in (they are an
+/// Access Bypass); the random token in the path is their credential.
+fn link_routes() -> Router<SharedState> {
+    Router::new()
+        .route("/upload-links/{token}", get(upload_link_target))
+        .route(
+            "/upload-links/{token}/files",
+            post(upload_to_link).layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES)),
+        )
+}
+
+/// Desktop apps sync with a device token instead of an Access session
+/// (`/api/device/*` is an Access Bypass); see [`device_tokens`].
+fn device_routes(state: &SharedState) -> Router<SharedState> {
+    Router::new()
+        .route("/device/me", get(device_me))
+        .route("/device/executions", get(list_executions))
+        .route(
+            "/device/executions/{id}",
+            get(device_execution).put(create_started_execution),
+        )
+        .route(
+            "/device/executions/{id}/events",
+            get(pull_events).post(push_events),
+        )
+        .route("/device/executions/{id}/conflicts", get(list_conflicts))
+        .route(
+            "/device/executions/{id}/conflicts/{event_id}/resolve",
+            post(resolve_conflict),
+        )
+        .route(
+            "/device/executions/{id}/attachments",
+            get(device_attachment),
+        )
+        .route(
+            "/device/executions/{id}/upload-link",
+            get(get_upload_link)
+                .post(create_upload_link)
+                .delete(revoke_upload_link),
+        )
+        .route(
+            "/device/uploads",
+            post(upload).layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES)),
+        )
+        .route_layer(from_fn_with_state(state.clone(), require_device))
+}
+
+/// Reject requests without a valid device token, and attach its owner as
+/// the caller's [`Identity`] (and the token as a [`DeviceToken`]).
+async fn require_device(
+    State(state): State<SharedState>,
+    mut request: Request,
+    next: Next,
+) -> Response {
+    let token = request
+        .headers()
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "));
+    match token.and_then(|token| state.devices.resolve(token)) {
+        Some(device) => {
+            // Without Access (development) tokens have no owner to attribute to.
+            if !device.email.is_empty() {
+                request.extensions_mut().insert(Identity {
+                    email: device.email.clone(),
+                });
+            }
+            request.extensions_mut().insert(device);
+            next.run(request).await
+        }
+        None => ApiError::new(StatusCode::UNAUTHORIZED, "a valid device token is required")
+            .into_response(),
+    }
 }
 
 /// Reject requests without a valid Access token, and attach the caller's
@@ -528,6 +607,121 @@ async fn record_action(
     .await?;
     live_state.live.publish(id, summary.seq);
     Ok(Json(summary))
+}
+
+#[derive(Deserialize)]
+struct IssueDeviceTokenRequest {
+    /// The device's name, e.g. "bench PC".
+    device: String,
+}
+
+#[derive(Serialize)]
+struct IssuedDeviceToken {
+    /// Shown once; only its hash is kept.
+    token: String,
+    #[serde(flatten)]
+    info: DeviceToken,
+}
+
+/// Issue a device token for the signed-in caller's desktop app.
+async fn issue_device_token(
+    State(state): State<SharedState>,
+    identity: Option<Extension<Identity>>,
+    Json(request): Json<IssueDeviceTokenRequest>,
+) -> Result<Json<IssuedDeviceToken>, ApiError> {
+    if request.device.trim().is_empty() {
+        return Err(ApiError::bad_request("name the device"));
+    }
+    let email = identity
+        .map(|Extension(identity)| identity.email)
+        .unwrap_or_default();
+    let (token, info) = state
+        .devices
+        .issue(&email, &request.device, chrono::Utc::now())
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(Json(IssuedDeviceToken { token, info }))
+}
+
+async fn list_device_tokens(
+    State(state): State<SharedState>,
+    identity: Option<Extension<Identity>>,
+) -> Result<Json<Vec<DeviceToken>>, ApiError> {
+    let email = identity
+        .map(|Extension(identity)| identity.email)
+        .unwrap_or_default();
+    state
+        .devices
+        .list(&email)
+        .map(Json)
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))
+}
+
+async fn revoke_device_token(
+    State(state): State<SharedState>,
+    Path(id): Path<uuid::Uuid>,
+    identity: Option<Extension<Identity>>,
+) -> Result<StatusCode, ApiError> {
+    let email = identity
+        .map(|Extension(identity)| identity.email)
+        .unwrap_or_default();
+    match state.devices.revoke(&email, id) {
+        Ok(true) => Ok(StatusCode::NO_CONTENT),
+        Ok(false) => Err(ApiError::new(StatusCode::NOT_FOUND, "no such device token")),
+        Err(e) => Err(ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e)),
+    }
+}
+
+/// Who a device token belongs to.
+async fn device_me(Extension(device): Extension<DeviceToken>) -> Json<DeviceToken> {
+    Json(device)
+}
+
+#[derive(Serialize)]
+struct DeviceExecution {
+    procedure: String,
+    /// `"markdown"` or `"json"`.
+    template_format: &'static str,
+    template: String,
+    records: Vec<EventRecord>,
+}
+
+/// Everything a desktop app needs to keep a copy of an execution.
+async fn device_execution(
+    State(state): State<SharedState>,
+    Path(id): Path<ExecutionId>,
+) -> Result<Json<DeviceExecution>, ApiError> {
+    blocking(move || {
+        let records = state.executions.records(id)?;
+        let template = state.executions.template_snapshot(id)?;
+        let summary = procnote_app::execution::get_execution(state.executions.as_ref(), id)?;
+        Ok(DeviceExecution {
+            procedure: summary.procedure_id,
+            template_format: template.format(),
+            template: template.text().to_string(),
+            records,
+        })
+    })
+    .await
+    .map(Json)
+}
+
+#[derive(Deserialize)]
+struct AttachmentQuery {
+    path: String,
+}
+
+/// The content of an execution's attachment, for a desktop app's copy.
+async fn device_attachment(
+    State(state): State<SharedState>,
+    Path(id): Path<ExecutionId>,
+    Query(query): Query<AttachmentQuery>,
+) -> Result<Response, ApiError> {
+    let bytes = blocking(move || state.executions.read_attachment(id, &query.path)).await?;
+    Ok((
+        [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
+        bytes,
+    )
+        .into_response())
 }
 
 #[derive(Deserialize)]

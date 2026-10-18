@@ -3,8 +3,4 @@
 /**
  * What happened to one pushed event.
  */
-export type PushOutcome =
-  | { outcome: "recorded" }
-  | { outcome: "duplicate" }
-  | { outcome: "conflict"; reason: string }
-  | { outcome: "rejected"; reason: string };
+export type PushOutcome = { "outcome": "recorded" } | { "outcome": "duplicate" } | { "outcome": "conflict", reason: string, } | { "outcome": "rejected", reason: string, };
