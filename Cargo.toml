@@ -1,6 +1,12 @@
 [workspace]
 resolver = "3"
-members = ["crates/procnote-app", "crates/procnote-core", "crates/procnote-launcher", "src-tauri"]
+members = [
+  "crates/procnote-app",
+  "crates/procnote-core",
+  "crates/procnote-launcher",
+  "crates/procnote-server",
+  "src-tauri",
+]
 
 [workspace.package]
 version = "0.0.5"
@@ -12,10 +18,13 @@ keywords = ["checklist", "event-sourcing", "procedure", "tauri"]
 categories = ["command-line-utilities"]
 
 [workspace.dependencies]
+axum = "0.8.9"
 base64 = "0.23.1"
 chrono = { version = "0.4.43", features = ["serde"] }
 clap = { version = "4.5.56", features = ["derive"] }
+env_logger = "0.11.11"
 fs2 = "0.4.3"
+http-body-util = "0.1.5"
 log = "0.4"
 names = { version = "0.14.0", default-features = false }
 pulldown-cmark = "0.13.0"
@@ -30,6 +39,9 @@ tauri-plugin-log = "2"
 tauri-plugin-opener = "2.5.3"
 tempfile = "3.24.0"
 thiserror = "2.0.18"
+tokio = "1.53.3"
+tower = "0.5.3"
+tower-http = "0.7.1"
 ts-rs = { version = "12.0.1", features = ["chrono-impl", "uuid-impl"] }
 uuid = { version = "1.20.0", features = ["serde", "v4"] }
 

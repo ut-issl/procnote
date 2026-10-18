@@ -27,23 +27,12 @@ fn authorize_attachment_action(
     state: &AppState,
     action: &mut ExecutionAction,
 ) -> Result<(), String> {
-    match action {
-        ExecutionAction::AddAttachment {
-            filename,
-            path,
-            content_type,
-            ..
-        } => authorize_attachment_source(state, filename, path, content_type),
-        ExecutionAction::AddAttachments { files, .. } => files.iter_mut().try_for_each(|source| {
-            authorize_attachment_source(
-                state,
-                &mut source.filename,
-                &mut source.path,
-                &mut source.content_type,
-            )
-        }),
-        _ => Ok(()),
-    }
+    action
+        .attachment_sources_mut()
+        .into_iter()
+        .try_for_each(|source| {
+            authorize_attachment_source(state, source.filename, source.path, source.content_type)
+        })
 }
 
 fn authorize_attachment_source(

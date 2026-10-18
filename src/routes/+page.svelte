@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
-	import { warn } from '@tauri-apps/plugin-log';
+	import { logWarn } from '#lib/platform.js';
 	import type { TemplateSummary, ExecutionSummary } from '#lib/types/index.js';
 	import * as api from '#lib/api/commands.js';
 	import { executionStore } from '#lib/stores/execution.svelte.js';
@@ -45,7 +45,7 @@
 		try {
 			executions = await api.listExecutions();
 		} catch (e) {
-			warn(`[home] listExecutions failed: ${e}`);
+			logWarn(`[home] listExecutions failed: ${e}`);
 		} finally {
 			loadingExecutions = false;
 		}

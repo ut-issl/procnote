@@ -12,6 +12,14 @@ dev *args='':
 dev-frontend:
     pnpm dev
 
+# Start the API server for browser use (frontend via `just dev-frontend`, which proxies /api)
+dev-server *args='':
+    cargo run -p procnote-server -- {{ justfile_directory() }}/procedures {{ args }}
+
+# Build the frontend and serve it with the API server (pass --listen 0.0.0.0:5181 for other devices)
+serve *args='': build-frontend
+    cargo run --release -p procnote-server -- {{ justfile_directory() }}/procedures --static-dir {{ justfile_directory() }}/build {{ args }}
+
 # --- Build ---
 
 # Build the full Tauri application
