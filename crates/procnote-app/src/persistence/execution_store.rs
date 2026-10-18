@@ -11,6 +11,7 @@ use uuid::Uuid;
 use crate::persistence::attachment_store::AttachmentStore;
 use crate::persistence::conflict_log;
 use crate::persistence::event_log::{EventLog, sync_dir};
+use crate::persistence::outbox::{self, Rejected, SyncState};
 use crate::repository::{
     Decide, ExecutionRepository, NewExecution, StoredExecution, TemplateSnapshot, apply_decision,
 };
@@ -129,7 +130,11 @@ impl ExecutionRepository for ExecutionStore {
 
         event_log
             .with_exclusive_lock(|| {
-                let records = transaction_log.read_records().map_err(|e| e.to_string())?;
+                let linked = outbox::read_state(&execution_dir)?;
+                let mut records = transaction_log.read_records().map_err(|e| e.to_string())?;
+                if let Some(sync) = linked {
+                    records.extend(unhandled(&execution_dir, sync)?);
+                }
                 let events: Vec<Event> = records.iter().map(|r| r.event.clone()).collect();
                 let mut state = ExecutionState::from_events(&events).map_err(|e| e.to_string())?;
 
@@ -155,9 +160,15 @@ impl ExecutionRepository for ExecutionStore {
                         meta: meta.clone(),
                     })
                     .collect();
-                transaction_log
-                    .append_batch_durable(&appended)
-                    .map_err(|e| e.to_string())?;
+                // A linked execution's log is the server's; what's recorded
+                // here waits in pending.jsonl until the server confirms it.
+                if linked.is_some() {
+                    outbox::append_pending(&execution_dir, &appended)?;
+                } else {
+                    transaction_log
+                        .append_batch_durable(&appended)
+                        .map_err(|e| e.to_string())?;
+                }
                 if let Err(e) = write_execution_snapshot_durable(&execution_dir, &state) {
                     log::warn!(
                         "failed to update execution snapshot for {execution_id} after appending events: {e}"
@@ -312,6 +323,248 @@ impl ExecutionStore {
     }
 }
 
+/// What a linked execution has to send, read under the log's lock.
+#[derive(Debug)]
+pub struct Outbox {
+    pub sync: SyncState,
+    /// The log as it is here (for registering an execution started here).
+    pub records: Vec<EventRecord>,
+    /// Pending lines not dealt with yet, in order.
+    pub pending: Vec<EventRecord>,
+    /// The pending line count once these are dealt with.
+    pub pending_upto: usize,
+    /// Files the pending events attach, with where their content is.
+    pub files: Vec<(AttachmentRecord, PathBuf)>,
+}
+
+/// The outcome of one sync, applied by [`ExecutionStore::settle`].
+#[derive(Debug, Default)]
+pub struct Settlement {
+    /// The server now has the execution.
+    pub registered: bool,
+    /// Pending lines up to here were dealt with by the server.
+    pub pending_upto: usize,
+    /// Pushed events the server refused.
+    pub rejected: Vec<Rejected>,
+    /// Log lines the server has after the ones here, in its order.
+    pub pulled: Vec<EventRecord>,
+    /// How many log lines the server had before `pulled`.
+    pub pulled_after: usize,
+}
+
+impl ExecutionStore {
+    fn log_of(execution_dir: &Path) -> EventLog {
+        EventLog::new(execution_dir.join("events.jsonl"))
+    }
+
+    /// Link an execution to the server: from now on what's recorded here
+    /// waits in `pending.jsonl` until the server confirms it. Linking a
+    /// linked execution changes nothing.
+    pub fn link(&self, execution_id: ExecutionId, registered: bool) -> Result<(), String> {
+        let execution_dir = self.existing_dir(execution_id)?;
+        Self::log_of(&execution_dir)
+            .with_exclusive_lock(|| {
+                if outbox::read_state(&execution_dir)?.is_some() {
+                    return Ok(());
+                }
+                outbox::write_state(
+                    &execution_dir,
+                    SyncState {
+                        registered,
+                        handled: 0,
+                    },
+                )
+            })
+            .map_err(|e| e.to_string())?
+    }
+
+    /// The sync state, or `None` when the execution isn't linked.
+    pub fn sync_state(&self, execution_id: ExecutionId) -> Result<Option<SyncState>, String> {
+        outbox::read_state(&self.existing_dir(execution_id)?)
+    }
+
+    /// Linked executions here, with their sync state.
+    pub fn linked(&self) -> Result<Vec<(ExecutionId, SyncState)>, String> {
+        let mut linked = Vec::new();
+        for dir in execution_dirs(&self.procedures_dir)? {
+            if let Some(sync) = outbox::read_state(&dir)?
+                && let Some(id) = read_state(&dir)?.execution_id
+            {
+                linked.push((id, sync));
+            }
+        }
+        Ok(linked)
+    }
+
+    /// What a linked execution has to send.
+    pub fn outbox(&self, execution_id: ExecutionId) -> Result<Outbox, String> {
+        let execution_dir = self.existing_dir(execution_id)?;
+        let event_log = Self::log_of(&execution_dir);
+        event_log
+            .with_shared_lock(|| {
+                let sync = outbox::read_state(&execution_dir)?
+                    .ok_or_else(|| format!("execution {execution_id} isn't linked to a server"))?;
+                let all = outbox::read_pending(&execution_dir)?;
+                let pending_upto = all.len();
+                let pending: Vec<EventRecord> = all.into_iter().skip(sync.handled).collect();
+                let files = pending
+                    .iter()
+                    .flat_map(|record| crate::sync::referenced_files(&record.event))
+                    .map(|file| {
+                        let path = execution_dir.join(&file.path);
+                        (file, path)
+                    })
+                    .collect();
+                Ok(Outbox {
+                    sync,
+                    records: event_log.read_records().map_err(|e| e.to_string())?,
+                    pending,
+                    pending_upto,
+                    files,
+                })
+            })
+            .map_err(|e| e.to_string())?
+    }
+
+    /// Apply a sync's outcome: append the pulled lines to the log, keep the
+    /// refused events, then mark the pushed pending lines dealt with — in
+    /// that order, so a crash midway only causes a harmless re-push.
+    pub fn settle(
+        &self,
+        execution_id: ExecutionId,
+        settlement: &Settlement,
+    ) -> Result<ExecutionState, String> {
+        let execution_dir = self.existing_dir(execution_id)?;
+        let event_log = Self::log_of(&execution_dir);
+        event_log
+            .with_exclusive_lock(|| {
+                let sync = outbox::read_state(&execution_dir)?
+                    .ok_or_else(|| format!("execution {execution_id} isn't linked to a server"))?;
+                let records = event_log.read_records().map_err(|e| e.to_string())?;
+                if !settlement.pulled.is_empty() {
+                    if settlement.pulled_after != records.len() {
+                        return Err(format!(
+                            "pulled log lines start at {}, but this copy has {}",
+                            settlement.pulled_after,
+                            records.len()
+                        ));
+                    }
+                    let events: Vec<Event> = records
+                        .iter()
+                        .chain(&settlement.pulled)
+                        .map(|record| record.event.clone())
+                        .collect();
+                    ExecutionState::from_events(&events).map_err(|e| e.to_string())?;
+                    event_log
+                        .append_batch_durable(&settlement.pulled)
+                        .map_err(|e| e.to_string())?;
+                }
+                outbox::append_rejected(&execution_dir, &settlement.rejected)?;
+                outbox::write_state(
+                    &execution_dir,
+                    SyncState {
+                        registered: sync.registered || settlement.registered,
+                        handled: sync.handled.max(settlement.pending_upto),
+                    },
+                )?;
+                Ok(())
+            })
+            .map_err(|e| e.to_string())??;
+        let state = read_state(&execution_dir)?;
+        if let Err(e) = write_execution_snapshot_durable(&execution_dir, &state) {
+            log::warn!("failed to update execution snapshot for {execution_id} after syncing: {e}");
+        }
+        Ok(state)
+    }
+
+    /// Keep a copy of an execution the server has: its log as the server has
+    /// it, linked and registered. Fails if a copy is already here.
+    pub fn import_remote(
+        &self,
+        procedure: &str,
+        template: &TemplateSnapshot,
+        records: &[EventRecord],
+    ) -> Result<StoredExecution, String> {
+        let events: Vec<Event> = records.iter().map(|record| record.event.clone()).collect();
+        let state = ExecutionState::from_events(&events).map_err(|e| e.to_string())?;
+        let (Some(execution_id), Some(started_at)) = (state.execution_id, state.started_at) else {
+            return Err("the log doesn't start an execution".to_string());
+        };
+        if find_execution_dir(&self.procedures_dir, execution_id)?.is_some() {
+            return Err(format!("execution {execution_id} is already here"));
+        }
+        if Path::new(procedure)
+            .components()
+            .ne([Component::Normal(procedure.as_ref())])
+        {
+            return Err(format!("invalid procedure name: {procedure}"));
+        }
+        let executions_dir = self.procedures_dir.join(procedure).join(".executions");
+        std::fs::create_dir_all(&executions_dir).map_err(|e| e.to_string())?;
+        let final_dir = executions_dir.join(execution_dir_name(&started_at, execution_id));
+        let temp_dir = executions_dir.join(format!(".import.tmp-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&temp_dir).map_err(|e| e.to_string())?;
+        write_file_durable(
+            &temp_dir.join(template.file_name()),
+            template.text().as_bytes(),
+        )
+        .map_err(|e| e.to_string())?;
+        Self::log_of(&temp_dir)
+            .create_with_events_durable(records)
+            .map_err(|e| e.to_string())?;
+        outbox::write_state(
+            &temp_dir,
+            SyncState {
+                registered: true,
+                handled: 0,
+            },
+        )?;
+        write_execution_snapshot_durable(&temp_dir, &state)?;
+        sync_dir(&temp_dir).map_err(|e| e.to_string())?;
+        std::fs::rename(&temp_dir, &final_dir).map_err(|e| e.to_string())?;
+        sync_dir(&executions_dir).map_err(|e| e.to_string())?;
+        Ok(stored(state, &final_dir))
+    }
+
+    /// Store the content of an attachment someone else recorded, checked
+    /// against its record. Content already here is left as it is.
+    pub fn store_attachment(
+        &self,
+        execution_id: ExecutionId,
+        record: &AttachmentRecord,
+        content: &[u8],
+    ) -> Result<(), String> {
+        if crate::attachment::sha256_hex(content) != record.sha256 {
+            return Err(format!(
+                "downloaded content of {} doesn't match its hash",
+                record.path
+            ));
+        }
+        let execution_dir = self.existing_dir(execution_id)?;
+        let relative = Path::new(&record.path);
+        if !record.path.starts_with("attachments/")
+            || relative
+                .components()
+                .any(|component| !matches!(component, Component::Normal(_)))
+        {
+            return Err(format!("invalid attachment path: {}", record.path));
+        }
+        let path = execution_dir.join(relative);
+        if path.exists() {
+            return Ok(());
+        }
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        write_file_durable(&path, content).map_err(|e| e.to_string())
+    }
+
+    /// Pushed events the server refused as malformed.
+    pub fn rejected(&self, execution_id: ExecutionId) -> Result<Vec<Rejected>, String> {
+        outbox::read_rejected(&self.existing_dir(execution_id)?)
+    }
+}
+
 /// Every published execution directory under `procedures_dir` that has an
 /// event log.
 pub fn execution_dirs(procedures_dir: &Path) -> Result<Vec<PathBuf>, String> {
@@ -350,10 +603,25 @@ fn stored(state: ExecutionState, execution_dir: &Path) -> StoredExecution {
 }
 
 fn read_state(execution_dir: &Path) -> Result<ExecutionState, String> {
-    let events = EventLog::new(execution_dir.join("events.jsonl"))
-        .read_locked()
-        .map_err(|e| e.to_string())?;
+    let event_log = EventLog::new(execution_dir.join("events.jsonl"));
+    let events = event_log
+        .with_shared_lock(|| -> Result<Vec<Event>, String> {
+            let mut events = event_log.read().map_err(|e| e.to_string())?;
+            if let Some(sync) = outbox::read_state(execution_dir)? {
+                events.extend(unhandled(execution_dir, sync)?.into_iter().map(|r| r.event));
+            }
+            Ok(events)
+        })
+        .map_err(|e| e.to_string())??;
     ExecutionState::from_events(&events).map_err(|e| e.to_string())
+}
+
+/// The pending lines of a linked execution the server hasn't dealt with yet.
+fn unhandled(execution_dir: &Path, sync: SyncState) -> Result<Vec<EventRecord>, String> {
+    Ok(outbox::read_pending(execution_dir)?
+        .into_iter()
+        .skip(sync.handled)
+        .collect())
 }
 
 /// Whether `meta` carries an event ID that is already recorded.
@@ -900,5 +1168,201 @@ version: 1.0.0
         resolve_conflict(&store, id, untoggle.meta.event_id.unwrap(), &resolution).unwrap();
         assert!(resolve_conflict(&store, id, uuid::Uuid::new_v4(), &resolution).is_err());
         assert_eq!(store.conflicts(id).unwrap()[0].resolved, Some(resolution));
+    }
+
+    /// A desktop copy and a server (another store), synced with the same
+    /// steps the desktop app takes: push pending lines, pull the rest, settle.
+    fn sync_once(desktop: &ExecutionStore, server: &ExecutionStore, id: ExecutionId) {
+        let outbox = desktop.outbox(id).unwrap();
+        // Registering again is a retry, as the server's PUT treats it.
+        if !outbox.sync.registered && server.records(id).is_err() {
+            let starting: Vec<EventRecord> = outbox
+                .records
+                .iter()
+                .filter(|record| !matches!(record.event, Event::LogMeta { .. }))
+                .cloned()
+                .collect();
+            crate::sync::create_started(
+                server,
+                "snapshot-test".to_string(),
+                TemplateSnapshot::Markdown(TEMPLATE.to_string()),
+                &starting,
+                "server".to_string(),
+            )
+            .unwrap();
+        }
+        for record in &outbox.pending {
+            crate::sync::push_event(server, id, record, &[], Utc::now()).unwrap();
+        }
+        let server_records = server.records(id).unwrap();
+        let after = outbox.records.len();
+        desktop
+            .settle(
+                id,
+                &Settlement {
+                    registered: true,
+                    pending_upto: outbox.pending_upto,
+                    rejected: Vec::new(),
+                    pulled: server_records[after..].to_vec(),
+                    pulled_after: after,
+                },
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn a_linked_execution_waits_in_pending_until_the_server_confirms_it() {
+        let desktop_dir = tempfile::tempdir().unwrap();
+        let server_dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(server_dir.path().join("snapshot-test")).unwrap();
+        let server = ExecutionStore::new(server_dir.path().to_path_buf());
+        let (desktop, id, execution_dir) = create(
+            desktop_dir.path(),
+            "snapshot-test",
+            TEMPLATE,
+            &EventMeta::default(),
+        );
+        desktop.link(id, false).unwrap();
+        let log_before = std::fs::read(execution_dir.join("events.jsonl")).unwrap();
+        let meta = EventMeta {
+            event_id: Some(uuid::Uuid::new_v4()),
+            ..EventMeta::default()
+        };
+
+        let toggled = record_action(&desktop, id, toggle(), &meta).unwrap();
+        record_action(&desktop, id, toggle(), &meta).unwrap();
+
+        assert_eq!(
+            std::fs::read(execution_dir.join("events.jsonl")).unwrap(),
+            log_before,
+            "the log waits for the server"
+        );
+        assert_eq!(
+            desktop.outbox(id).unwrap().pending.len(),
+            1,
+            "the retry was deduplicated"
+        );
+        assert!(matches!(
+            &toggled.state.steps["step-0"].content[0],
+            procnote_core::execution::ExecutionStepContent::Checkbox(cb) if cb.checked
+        ));
+
+        // Not settled yet (as after a crash): the same lines are pushed again.
+        let first = desktop.outbox(id).unwrap();
+        crate::sync::create_started(
+            &server,
+            "snapshot-test".to_string(),
+            TemplateSnapshot::Markdown(TEMPLATE.to_string()),
+            &first
+                .records
+                .iter()
+                .filter(|r| !matches!(r.event, Event::LogMeta { .. }))
+                .cloned()
+                .collect::<Vec<_>>(),
+            "server".to_string(),
+        )
+        .unwrap();
+        crate::sync::push_event(&server, id, &first.pending[0], &[], Utc::now()).unwrap();
+        // Someone else records on the server.
+        record_action(
+            &server,
+            id,
+            ExecutionAction::RenameExecution {
+                name: "from the browser".to_string(),
+            },
+            &EventMeta::default(),
+        )
+        .unwrap();
+        sync_once(&desktop, &server, id);
+
+        let desktop_log = EventLog::new(execution_dir.join("events.jsonl"))
+            .read_records()
+            .unwrap();
+        let server_log = server.records(id).unwrap();
+        assert_eq!(desktop_log.len(), server_log.len());
+        assert_eq!(desktop_log[1..], server_log[1..], "same log after LogMeta");
+        assert_eq!(desktop.outbox(id).unwrap().pending, []);
+        assert_eq!(
+            desktop.load(id).unwrap().state.name.as_deref(),
+            Some("from the browser")
+        );
+    }
+
+    #[test]
+    fn pulled_lines_must_continue_the_log_here() {
+        let temp = tempfile::tempdir().unwrap();
+        let (store, id, _) = create(
+            temp.path(),
+            "snapshot-test",
+            TEMPLATE,
+            &EventMeta::default(),
+        );
+        store.link(id, true).unwrap();
+        let records = store.outbox(id).unwrap().records;
+
+        let wrong = store.settle(
+            id,
+            &Settlement {
+                pulled: records[1..2].to_vec(),
+                pulled_after: 1,
+                ..Settlement::default()
+            },
+        );
+
+        assert!(wrong.is_err());
+    }
+
+    #[test]
+    fn a_server_execution_is_kept_here_with_its_attachments_checked() {
+        let server_dir = tempfile::tempdir().unwrap();
+        let (server, id, _) = create(
+            server_dir.path(),
+            "attachment-test",
+            ATTACHMENT_TEMPLATE,
+            &EventMeta::default(),
+        );
+        let desktop_dir = tempfile::tempdir().unwrap();
+        let desktop = ExecutionStore::new(desktop_dir.path().to_path_buf());
+
+        let kept = desktop
+            .import_remote(
+                "attachment-test",
+                &TemplateSnapshot::Markdown(ATTACHMENT_TEMPLATE.to_string()),
+                &server.records(id).unwrap(),
+            )
+            .unwrap();
+        let again = desktop.import_remote(
+            "attachment-test",
+            &TemplateSnapshot::Markdown(ATTACHMENT_TEMPLATE.to_string()),
+            &server.records(id).unwrap(),
+        );
+        let content = b"photo";
+        let record = AttachmentRecord {
+            filename: "p.jpg".to_string(),
+            path: format!(
+                "attachments/{}-p.jpg",
+                &crate::attachment::sha256_hex(content)[..7]
+            ),
+            content_type: "image/jpeg".to_string(),
+            sha256: crate::attachment::sha256_hex(content),
+        };
+
+        assert_eq!(kept.state.execution_id, Some(id));
+        assert_eq!(
+            desktop.sync_state(id).unwrap(),
+            Some(SyncState {
+                registered: true,
+                handled: 0
+            })
+        );
+        assert!(again.is_err());
+        assert!(desktop.store_attachment(id, &record, b"tampered").is_err());
+        desktop.store_attachment(id, &record, content).unwrap();
+        assert_eq!(desktop.read_attachment(id, &record.path).unwrap(), content);
+        let escape = AttachmentRecord {
+            path: "attachments/../../escape".to_string(),
+            ..record
+        };
+        assert!(desktop.store_attachment(id, &escape, content).is_err());
     }
 }
