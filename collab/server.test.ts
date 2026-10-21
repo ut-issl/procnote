@@ -191,4 +191,28 @@ describe.skipIf(!DATABASE_URL)("collab service", () => {
     expect((await seed(id)).status).toBe(200);
     expect((await seed(id)).status).toBe(409);
   });
+
+  it("replaces a document's content for the editors connected to it", async () => {
+    const id = await newTemplate();
+    await seed(id);
+    const editor = connect(id, token(id));
+    await waitFor(async () => (editor.provider.isSynced ? true : undefined));
+    const seeded = seeds.get(id);
+    if (!seeded) throw new Error("not seeded");
+    const replacement = { ...seeded, metadata: { ...seeded.metadata, title: "From file" } };
+
+    const response = await fetch(`http://${base}/internal/templates/${id}`, {
+      method: "PUT",
+      headers: { Authorization: `Bearer ${SECRET}`, "Content-Type": "application/json" },
+      body: JSON.stringify(replacement),
+    });
+    const title = await waitFor(async () => {
+      const value = editor.document.getMap(METADATA_MAP).get("title");
+      return value === "From file" ? value : undefined;
+    });
+    editor.provider.destroy();
+
+    expect(response.status).toBe(200);
+    expect(title).toBe("From file");
+  });
 });

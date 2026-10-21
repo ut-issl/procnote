@@ -115,6 +115,29 @@ pub fn procedure_name(procedure_id: &str) -> Result<String, String> {
     }
 }
 
+/// Why a shared template wasn't created.
+#[derive(Debug, PartialEq, Eq)]
+pub enum CreateError {
+    /// Another shared template has this procedure ID.
+    Taken(String),
+    /// The procedure's shared template was archived; its ID isn't reused.
+    Archived(String),
+    Failed(String),
+}
+
+impl std::fmt::Display for CreateError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Taken(id) => write!(f, "procedure ID \"{id}\" is already used"),
+            Self::Archived(id) => write!(
+                f,
+                "the shared template of procedure \"{id}\" was archived; its ID can't be reused"
+            ),
+            Self::Failed(reason) => f.write_str(reason),
+        }
+    }
+}
+
 pub struct CollabTemplates {
     pool: PgPool,
     config: CollabConfig,
@@ -138,7 +161,8 @@ impl CollabTemplates {
             Option<serde_json::Value>,
             chrono::DateTime<chrono::Utc>,
         )> = sqlx::query_as(
-            "SELECT id, procedure_id, metadata, updated_at FROM templates ORDER BY updated_at DESC",
+            "SELECT id, procedure_id, metadata, updated_at FROM templates
+             WHERE archived_at IS NULL ORDER BY updated_at DESC",
         )
         .fetch_all(&self.pool)
         .await
@@ -162,23 +186,55 @@ impl CollabTemplates {
 
     /// The shared template of `template`'s procedure, created with `template`
     /// as its document when there is none yet.
-    pub async fn open_or_create(&self, template: &ProcedureTemplate) -> Result<Uuid, String> {
-        let procedure_id = &template.metadata.id;
+    pub async fn open_or_create(&self, template: &ProcedureTemplate) -> Result<Uuid, CreateError> {
+        if let Some(id) = self.insert(template).await? {
+            return Ok(id);
+        }
+        let (id, archived) = self.holder(&template.metadata.id).await?;
+        if archived {
+            Err(CreateError::Archived(template.metadata.id.clone()))
+        } else {
+            Ok(id)
+        }
+    }
+
+    /// A new shared template with `template` as its document, for a procedure
+    /// ID no shared template has had (archived ones keep theirs).
+    pub async fn create(&self, template: &ProcedureTemplate) -> Result<Uuid, CreateError> {
+        if let Some(id) = self.insert(template).await? {
+            return Ok(id);
+        }
+        let procedure_id = template.metadata.id.clone();
+        Err(if self.holder(&procedure_id).await?.1 {
+            CreateError::Archived(procedure_id)
+        } else {
+            CreateError::Taken(procedure_id)
+        })
+    }
+
+    /// The template holding `procedure_id`, and whether it is archived.
+    async fn holder(&self, procedure_id: &str) -> Result<(Uuid, bool), CreateError> {
+        sqlx::query_as("SELECT id, archived_at IS NOT NULL FROM templates WHERE procedure_id = $1")
+            .bind(procedure_id)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| CreateError::Failed(format!("database error: {e}")))
+    }
+
+    /// Insert and seed a template for `template`'s procedure ID, or `None`
+    /// when the ID is taken.
+    async fn insert(&self, template: &ProcedureTemplate) -> Result<Option<Uuid>, CreateError> {
         let created: Option<Uuid> = sqlx::query_scalar(
             "INSERT INTO templates (id, procedure_id) VALUES ($1, $2)
              ON CONFLICT (procedure_id) DO NOTHING RETURNING id",
         )
         .bind(Uuid::new_v4())
-        .bind(procedure_id)
+        .bind(&template.metadata.id)
         .fetch_optional(&self.pool)
         .await
-        .map_err(|e| format!("database error: {e}"))?;
+        .map_err(|e| CreateError::Failed(format!("database error: {e}")))?;
         let Some(id) = created else {
-            return sqlx::query_scalar("SELECT id FROM templates WHERE procedure_id = $1")
-                .bind(procedure_id)
-                .fetch_one(&self.pool)
-                .await
-                .map_err(|e| format!("database error: {e}"));
+            return Ok(None);
         };
         if let Err(e) = self.seed(id, template).await {
             // Don't leave a template the collab service never filled.
@@ -189,9 +245,72 @@ impl CollabTemplates {
             {
                 log::warn!("failed to remove unseeded template {id}: {cleanup}");
             }
-            return Err(e);
+            return Err(CreateError::Failed(e));
         }
-        Ok(id)
+        Ok(Some(id))
+    }
+
+    /// The procedure ID of template `id`, if it exists and isn't archived.
+    pub async fn procedure_of(&self, id: Uuid) -> Result<Option<String>, String> {
+        sqlx::query_scalar(
+            "SELECT procedure_id FROM templates WHERE id = $1 AND archived_at IS NULL",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| format!("database error: {e}"))
+    }
+
+    /// The procedure IDs of archived templates, which stay taken.
+    pub async fn archived_procedure_ids(&self) -> Result<Vec<String>, String> {
+        sqlx::query_scalar("SELECT procedure_id FROM templates WHERE archived_at IS NOT NULL")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| format!("database error: {e}"))
+    }
+
+    /// Archive template `id` as `by`; false if there is no such template that
+    /// isn't archived already.
+    pub async fn archive(&self, id: Uuid, by: &str) -> Result<bool, String> {
+        let result = sqlx::query(
+            "UPDATE templates SET archived_at = now(), archived_by = $2
+             WHERE id = $1 AND archived_at IS NULL",
+        )
+        .bind(id)
+        .bind(by)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| format!("database error: {e}"))?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    /// Replace the content of template `id` with `template`, for everyone
+    /// editing it too.
+    pub async fn reset(&self, id: Uuid, template: &ProcedureTemplate) -> Result<(), String> {
+        let url = format!(
+            "{}/internal/templates/{id}",
+            self.config.service_url.trim_end_matches('/')
+        );
+        let response = self
+            .client
+            .put(url)
+            .header(
+                INTERNAL_AUTH_HEADER,
+                format!("Bearer {}", self.config.secret),
+            )
+            .json(template)
+            .send()
+            .await
+            .map_err(|e| format!("collab service is unreachable: {e}"))?;
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            Err(format!(
+                "collab service refused the template ({status}): {body}"
+            ))
+        }
     }
 
     async fn seed(&self, id: Uuid, template: &ProcedureTemplate) -> Result<(), String> {
@@ -250,13 +369,10 @@ impl CollabTemplates {
             .map_err(|e| format!("collab service sent an invalid template: {e}"))
     }
 
-    /// A token for editing template `id` as `subject`, if the template exists.
+    /// A token for editing template `id` as `subject`, if the template exists
+    /// and isn't archived.
     pub async fn token(&self, id: Uuid, subject: &str) -> Result<Option<String>, String> {
-        let exists: Option<i32> = sqlx::query_scalar("SELECT 1 FROM templates WHERE id = $1")
-            .bind(id)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(|e| format!("database error: {e}"))?;
+        let exists = self.procedure_of(id).await?;
         let expires_at = (SystemTime::now() + TOKEN_LIFETIME)
             .duration_since(UNIX_EPOCH)
             .map_err(|e| e.to_string())?

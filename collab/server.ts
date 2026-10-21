@@ -16,6 +16,7 @@ import {
   type Editor,
   isEmptyDocument,
   keepProcedureId,
+  replaceContent,
   templateToUpdate,
 } from "./document.js";
 import { verifyToken } from "./token.js";
@@ -132,6 +133,11 @@ export function createCollabServer(config: CollabServerConfig, pool: pg.Pool): S
           const template = (await readJson(request)) as ProcedureTemplate;
           await seed(server, id, await templateToUpdate(editor, template));
           respond(response, 200, { id });
+        } else if (request.method === "PUT" && resource === undefined) {
+          // PUT /internal/templates/{id}: replace the document's content.
+          const template = (await readJson(request)) as ProcedureTemplate;
+          await replace(server, id, await templateToUpdate(editor, template));
+          respond(response, 200, { id });
         } else if (request.method === "GET" && resource === "template" && rest.length === 0) {
           // GET /internal/templates/{id}/template: what the document describes now.
           respond(response, 200, await currentTemplate(server, editor, id));
@@ -186,5 +192,20 @@ async function seed(server: Server, id: string, update: Uint8Array) {
     if (!empty) throw new HttpError(409, `template ${id} already has content`);
   } finally {
     await connection.disconnect();
+  }
+}
+
+/** Replace the content of a template document, and store it. */
+async function replace(server: Server, id: string, update: Uint8Array) {
+  const source = new Y.Doc();
+  Y.applyUpdate(source, update);
+  const connection = await server.hocuspocus.openDirectConnection(id, {
+    user: "procnote-server",
+  } satisfies ConnectionContext);
+  try {
+    await connection.transact((doc) => replaceContent(doc, source));
+  } finally {
+    await connection.disconnect();
+    source.destroy();
   }
 }
