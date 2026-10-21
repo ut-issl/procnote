@@ -416,7 +416,8 @@ async fn list_collab_templates(
 
 #[derive(Deserialize)]
 struct CreateCollabTemplateRequest {
-    /// Workspace template to start the document from.
+    /// Workspace template whose procedure's shared template to open, started
+    /// from this file when there is none yet.
     template_path: String,
 }
 
@@ -440,8 +441,9 @@ async fn create_collab_template(
         }
     })
     .await?;
+    collab::procedure_name(&template.metadata.id).map_err(ApiError::bad_request)?;
     let id = collab(&state)?
-        .create(&template)
+        .open_or_create(&template)
         .await
         .map_err(|e| ApiError::new(StatusCode::BAD_GATEWAY, e))?;
     Ok(Json(CreatedCollabTemplate { id }))

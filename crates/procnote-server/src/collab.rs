@@ -71,8 +71,6 @@ pub struct CollabTemplateSummary {
 #[derive(Debug, Default, Deserialize)]
 struct ListedMetadata {
     #[serde(default)]
-    id: String,
-    #[serde(default)]
     title: String,
     #[serde(default)]
     version: String,
@@ -136,24 +134,25 @@ impl CollabTemplates {
     pub async fn list(&self) -> Result<Vec<CollabTemplateSummary>, String> {
         let rows: Vec<(
             Uuid,
+            String,
             Option<serde_json::Value>,
             chrono::DateTime<chrono::Utc>,
         )> = sqlx::query_as(
-            "SELECT id, metadata, updated_at FROM templates ORDER BY updated_at DESC",
+            "SELECT id, procedure_id, metadata, updated_at FROM templates ORDER BY updated_at DESC",
         )
         .fetch_all(&self.pool)
         .await
         .map_err(|e| format!("database error: {e}"))?;
         Ok(rows
             .into_iter()
-            .map(|(id, metadata, updated_at)| {
+            .map(|(id, procedure_id, metadata, updated_at)| {
                 let metadata: ListedMetadata = metadata
                     .and_then(|value| serde_json::from_value(value).ok())
                     .unwrap_or_default();
                 CollabTemplateSummary {
                     id,
                     title: metadata.title,
-                    procedure_id: metadata.id,
+                    procedure_id,
                     version: metadata.version,
                     updated_at: updated_at.to_rfc3339(),
                 }
@@ -161,14 +160,26 @@ impl CollabTemplates {
             .collect())
     }
 
-    /// Create a template whose document starts as `template`.
-    pub async fn create(&self, template: &ProcedureTemplate) -> Result<Uuid, String> {
-        let id = Uuid::new_v4();
-        sqlx::query("INSERT INTO templates (id) VALUES ($1)")
-            .bind(id)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| format!("database error: {e}"))?;
+    /// The shared template of `template`'s procedure, created with `template`
+    /// as its document when there is none yet.
+    pub async fn open_or_create(&self, template: &ProcedureTemplate) -> Result<Uuid, String> {
+        let procedure_id = &template.metadata.id;
+        let created: Option<Uuid> = sqlx::query_scalar(
+            "INSERT INTO templates (id, procedure_id) VALUES ($1, $2)
+             ON CONFLICT (procedure_id) DO NOTHING RETURNING id",
+        )
+        .bind(Uuid::new_v4())
+        .bind(procedure_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| format!("database error: {e}"))?;
+        let Some(id) = created else {
+            return sqlx::query_scalar("SELECT id FROM templates WHERE procedure_id = $1")
+                .bind(procedure_id)
+                .fetch_one(&self.pool)
+                .await
+                .map_err(|e| format!("database error: {e}"));
+        };
         if let Err(e) = self.seed(id, template).await {
             // Don't leave a template the collab service never filled.
             if let Err(cleanup) = sqlx::query("DELETE FROM templates WHERE id = $1")

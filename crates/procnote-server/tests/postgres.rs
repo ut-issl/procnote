@@ -413,17 +413,24 @@ async fn stub_collab_service(
 }
 
 /// A workspace with the test template, and an API on it whose collab
-/// service is at `service_url`. Returns the workspace's template path too.
+/// service is at `service_url`. Returns the workspace's template path and
+/// its procedure ID too: one of its own, since the database is shared and
+/// holds one shared template per procedure ID.
 fn collab_app(
     temp: &tempfile::TempDir,
     store: &PostgresStore,
     service_url: String,
-) -> (axum::Router, PathBuf) {
+) -> (axum::Router, PathBuf, String) {
     use procnote_server::collab::{CollabConfig, CollabTemplates};
 
+    let procedure_id = format!("postgres-test-{}", uuid::Uuid::new_v4());
     let workspace = temp.path().join("procedures");
     std::fs::create_dir_all(workspace.join("postgres-test")).unwrap();
-    std::fs::write(workspace.join("postgres-test/template.md"), TEMPLATE).unwrap();
+    std::fs::write(
+        workspace.join("postgres-test/template.md"),
+        TEMPLATE.replacen("id: postgres-test", &format!("id: {procedure_id}"), 1),
+    )
+    .unwrap();
     let workspace = workspace.canonicalize().unwrap();
     let app = router(ServerConfig {
         procedures_dir: workspace.clone(),
@@ -441,7 +448,11 @@ fn collab_app(
         )),
     })
     .unwrap();
-    (app, workspace.join("postgres-test/template.md"))
+    (
+        app,
+        workspace.join("postgres-test/template.md"),
+        procedure_id,
+    )
 }
 
 async fn call(
@@ -470,7 +481,7 @@ async fn shared_templates_are_seeded_through_the_collab_service() {
     let temp = tempfile::tempdir().unwrap();
     let store = store(&url).await;
     let (service, seeded) = stub_collab_service(StatusCode::OK, &[]).await;
-    let (app, template_path) = collab_app(&temp, &store, service);
+    let (app, template_path, procedure_id) = collab_app(&temp, &store, service);
 
     let (status, created) = call(
         &app,
@@ -481,6 +492,13 @@ async fn shared_templates_are_seeded_through_the_collab_service() {
     .await;
     assert_eq!(status, StatusCode::OK, "{created}");
     let id = created["id"].as_str().unwrap().to_string();
+    let (_, opened_again) = call(
+        &app,
+        "POST",
+        "/api/collab/templates",
+        Some(json!({ "template_path": template_path })),
+    )
+    .await;
     let (status, token) = call(
         &app,
         "POST",
@@ -501,8 +519,10 @@ async fn shared_templates_are_seeded_through_the_collab_service() {
         let seeded = seeded.lock().unwrap();
         assert_eq!(seeded.len(), 1);
         assert_eq!(seeded[0].0, id);
-        assert_eq!(seeded[0].1["metadata"]["id"], "postgres-test");
+        assert_eq!(seeded[0].1["metadata"]["id"], procedure_id.as_str());
     }
+    // The procedure already has its shared template: the same one opens.
+    assert_eq!(opened_again["id"], id.as_str());
     assert_eq!(status, StatusCode::OK);
     assert!(token["token"].as_str().unwrap().contains('.'));
     assert_eq!(unknown, StatusCode::NOT_FOUND);
@@ -512,7 +532,8 @@ async fn shared_templates_are_seeded_through_the_collab_service() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|template| template["id"] == id.as_str())
+            .any(|template| template["id"] == id.as_str()
+                && template["procedure_id"] == procedure_id.as_str())
     );
 }
 
@@ -522,7 +543,7 @@ async fn a_template_the_collab_service_refuses_is_not_kept() {
     let temp = tempfile::tempdir().unwrap();
     let store = store(&url).await;
     let (service, asked) = stub_collab_service(StatusCode::INTERNAL_SERVER_ERROR, &[]).await;
-    let (app, template_path) = collab_app(&temp, &store, service);
+    let (app, template_path, _) = collab_app(&temp, &store, service);
 
     let (status, _) = call(
         &app,
@@ -551,7 +572,7 @@ async fn executions_start_from_a_shared_template_as_it_is_now() {
     let temp = tempfile::tempdir().unwrap();
     let store = store(&url).await;
     let (service, _) = stub_collab_service(StatusCode::OK, &[]).await;
-    let (app, template_path) = collab_app(&temp, &store, service);
+    let (app, template_path, _) = collab_app(&temp, &store, service);
     let (_, created) = call(
         &app,
         "POST",
@@ -588,7 +609,7 @@ async fn a_shared_template_with_issues_does_not_start() {
     let temp = tempfile::tempdir().unwrap();
     let store = store(&url).await;
     let (service, _) = stub_collab_service(StatusCode::OK, &["The procedure has no title."]).await;
-    let (app, template_path) = collab_app(&temp, &store, service);
+    let (app, template_path, _) = collab_app(&temp, &store, service);
     let (_, created) = call(
         &app,
         "POST",
@@ -659,7 +680,7 @@ async fn shared_templates_export_as_procnote_markdown() {
     let temp = tempfile::tempdir().unwrap();
     let store = store(&url).await;
     let (service, _) = stub_collab_service(StatusCode::OK, &[]).await;
-    let (app, template_path) = collab_app(&temp, &store, service.clone());
+    let (app, template_path, _) = collab_app(&temp, &store, service.clone());
     let (_, created) = call(
         &app,
         "POST",
