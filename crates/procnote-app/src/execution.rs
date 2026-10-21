@@ -16,11 +16,12 @@ use crate::repository::{
 };
 use procnote_core::event::types::{CompletionStatus, ExecutionId};
 use procnote_core::execution::{
-    ExecutionState, ExecutionStepContent, RecordedAttachment, StepStatus,
+    ExecutionState, ExecutionStepContent, ExecutionTableCell, RecordedAttachment, StepState,
+    StepStatus,
 };
 use procnote_core::template::parse_template;
-use procnote_core::template::types::InputDefinition;
 use procnote_core::template::types::ProcedureTemplate;
+use procnote_core::template::types::{InputDefinition, TableAlignment};
 
 /// Serializable execution state summary for the frontend.
 #[derive(Debug, Serialize, TS)]
@@ -86,8 +87,36 @@ pub enum StepContentSummary {
         #[ts(optional)]
         at: Option<String>,
     },
+    /// Inputs of an `inputs` block, except those shown in a table of the step.
     InputBlock {
         inputs: Vec<InputDefinitionSummary>,
+    },
+    Table {
+        alignments: Vec<TableAlignment>,
+        /// Header cells (Markdown source).
+        header: Vec<String>,
+        rows: Vec<Vec<TableCellSummary>>,
+    },
+}
+
+/// A body cell of a table with its runtime state.
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
+#[serde(tag = "type")]
+pub enum TableCellSummary {
+    /// Static content (Markdown source).
+    Text {
+        text: String,
+    },
+    Input {
+        input: Box<InputDefinitionSummary>,
+    },
+    Checkbox {
+        id: String,
+        checked: bool,
+        /// ISO 8601 timestamp of the last toggle, if any.
+        #[ts(optional)]
+        at: Option<String>,
     },
 }
 
@@ -172,6 +201,107 @@ fn datetime_string(value: Option<chrono::DateTime<chrono::Utc>>) -> Option<Strin
     value.map(|at| at.to_rfc3339())
 }
 
+fn input_summary(step: &StepState, definition: &InputDefinition) -> InputDefinitionSummary {
+    let recorded = step.inputs.get(&definition.id).map(|input| InputState {
+        label: input.label.clone(),
+        value: input.value.clone(),
+        unit: input.unit.clone(),
+        at: Some(input.at.to_rfc3339()),
+        sha256: None,
+    });
+    let attachments = step
+        .attachments
+        .get(&definition.id)
+        .map(|files| files.iter().map(attachment_state).collect())
+        .unwrap_or_default();
+    InputDefinitionSummary {
+        definition: definition.clone(),
+        recorded,
+        attachments,
+    }
+}
+
+fn step_content_summary(step: &StepState) -> Vec<StepContentSummary> {
+    let definitions: Vec<&InputDefinition> = step
+        .content
+        .iter()
+        .filter_map(|item| match item {
+            ExecutionStepContent::InputBlock { inputs } => Some(inputs),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    let table_cell = |cell: &ExecutionTableCell| match cell {
+        ExecutionTableCell::Text(text) => TableCellSummary::Text { text: text.clone() },
+        ExecutionTableCell::Input(input_id) => definitions
+            .iter()
+            .find(|definition| &definition.id == input_id)
+            .map_or_else(
+                || TableCellSummary::Text {
+                    text: format!("`input:{input_id}`"),
+                },
+                |definition| TableCellSummary::Input {
+                    input: Box::new(input_summary(step, definition)),
+                },
+            ),
+        ExecutionTableCell::Checkbox(checkbox) => TableCellSummary::Checkbox {
+            id: checkbox.id.clone(),
+            checked: checkbox.checked,
+            at: datetime_string(checkbox.toggled_at),
+        },
+    };
+    let in_tables: std::collections::HashSet<&str> = step
+        .content
+        .iter()
+        .filter_map(|item| match item {
+            ExecutionStepContent::Table { rows, .. } => Some(rows),
+            _ => None,
+        })
+        .flatten()
+        .flatten()
+        .filter_map(|cell| match cell {
+            ExecutionTableCell::Input(input_id) => Some(input_id.as_str()),
+            _ => None,
+        })
+        .collect();
+
+    step.content
+        .iter()
+        .filter_map(|item| match item {
+            ExecutionStepContent::Prose { text } => {
+                Some(StepContentSummary::Prose { text: text.clone() })
+            }
+            ExecutionStepContent::Checkbox(checkbox) => Some(StepContentSummary::Checkbox {
+                id: Some(checkbox.id.clone()),
+                text: checkbox.text.clone(),
+                checked: checkbox.checked,
+                nesting_level: checkbox.nesting_level,
+                at: datetime_string(checkbox.toggled_at),
+            }),
+            ExecutionStepContent::InputBlock { inputs } => {
+                let inputs: Vec<InputDefinitionSummary> = inputs
+                    .iter()
+                    .filter(|definition| !in_tables.contains(definition.id.as_str()))
+                    .map(|definition| input_summary(step, definition))
+                    .collect();
+                (!inputs.is_empty()).then_some(StepContentSummary::InputBlock { inputs })
+            }
+            ExecutionStepContent::Table {
+                alignments,
+                header,
+                rows,
+            } => Some(StepContentSummary::Table {
+                alignments: alignments.clone(),
+                header: header.clone(),
+                rows: rows
+                    .iter()
+                    .map(|row| row.iter().map(table_cell).collect())
+                    .collect(),
+            }),
+        })
+        .collect()
+}
+
 pub fn summarize(
     state: &ExecutionState,
     execution_dir: Option<&str>,
@@ -181,51 +311,7 @@ pub fn summarize(
         .iter()
         .filter_map(|step_id| {
             state.steps.get(step_id).map(|step| {
-                let content = step
-                    .content
-                    .iter()
-                    .map(|item| match item {
-                        ExecutionStepContent::Prose { text } => {
-                            StepContentSummary::Prose { text: text.clone() }
-                        }
-                        ExecutionStepContent::Checkbox(checkbox) => StepContentSummary::Checkbox {
-                            id: Some(checkbox.id.clone()),
-                            text: checkbox.text.clone(),
-                            checked: checkbox.checked,
-                            nesting_level: checkbox.nesting_level,
-                            at: datetime_string(checkbox.toggled_at),
-                        },
-                        ExecutionStepContent::InputBlock { inputs } => {
-                            StepContentSummary::InputBlock {
-                                inputs: inputs
-                                    .iter()
-                                    .map(|def| {
-                                        let recorded =
-                                            step.inputs.get(&def.id).map(|input| InputState {
-                                                label: input.label.clone(),
-                                                value: input.value.clone(),
-                                                unit: input.unit.clone(),
-                                                at: Some(input.at.to_rfc3339()),
-                                                sha256: None,
-                                            });
-                                        let attachments = step
-                                            .attachments
-                                            .get(&def.id)
-                                            .map(|files| {
-                                                files.iter().map(attachment_state).collect()
-                                            })
-                                            .unwrap_or_default();
-                                        InputDefinitionSummary {
-                                            definition: def.clone(),
-                                            recorded,
-                                            attachments,
-                                        }
-                                    })
-                                    .collect(),
-                            }
-                        }
-                    })
-                    .collect();
+                let content = step_content_summary(step);
                 let notes = step
                     .notes
                     .iter()
@@ -482,4 +568,49 @@ pub fn list_executions(
                 .ok()
         })
         .collect())
+}
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used, reason = "unwrap is acceptable in tests")]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn table_inputs_are_summarized_in_their_cells_only() {
+        let template = parse_template(
+            "---\nid: X\ntitle: T\nversion: '1'\n---\n\n## S\n\n\
+             | A | V | OK |\n| - | - | - |\n| a | `input:v` | [ ] |\n\n\
+             ```inputs\n- id: v\n  type: text\n  label: V\n- id: w\n  type: text\n  label: W\n```\n",
+        )
+        .unwrap();
+        let mut state = ExecutionState::new();
+        state.start(&template).unwrap();
+        state.record_input("step-0", "v", "5", None).unwrap();
+        state
+            .toggle_checkbox("step-0", "step-0/cb-0", true)
+            .unwrap();
+
+        let summary = summarize(&state, None).unwrap();
+        let content = &summary.steps[0].content;
+
+        let StepContentSummary::Table { rows, .. } = &content[0] else {
+            panic!("{content:?}");
+        };
+        assert!(matches!(
+            &rows[0][1],
+            TableCellSummary::Input { input } if input.recorded.as_ref().unwrap().value == "5"
+        ));
+        assert!(matches!(
+            &rows[0][2],
+            TableCellSummary::Checkbox { id, checked: true, at: Some(_) } if id == "step-0/cb-0"
+        ));
+        let StepContentSummary::InputBlock { inputs } = &content[1] else {
+            panic!("{content:?}");
+        };
+        let ids: Vec<&str> = inputs
+            .iter()
+            .map(|input| input.definition.id.as_str())
+            .collect();
+        assert_eq!(ids, ["w"]);
+    }
 }

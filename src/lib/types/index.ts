@@ -30,4 +30,7 @@ export type { StepContent } from "./generated/StepContent";
 export type { StepContentSummary } from "./generated/StepContentSummary";
 export type { StepSummary } from "./generated/StepSummary";
 export type { SyncStatus } from "./generated/SyncStatus";
+export type { TableAlignment } from "./generated/TableAlignment";
+export type { TableCell } from "./generated/TableCell";
+export type { TableCellSummary } from "./generated/TableCellSummary";
 export type { TemplateSummary } from "./generated/TemplateSummary";
