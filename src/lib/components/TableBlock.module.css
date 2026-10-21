@@ -1,0 +1,118 @@
+.table-wrap {
+  margin: 4px 0 8px;
+  overflow-x: auto;
+}
+
+.table {
+  border-collapse: collapse;
+  font-size: 13px;
+  color: #333;
+}
+
+.table th,
+.table td {
+  border: 1px solid #ddd;
+  padding: 4px 10px;
+  vertical-align: middle;
+}
+
+.table th {
+  background: #f3f4f6;
+  font-weight: 600;
+}
+
+.table :global(code) {
+  background: #f0f0f0;
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 12px;
+}
+
+.field {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.field input,
+.field select {
+  width: 9em;
+  padding: 3px 6px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font: inherit;
+}
+
+.field input:focus,
+.field select:focus {
+  outline: none;
+  border-color: #1a1a2e;
+  box-shadow: 0 0 0 2px rgba(26, 26, 46, 0.15);
+}
+
+.unit {
+  color: #666;
+  white-space: nowrap;
+}
+
+.recorded {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  background: #e8f5e9;
+  border-radius: 4px;
+}
+
+.recorded.out-of-range {
+  background: #fdecea;
+  color: #b3261e;
+}
+
+.value {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.empty {
+  color: #999;
+}
+
+.checkbox {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+.checkbox:disabled {
+  cursor: default;
+}
+
+.btn-delete {
+  display: inline-flex;
+  padding: 2px;
+  background: none;
+  border: none;
+  color: #888;
+  cursor: pointer;
+}
+
+.btn-delete:hover {
+  color: #b3261e;
+}
+
+.btn-record {
+  padding: 3px 8px;
+  background: #1a1a2e;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn-record:hover {
+  background: #16213e;
+}

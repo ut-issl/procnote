@@ -59,3 +59,8 @@ export function renderMarkdown(source: string): string {
   markdownCache.set(source, rendered);
   return rendered;
 }
+
+/** Render a table cell's inline Markdown to sanitized HTML. */
+export function renderInlineMarkdown(source: string): string {
+  return DOMPurify.sanitize(markedInstance.parseInline(source, { async: false }) as string);
+}
