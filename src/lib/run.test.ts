@@ -6,6 +6,8 @@ import {
   nextStep,
   previousStep,
   runProgress,
+  stepCheckboxes,
+  stepInputs,
   stepProgress,
 } from "./run.js";
 
@@ -73,10 +75,38 @@ describe("stepProgress", () => {
   test("a step with nothing to do is complete", () => {
     expect(stepProgress(step("s")).complete).toBe(true);
   });
+
+  test("counts the input and checkbox cells of tables", () => {
+    const table: StepSummary = {
+      ...step("s", { inputs: [input("w", { recorded })] }),
+      content: [
+        {
+          type: "Table",
+          alignments: ["none", "none", "none"],
+          header: ["Parameter", "Value", "OK"],
+          rows: [
+            [
+              { type: "Text", text: "Voltage" },
+              { type: "Input", input: input("v") },
+              { type: "Checkbox", id: "s/cb-0", checked: true },
+            ],
+          ],
+        },
+        { type: "InputBlock", inputs: [input("w", { recorded })] },
+      ],
+    };
+
+    expect(stepInputs(table).map((i) => i.definition.id)).toEqual(["v", "w"]);
+    expect(stepCheckboxes(table)).toEqual([
+      { id: "s/cb-0", text: "Voltage — OK", checked: true, nesting_level: 0 },
+    ]);
+    expect(stepProgress(table)).toMatchObject({ remaining: 1, totalBoxes: 1, totalInputs: 2 });
+  });
 });
 
 test.each([
   [undefined, "5", false],
+  [null, "5", false],
   [{ min: 100, max: 150 }, "120", false],
   [{ min: 100, max: 150 }, "151", true],
   [{ min: 100, max: 150 }, "abc", true],
