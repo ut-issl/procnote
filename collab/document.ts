@@ -117,6 +117,28 @@ export function keepProcedureId(doc: Y.Doc, procedureId: string) {
   restore();
 }
 
+/**
+ * Replace the content of `doc` with that of `source`, as edits of `doc`, so
+ * editors connected to it see the change.
+ */
+export function replaceContent(doc: Y.Doc, source: Y.Doc) {
+  doc.transact(() => {
+    const fragment = doc.getXmlFragment(DOCUMENT_FRAGMENT);
+    fragment.delete(0, fragment.length);
+    fragment.insert(
+      0,
+      source
+        .getXmlFragment(DOCUMENT_FRAGMENT)
+        .toArray()
+        // Clones are of the same kind as their originals (never XmlHooks).
+        .map((node) => node.clone() as Y.XmlElement | Y.XmlText),
+    );
+    const metadata = doc.getMap(METADATA_MAP);
+    metadata.clear();
+    for (const [key, value] of source.getMap(METADATA_MAP).entries()) metadata.set(key, value);
+  });
+}
+
 /** The template a document describes, with any structural issues. */
 export async function documentToTemplate(
   editor: Editor,

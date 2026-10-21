@@ -9,6 +9,7 @@ import {
   documentToTemplate,
   isEmptyDocument,
   keepProcedureId,
+  replaceContent,
   templateToUpdate,
   withAsyncMarkdown,
 } from "./document.js";
@@ -120,5 +121,26 @@ describe("keepProcedureId", () => {
     metadata.set("title", "Renamed");
 
     expect(metadata.toJSON()).toMatchObject({ id: "DOC-001", title: "Renamed" });
+  });
+});
+
+describe("replaceContent", () => {
+  it("makes a document describe another template", async () => {
+    const editor = createEditor();
+    const doc = new Y.Doc();
+    Y.applyUpdate(doc, await templateToUpdate(editor, TEMPLATE));
+    doc.getMap(METADATA_MAP).set("author", "Someone");
+    const replacement: ProcedureTemplate = {
+      metadata: { ...TEMPLATE.metadata, title: "Replaced" },
+      steps: [{ heading: "Only", content: [{ type: "Checkbox", text: "Done", checked: false }] }],
+    };
+    const source = new Y.Doc();
+    Y.applyUpdate(source, await templateToUpdate(editor, replacement));
+
+    replaceContent(doc, source);
+    const { template } = await documentToTemplate(editor, doc);
+
+    expect(diffPaths(replacement, template)).toEqual([]);
+    expect(doc.getMap(METADATA_MAP).has("author")).toBe(false);
   });
 });
