@@ -102,35 +102,88 @@ export async function getTemplate(templatePath: string): Promise<ProcedureTempla
   return request(`/templates/content?${new URLSearchParams({ path: templatePath })}`);
 }
 
-/** A collaboratively edited template (server only). */
-export interface CollabTemplateSummary {
-  id: string;
-  title: string;
+/** A procedure's template: a workspace file, a shared (collaboratively edited) one, or both. */
+export interface CatalogEntry {
   procedure_id: string;
+  title: string;
   version: string;
-  /** ISO 8601 timestamp of the last stored change. */
-  updated_at: string;
+  /** Path of the workspace's `template.md`, if there is one. */
+  file: string | null;
+  /** The shared template, if there is one. */
+  shared: { id: string; updated_at: string } | null;
+  /** Whether the shared template no longer describes what the workspace file does. */
+  differs_from_file: boolean;
+}
+
+export interface TemplateCatalog {
+  /** Whether templates can be edited together here (never in the desktop app). */
+  collab: boolean;
+  entries: CatalogEntry[];
+}
+
+/** Every procedure's template, one entry per procedure ID. */
+export async function getTemplateCatalog(): Promise<TemplateCatalog> {
+  if (!isDesktop) return request("/template-catalog");
+  const files: TemplateSummary[] = await invoke("list_templates");
+  const entries = files
+    .map((file) => ({
+      procedure_id: file.id,
+      title: file.title,
+      version: file.version,
+      file: file.path,
+      shared: null,
+      differs_from_file: false,
+    }))
+    .sort((a, b) => a.title.localeCompare(b.title) || a.procedure_id.localeCompare(b.procedure_id));
+  return { collab: false, entries };
 }
 
 /**
- * Collaboratively edited templates, or null when this server (or the
- * desktop app) has no collaborative editing.
+ * The shared template of the workspace template's procedure, created from
+ * the file when there is none yet; returns its ID.
  */
-export async function listCollabTemplates(): Promise<CollabTemplateSummary[] | null> {
-  if (isDesktop) return null;
-  const list = await request<{ enabled: boolean; templates: CollabTemplateSummary[] }>(
-    "/collab/templates",
-  );
-  return list.enabled ? list.templates : null;
-}
-
-/** Start a collaboratively edited template from a workspace template; returns its ID. */
-export async function createCollabTemplate(templatePath: string): Promise<string> {
-  if (isDesktop) desktopOnly("createCollabTemplate");
-  const created = await postJson<{ id: string }>("/collab/templates", {
+export async function openSharedTemplate(templatePath: string): Promise<string> {
+  if (isDesktop) desktopOnly("openSharedTemplate");
+  const opened = await postJson<{ id: string }>("/collab/templates", {
     template_path: templatePath,
   });
+  return opened.id;
+}
+
+/** A new shared template with no steps yet; returns its ID. */
+export async function createBlankTemplate(procedureId: string, title: string): Promise<string> {
+  if (isDesktop) desktopOnly("createBlankTemplate");
+  const created = await postJson<{ id: string }>("/collab/templates/blank", {
+    procedure_id: procedureId,
+    title,
+  });
   return created.id;
+}
+
+/** A copy of shared template `id` under a new procedure ID; returns the copy's ID. */
+export async function duplicateTemplate(
+  id: string,
+  procedureId: string,
+  title: string,
+): Promise<string> {
+  if (isDesktop) desktopOnly("duplicateTemplate");
+  const created = await postJson<{ id: string }>(
+    `/collab/templates/${encodeURIComponent(id)}/duplicate`,
+    { procedure_id: procedureId, title },
+  );
+  return created.id;
+}
+
+/** Archive shared template `id`. Its procedure ID stays taken. */
+export async function archiveTemplate(id: string): Promise<void> {
+  if (isDesktop) desktopOnly("archiveTemplate");
+  await request(`/collab/templates/${encodeURIComponent(id)}/archive`, { method: "POST" });
+}
+
+/** Replace shared template `id` with its procedure's workspace file. */
+export async function resetTemplateFromFile(id: string): Promise<void> {
+  if (isDesktop) desktopOnly("resetTemplateFromFile");
+  await request(`/collab/templates/${encodeURIComponent(id)}/reset`, { method: "POST" });
 }
 
 /** Start an execution of shared template `id` as it is now. */

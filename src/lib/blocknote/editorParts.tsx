@@ -1,6 +1,6 @@
-// Pieces shared by the template editors (the file prototype and the
-// collaborative one): Markdown conversion, the slash menu, and the panel
-// showing what the document converts to.
+// Pieces shared by the collaborative template editor and the read-only
+// template view: Markdown conversion, the slash menu, and the panel showing
+// what the document converts to.
 import { filterSuggestionItems, insertOrUpdateBlockForSlashMenu } from "@blocknote/core";
 import {
   type DefaultReactSuggestionItem,

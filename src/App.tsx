@@ -7,8 +7,7 @@ import { scoped } from "#lib/utils/cx.js";
 import DeviceConnectPage from "./pages/DeviceConnectPage.js";
 import ExecutionPage from "./pages/ExecutionPage.js";
 import HomePage from "./pages/HomePage.js";
-import CollabTemplatePage from "./pages/CollabTemplatePage.js";
-import TemplateEditorPage from "./pages/TemplateEditorPage.js";
+import TemplatePage from "./pages/TemplatePage.js";
 import UploadPage from "./pages/UploadPage.js";
 import styles from "./App.module.css";
 
@@ -29,8 +28,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<HomePage />} />
           <Route path="/execution/:id" element={<ExecutionPage />} />
-          <Route path="/templates/edit" element={<TemplateEditorPage />} />
-          <Route path="/templates/shared/:id" element={<CollabTemplatePage />} />
+          <Route path="/templates/:procedureId" element={<TemplatePage />} />
           <Route path="/upload/:token" element={<UploadPage />} />
           <Route path="/device/connect" element={<DeviceConnectPage />} />
         </Routes>
