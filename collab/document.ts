@@ -103,6 +103,20 @@ export function documentMetadata(doc: Y.Doc): Record<string, unknown> {
   return doc.getMap(METADATA_MAP).toJSON();
 }
 
+/**
+ * Keep the metadata `id` of `doc` at `procedureId`, which can't change once
+ * the template is created: changes by editors are undone. An empty document
+ * (not seeded yet) is left alone.
+ */
+export function keepProcedureId(doc: Y.Doc, procedureId: string) {
+  const metadata = doc.getMap(METADATA_MAP);
+  const restore = () => {
+    if (metadata.size > 0 && metadata.get("id") !== procedureId) metadata.set("id", procedureId);
+  };
+  metadata.observe(restore);
+  restore();
+}
+
 /** The template a document describes, with any structural issues. */
 export async function documentToTemplate(
   editor: Editor,

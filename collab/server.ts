@@ -15,6 +15,7 @@ import {
   documentToTemplate,
   type Editor,
   isEmptyDocument,
+  keepProcedureId,
   templateToUpdate,
 } from "./document.js";
 import { verifyToken } from "./token.js";
@@ -96,6 +97,16 @@ export function createCollabServer(config: CollabServerConfig, pool: pg.Pool): S
         },
       }),
     ],
+
+    async afterLoadDocument({ documentName, document }) {
+      const result = await pool.query<{ procedure_id: string }>(
+        "SELECT procedure_id FROM templates WHERE id = $1",
+        [documentName],
+      );
+      const row = result.rows[0];
+      if (!row) throw new Error(`no template ${documentName}`);
+      keepProcedureId(document, row.procedure_id);
+    },
 
     async onUpgrade({ request, socket }) {
       if (pathOf(request) !== COLLAB_PATH) {
