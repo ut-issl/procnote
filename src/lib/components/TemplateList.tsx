@@ -1,46 +1,44 @@
-import type { TemplateSummary } from "#lib/types/index.js";
+import { Link } from "react-router";
+import type { CatalogEntry } from "#lib/api/commands.js";
+import { catalogBadges, templatePagePath } from "#lib/templates.js";
 import { scoped } from "#lib/utils/cx.js";
+import { formatTimestamp } from "#lib/utils/format.js";
 import styles from "./TemplateList.module.css";
 
 const c = scoped(styles);
 
-export default function TemplateList({
-  templates,
-  onstart,
-  onedit,
-  onshare,
-}: {
-  templates: TemplateSummary[];
-  onstart: (t: TemplateSummary) => void;
-  onedit?: (t: TemplateSummary) => void;
-  /** Copy the template into a shared, collaboratively edited one. */
-  onshare?: (t: TemplateSummary) => void;
-}) {
+/** The procedures' templates, each opening its template page (where executions start). */
+export default function TemplateList({ entries }: { entries: CatalogEntry[] }) {
   return (
     <div className={c("template-list")}>
-      {templates.map((template) => (
-        <div className={c("template-card")} key={template.path}>
+      {entries.map((entry) => (
+        <Link
+          className={c("template-card")}
+          key={entry.procedure_id}
+          to={templatePagePath(entry.procedure_id)}
+        >
           <div className={c("template-info")}>
-            <span className={c("template-title")}>{template.title}</span>
+            <span className={c("template-title")}>{entry.title || "Untitled"}</span>
             <span className={c("template-meta")}>
-              {template.id} &middot; v{template.version}
+              {entry.procedure_id} &middot; v{entry.version}
+              {entry.shared && <> &middot; updated {formatTimestamp(entry.shared.updated_at)}</>}
             </span>
           </div>
-          {onedit && (
-            <button className={c("btn-edit")} onClick={() => onedit(template)}>
-              Edit (prototype)
-            </button>
-          )}
-          {onshare && (
-            <button className={c("btn-edit")} onClick={() => onshare(template)}>
-              Edit together
-            </button>
-          )}
-          <button className={c("btn-start")} onClick={() => onstart(template)}>
-            Start
-          </button>
-        </div>
+          <TemplateBadges entry={entry} />
+        </Link>
       ))}
     </div>
+  );
+}
+
+export function TemplateBadges({ entry }: { entry: CatalogEntry }) {
+  return (
+    <span className={c("badges")}>
+      {catalogBadges(entry).map((badge) => (
+        <span key={badge.text} className={c("badge", badge.warning && "badge-warning")}>
+          {badge.text}
+        </span>
+      ))}
+    </span>
   );
 }

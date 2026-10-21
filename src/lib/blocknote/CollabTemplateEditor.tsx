@@ -268,6 +268,9 @@ function SharedEditor({
           >
             Download template.md
           </button>
+          {result && result.issues.length > 0 && (
+            <p className={c("issues")}>Fix the issues below to start an execution.</p>
+          )}
           {downloadError && <p className={c("issues")}>{downloadError}</p>}
         </section>
         <IssuesSection issues={result?.issues} />
