@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
 import * as api from "#lib/api/commands.js";
+import NewTemplateForm from "#lib/components/NewTemplateForm.js";
 import TemplateList from "#lib/components/TemplateList.js";
 import { fetchOrKept, localExecutions } from "#lib/offline/index.js";
 import { isUnreachable } from "#lib/offline/localExecutions.js";
 import { isDesktop, logWarn } from "#lib/platform.js";
-import { executionStore } from "#lib/stores/execution.js";
 import { useExecutionStore } from "#lib/stores/useExecutionStore.js";
-import type { ExecutionSummary, TemplateSummary } from "#lib/types/index.js";
+import { templatePagePath } from "#lib/templates.js";
+import type { ExecutionSummary } from "#lib/types/index.js";
 import { scoped } from "#lib/utils/cx.js";
 import { formatTimestamp } from "#lib/utils/format.js";
 import styles from "./HomePage.module.css";
@@ -33,13 +34,13 @@ async function listExecutions(): Promise<ExecutionSummary[]> {
 export default function HomePage() {
   const navigate = useNavigate();
   const store = useExecutionStore();
-  const [templates, setTemplates] = useState<TemplateSummary[]>([]);
+  const [catalog, setCatalog] = useState<api.TemplateCatalog | null>(null);
   const [executions, setExecutions] = useState<ExecutionSummary[]>([]);
   const [loadingTemplates, setLoadingTemplates] = useState(true);
   const [loadingExecutions, setLoadingExecutions] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedProcedure, setSelectedProcedure] = useState("all");
-  const [shared, setShared] = useState<api.CollabTemplateSummary[] | null>(null);
+  const [creating, setCreating] = useState(false);
   // Desktop app connected to a server: its executions not kept here yet.
   const [onServer, setOnServer] = useState<ExecutionSummary[]>([]);
 
@@ -47,24 +48,21 @@ export default function HomePage() {
     let cancelled = false;
     void (async () => {
       try {
-        const loaded = await fetchOrKept("templates", api.listTemplates);
-        if (!cancelled) setTemplates(loaded);
+        const loaded = await fetchOrKept("template-catalog", api.getTemplateCatalog);
+        if (!cancelled) setCatalog(loaded);
         // Keep their contents, to start executions of them offline.
-        void localExecutions?.keepTemplates(loaded.map((t) => t.path)).catch(() => undefined);
+        void (async () => {
+          await localExecutions?.keepTemplates(
+            loaded.entries.flatMap((entry) => (entry.file ? [entry.file] : [])),
+          );
+          await localExecutions?.keepSharedTemplates(
+            loaded.entries.flatMap((entry) => (entry.shared ? [entry.shared.id] : [])),
+          );
+        })().catch(() => undefined);
       } catch (e) {
         if (!cancelled) setError(String(e));
       } finally {
         if (!cancelled) setLoadingTemplates(false);
-      }
-
-      try {
-        const loaded = await fetchOrKept("shared-templates", api.listCollabTemplates);
-        if (!cancelled) setShared(loaded);
-        void localExecutions
-          ?.keepSharedTemplates((loaded ?? []).map((t) => t.id))
-          .catch(() => undefined);
-      } catch (e) {
-        void logWarn(`[home] listCollabTemplates failed: ${e}`);
       }
 
       if (isDesktop) {
@@ -111,15 +109,6 @@ export default function HomePage() {
       : sorted.filter((e) => e.procedure_id === selectedProcedure);
   }, [executions, selectedProcedure]);
 
-  async function handleShare(template: TemplateSummary) {
-    try {
-      const id = await api.createCollabTemplate(template.path);
-      navigate(`/templates/shared/${id}`);
-    } catch (e) {
-      setError(String(e));
-    }
-  }
-
   async function openFromServer(executionId: string) {
     try {
       await api.openServerExecution(executionId);
@@ -129,78 +118,43 @@ export default function HomePage() {
     }
   }
 
-  async function handleStartShared(templateId: string) {
-    const started = await executionStore.startShared(templateId);
-    if (started) navigate(`/execution/${started.execution_id}`);
-  }
-
-  async function handleStart(template: TemplateSummary) {
-    const started = await executionStore.start(template.path);
-    if (started) navigate(`/execution/${started.execution_id}`);
+  async function createBlank(procedureId: string, title: string) {
+    await api.createBlankTemplate(procedureId, title);
+    navigate(templatePagePath(procedureId));
   }
 
   return (
     <div className={c("home")}>
       <section className={c("section")}>
-        <h2 className={c("section-title")}>Procedure Templates</h2>
+        <div className={c("section-header")}>
+          <h2 className={c("section-title")}>Procedure Templates</h2>
+          {catalog?.collab && !creating && (
+            <button className="btn btn-secondary" onClick={() => setCreating(true)}>
+              + New template
+            </button>
+          )}
+        </div>
         {store.error && <p className={c("error")}>{store.error}</p>}
+        {creating && (
+          <NewTemplateForm
+            submitLabel="Create"
+            onSubmit={createBlank}
+            onCancel={() => setCreating(false)}
+          />
+        )}
         {loadingTemplates ? (
           <p className={c("loading")}>Loading templates...</p>
         ) : error ? (
           <p className={c("error")}>{error}</p>
-        ) : templates.length === 0 ? (
+        ) : !catalog || catalog.entries.length === 0 ? (
           <p className={c("empty")}>
-            No procedure templates found. Place <code>.md</code> files in the procedures directory.
+            No procedure templates found. Place <code>.md</code> files in the procedures directory
+            {catalog?.collab && <>, or create one with New template</>}.
           </p>
         ) : (
-          <TemplateList
-            templates={templates}
-            onstart={handleStart}
-            onedit={(t) => navigate(`/templates/edit?${new URLSearchParams({ path: t.path })}`)}
-            onshare={shared ? handleShare : undefined}
-          />
+          <TemplateList entries={catalog.entries} />
         )}
       </section>
-
-      {shared && (
-        <section className={c("section")}>
-          <h2 className={c("section-title")}>Shared Templates</h2>
-          {shared.length === 0 ? (
-            <p className={c("empty")}>
-              No shared templates yet. Use <em>Edit together</em> on a template above.
-            </p>
-          ) : (
-            <div className={c("execution-list")}>
-              {shared.map((template) => (
-                <div key={template.id} className={c("shared-card")}>
-                  <button
-                    className={c("execution-card")}
-                    onClick={() => navigate(`/templates/shared/${template.id}`)}
-                  >
-                    <div className={c("exec-header")}>
-                      <span className={c("exec-name")}>{template.title || "Untitled"}</span>
-                    </div>
-                    <div className={c("exec-meta")}>
-                      <span>
-                        {template.procedure_id} v{template.version}
-                      </span>
-                      <span className={c("exec-time")}>
-                        Updated {formatTimestamp(template.updated_at)}
-                      </span>
-                    </div>
-                  </button>
-                  <button
-                    className="btn btn-primary"
-                    onClick={() => handleStartShared(template.id)}
-                  >
-                    Start
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
-      )}
 
       {onServer.length > 0 && (
         <section className={c("section")}>

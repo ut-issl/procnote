@@ -525,7 +525,7 @@ async fn without_access_the_caller_is_unknown() {
 async fn without_collab_the_server_says_so() {
     let fixture = fixture(None);
 
-    let (status, list) = send(&fixture.app, get("/api/collab/templates")).await;
+    let (status, catalog) = send(&fixture.app, get("/api/template-catalog")).await;
     let (token_status, _) = send(
         &fixture.app,
         post_json(
@@ -536,6 +536,14 @@ async fn without_collab_the_server_says_so() {
     .await;
 
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(list, json!({ "enabled": false, "templates": [] }));
+    assert_eq!(catalog["collab"], false);
+    // The workspace's templates are listed, with no shared templates.
+    let entries = catalog["entries"].as_array().unwrap();
+    assert!(!entries.is_empty(), "{catalog}");
+    assert!(
+        entries
+            .iter()
+            .all(|entry| entry["shared"].is_null() && entry["file"].is_string())
+    );
     assert_eq!(token_status, StatusCode::NOT_FOUND);
 }

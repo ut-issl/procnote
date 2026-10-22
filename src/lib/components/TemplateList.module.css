@@ -8,14 +8,18 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 12px;
   padding: 12px 16px;
   background: #fff;
   border: 1px solid #ddd;
   border-radius: 6px;
+  color: inherit;
+  text-decoration: none;
 }
 
 .template-card:hover {
-  border-color: #bbb;
+  border-color: #aaa;
+  background: #fafafa;
 }
 
 .template-info {
@@ -34,35 +38,23 @@
   color: #888;
 }
 
-.btn-start {
-  padding: 6px 16px;
-  background: #1a1a2e;
-  color: #fff;
-  border: none;
-  border-radius: 4px;
-  font: inherit;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
+.badges {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
 }
 
-.btn-start:hover {
-  background: #16213e;
-}
-
-.btn-edit {
-  margin-left: auto;
-  margin-right: 8px;
-  padding: 6px 12px;
-  background: #fff;
+.badge {
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: #eef1f5;
   color: #555;
-  border: 1px solid #ccc;
-  border-radius: 4px;
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
+  font-size: 11px;
+  white-space: nowrap;
 }
 
-.btn-edit:hover {
-  background: #f5f5f5;
+.badge-warning {
+  background: #fff3e0;
+  color: #e65100;
 }

@@ -18,9 +18,8 @@ if (!DATABASE_URL && process.env.CI)
   throw new Error("PROCNOTE_TEST_DATABASE_URL must be set on CI");
 
 const SECRET = "collab-test-secret";
-const MIGRATION = new URL(
-  "../crates/procnote-server/migrations/0002_templates.sql",
-  import.meta.url,
+const MIGRATIONS = ["0002_templates.sql", "0005_template_procedure_ids.sql"].map(
+  (name) => new URL(`../crates/procnote-server/migrations/${name}`, import.meta.url),
 );
 
 const TEMPLATE: ProcedureTemplate = {
@@ -63,7 +62,7 @@ describe.skipIf(!DATABASE_URL)("collab service", () => {
     admin = new pg.Pool({ connectionString: DATABASE_URL });
     await admin.query(`CREATE SCHEMA ${schema}`);
     pool = new pg.Pool({ connectionString: DATABASE_URL, options: `-c search_path=${schema}` });
-    await pool.query(readFileSync(MIGRATION, "utf8"));
+    for (const migration of MIGRATIONS) await pool.query(readFileSync(migration, "utf8"));
     server = createCollabServer(
       { secret: SECRET, port: 0, address: "127.0.0.1", debounce: 50 },
       pool,
@@ -79,9 +78,14 @@ describe.skipIf(!DATABASE_URL)("collab service", () => {
     await admin?.end();
   });
 
+  /** What each template created by a test is seeded with: TEMPLATE under its own procedure ID. */
+  const seeds = new Map<string, ProcedureTemplate>();
+
   async function newTemplate(): Promise<string> {
     const id = randomUUID();
-    await pool.query("INSERT INTO templates (id) VALUES ($1)", [id]);
+    const procedureId = `COLLAB-${seeds.size + 1}`;
+    await pool.query("INSERT INTO templates (id, procedure_id) VALUES ($1, $2)", [id, procedureId]);
+    seeds.set(id, { ...TEMPLATE, metadata: { ...TEMPLATE.metadata, id: procedureId } });
     return id;
   }
 
@@ -89,7 +93,7 @@ describe.skipIf(!DATABASE_URL)("collab service", () => {
     return fetch(`http://${base}/internal/templates/${id}`, {
       method: "POST",
       headers: { Authorization: auth, "Content-Type": "application/json" },
-      body: JSON.stringify(TEMPLATE),
+      body: JSON.stringify(seeds.get(id)),
     });
   }
 
@@ -124,7 +128,23 @@ describe.skipIf(!DATABASE_URL)("collab service", () => {
       return result.rows[0]?.metadata?.title === "Renamed" ? result.rows[0].metadata : undefined;
     });
     editor.provider.destroy();
-    expect(stored).toMatchObject({ id: "COLLAB-1", title: "Renamed" });
+    expect(stored).toMatchObject({ id: seeds.get(id)?.metadata.id, title: "Renamed" });
+  });
+
+  it("keeps the procedure ID a template was created with", async () => {
+    const id = await newTemplate();
+    await seed(id);
+    const procedureId = seeds.get(id)?.metadata.id;
+
+    const editor = connect(id, token(id));
+    await waitFor(async () => (editor.provider.isSynced ? true : undefined));
+    const metadata = editor.document.getMap(METADATA_MAP);
+    metadata.set("id", "RENAMED");
+    const restored = await waitFor(async () =>
+      metadata.get("id") === procedureId ? true : undefined,
+    );
+    editor.provider.destroy();
+    expect(restored).toBe(true);
   });
 
   it("rejects tokens that are forged, expired, or for another document", async () => {
@@ -160,7 +180,7 @@ describe.skipIf(!DATABASE_URL)("collab service", () => {
     const broken = await get();
     editor.provider.destroy();
 
-    expect(runnable).toEqual({ template: TEMPLATE, issues: [] });
+    expect(runnable).toEqual({ template: seeds.get(id), issues: [] });
     expect(broken.issues).toEqual(["The procedure has no title."]);
   });
 
@@ -170,5 +190,29 @@ describe.skipIf(!DATABASE_URL)("collab service", () => {
     expect((await seed(id, "Bearer wrong")).status).toBe(401);
     expect((await seed(id)).status).toBe(200);
     expect((await seed(id)).status).toBe(409);
+  });
+
+  it("replaces a document's content for the editors connected to it", async () => {
+    const id = await newTemplate();
+    await seed(id);
+    const editor = connect(id, token(id));
+    await waitFor(async () => (editor.provider.isSynced ? true : undefined));
+    const seeded = seeds.get(id);
+    if (!seeded) throw new Error("not seeded");
+    const replacement = { ...seeded, metadata: { ...seeded.metadata, title: "From file" } };
+
+    const response = await fetch(`http://${base}/internal/templates/${id}`, {
+      method: "PUT",
+      headers: { Authorization: `Bearer ${SECRET}`, "Content-Type": "application/json" },
+      body: JSON.stringify(replacement),
+    });
+    const title = await waitFor(async () => {
+      const value = editor.document.getMap(METADATA_MAP).get("title");
+      return value === "From file" ? value : undefined;
+    });
+    editor.provider.destroy();
+
+    expect(response.status).toBe(200);
+    expect(title).toBe("From file");
   });
 });

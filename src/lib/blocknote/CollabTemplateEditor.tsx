@@ -130,10 +130,12 @@ function useMetadata(map: Y.Map<unknown>): Record<string, unknown> {
 function MetadataField({
   label,
   value,
+  readOnly,
   onCommit,
 }: {
   label: string;
   value: string;
+  readOnly?: boolean;
   onCommit: (value: string) => void;
 }) {
   const [draft, setDraft] = useState(value);
@@ -146,6 +148,8 @@ function MetadataField({
       {label}
       <input
         value={draft}
+        readOnly={readOnly}
+        title={readOnly ? "Fixed when the template is created" : undefined}
         onChange={(e) => setDraft(e.target.value)}
         onBlur={commit}
         onKeyDown={(e) => {
@@ -230,6 +234,8 @@ function SharedEditor({
               key={key}
               label={label}
               value={typeof metadata[key] === "string" ? metadata[key] : ""}
+              // The collab service keeps the procedure ID it was created with.
+              readOnly={key === "id"}
               onCommit={(value) => {
                 if (key === "author" && !value.trim()) metadataMap.delete(key);
                 else metadataMap.set(key, value);
@@ -262,6 +268,9 @@ function SharedEditor({
           >
             Download template.md
           </button>
+          {result && result.issues.length > 0 && (
+            <p className={c("issues")}>Fix the issues below to start an execution.</p>
+          )}
           {downloadError && <p className={c("issues")}>{downloadError}</p>}
         </section>
         <IssuesSection issues={result?.issues} />
