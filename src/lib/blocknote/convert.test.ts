@@ -10,6 +10,7 @@ import {
   type MarkdownConverter,
   metadataIssues,
   propsToInput,
+  tableMarkdown,
   templateToBlocks,
 } from "./convert.js";
 
@@ -200,6 +201,91 @@ describe("blocksToTemplate", () => {
     expect(blocksToTemplate(blocks, metadata, md).issues).toEqual([
       { message: 'Input ID "x" is used more than once.' },
     ]);
+  });
+});
+
+describe("tables", () => {
+  const text = (value: string, styles: Record<string, boolean> = {}) => ({
+    type: "text",
+    text: value,
+    styles,
+  });
+  const cell = (content: unknown[], textAlignment = "left") => ({
+    type: "tableCell",
+    content,
+    props: { textAlignment },
+  });
+  const tableBlock = (rows: unknown[][][]): DocBlock => ({
+    type: "table",
+    content: {
+      type: "tableContent",
+      rows: rows.map((cells) => ({
+        cells: cells.map((content, column) => cell(content, column === 1 ? "right" : "left")),
+      })),
+    },
+  });
+  const stepWith = (children: DocBlock[]): DocBlock[] => [{ type: "step", content: "S", children }];
+
+  test("a table with input and checkbox cells becomes a Table item", () => {
+    const blocks = stepWith([
+      tableBlock([
+        [[text("Parameter")], [text("Value")], [text("OK")]],
+        [[text("a | b")], [text("input:v", { code: true })], [text("[ ]")]],
+        [[], [text("x")], [text("[x]")]],
+      ]),
+    ]);
+
+    const { template } = blocksToTemplate(blocks, metadata, md);
+
+    expect(template.steps[0]?.content).toEqual([
+      {
+        type: "Table",
+        alignments: ["none", "right", "none"],
+        header: ["Parameter", "Value", "OK"],
+        rows: [
+          [
+            { type: "Text", text: "a \\| b" },
+            { type: "Input", input_id: "v" },
+            { type: "Checkbox", checked: false },
+          ],
+          [
+            { type: "Text", text: "" },
+            { type: "Text", text: "x" },
+            { type: "Checkbox", checked: true },
+          ],
+        ],
+      },
+    ]);
+  });
+
+  test("a table without such cells stays prose", () => {
+    const blocks = stepWith([tableBlock([[[text("A")]], [[text("input:v")]]])]);
+
+    const tablesAsProse: MarkdownConverter = {
+      ...md,
+      fromBlocks: (run) => run.map((block) => block.type).join(),
+    };
+
+    const { template } = blocksToTemplate(blocks, metadata, tablesAsProse);
+
+    expect(template.steps[0]?.content).toEqual([{ type: "Prose", text: "table" }]);
+  });
+
+  test("a Table item is written as procnote Markdown for the editor", () => {
+    expect(
+      tableMarkdown({
+        type: "Table",
+        alignments: ["none", "right", "center"],
+        header: ["A", "B", "C"],
+        rows: [
+          [
+            { type: "Text", text: "*a*" },
+            { type: "Input", input_id: "v" },
+            { type: "Checkbox", checked: true },
+          ],
+        ],
+      }),
+    ).toBe("| A | B | C |\n| --- | --: | :-: |\n| *a* | `input:v` | [x] |");
   });
 });
 

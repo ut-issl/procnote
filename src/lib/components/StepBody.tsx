@@ -14,6 +14,7 @@ import AttachmentField from "./AttachmentField.js";
 import CheckboxItem from "./CheckboxItem.js";
 import InputField from "./InputField.js";
 import NoteEditor from "./NoteEditor.js";
+import TableBlock from "./TableBlock.js";
 import styles from "./StepBody.module.css";
 
 const c = scoped(styles);
@@ -132,6 +133,17 @@ export default function StepBody({
                 key={block.id ?? index}
                 checkbox={block}
                 disabled={!isInteractable}
+                ontoggle={toggleCheckbox}
+              />
+            );
+          case "Table":
+            return (
+              <TableBlock
+                key={index}
+                table={block}
+                disabled={!isInteractable}
+                onrecord={recordInput}
+                onrevert={executionActive ? clearInput : undefined}
                 ontoggle={toggleCheckbox}
               />
             );

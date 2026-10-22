@@ -67,6 +67,45 @@ pub enum StepContent {
     },
     /// A block of input definitions from a fenced `inputs` code block.
     InputBlock { inputs: Vec<InputDefinition> },
+    /// A Markdown table with cells operators fill in: inputs (`` `input:<id>` ``,
+    /// defined in the step's `inputs` block) or checkboxes (`[ ]`, `[x]`).
+    /// Tables without such cells are prose.
+    Table {
+        alignments: Vec<TableAlignment>,
+        /// Header cells (Markdown source).
+        header: Vec<String>,
+        rows: Vec<Vec<TableCell>>,
+    },
+}
+
+/// Column alignment from a table's delimiter row.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[ts(export)]
+#[serde(rename_all = "lowercase")]
+pub enum TableAlignment {
+    None,
+    Left,
+    Center,
+    Right,
+}
+
+/// A body cell of a [`StepContent::Table`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+#[ts(export)]
+#[serde(tag = "type")]
+pub enum TableCell {
+    /// Static content (Markdown source).
+    Text { text: String },
+    /// The value of a scalar input defined in the step's `inputs` block.
+    Input { input_id: String },
+    /// A checkbox.
+    Checkbox {
+        /// Stable element ID, assigned at execution start. `None` in raw templates.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        id: Option<String>,
+        checked: bool,
+    },
 }
 
 /// Definition of an input field that operators fill in during execution.

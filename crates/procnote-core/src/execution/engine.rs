@@ -4,7 +4,9 @@ use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 use crate::event::types::{AttachmentRecord, CompletionStatus, Event, ExecutionId};
-use crate::template::types::{InputType, ProcedureTemplate, StepContent};
+use crate::template::types::{
+    InputType, ProcedureTemplate, StepContent, TableAlignment, TableCell,
+};
 
 /// Errors that can occur during execution state transitions.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -85,6 +87,20 @@ pub enum ExecutionStepContent {
     InputBlock {
         inputs: Vec<crate::template::types::InputDefinition>,
     },
+    Table {
+        alignments: Vec<TableAlignment>,
+        header: Vec<String>,
+        rows: Vec<Vec<ExecutionTableCell>>,
+    },
+}
+
+/// Runtime body cell of a table. Input cells refer to the step's recorded inputs.
+#[derive(Debug, Clone)]
+pub enum ExecutionTableCell {
+    Text(String),
+    Input(String),
+    /// A checkbox cell; its `text` is empty and `nesting_level` 0.
+    Checkbox(ExecutionCheckbox),
 }
 
 /// Runtime checkbox state, paired with its template text and stable ID.
@@ -336,19 +352,12 @@ impl ExecutionState {
             } => {
                 self.require_active()?;
                 let step = self.get_present_step_mut(step_id)?;
-                let found = step.content.iter_mut().any(|item| {
-                    if let ExecutionStepContent::Checkbox(checkbox) = item
-                        && checkbox.id == checkbox_id.as_str()
-                    {
-                        checkbox.checked = *checked;
-                        checkbox.toggled_at = Some(*at);
-                        return true;
-                    }
-                    false
-                });
-                if !found {
-                    return Err(ExecutionError::CheckboxNotFound(checkbox_id.clone()));
-                }
+                let checkbox = step
+                    .checkboxes_mut()
+                    .find(|checkbox| checkbox.id == checkbox_id.as_str())
+                    .ok_or_else(|| ExecutionError::CheckboxNotFound(checkbox_id.clone()))?;
+                checkbox.checked = *checked;
+                checkbox.toggled_at = Some(*at);
             }
             Event::InputRecorded {
                 at,
@@ -582,6 +591,11 @@ impl ExecutionState {
 
             // Assign IDs to content items.
             let mut cb_index = 0usize;
+            let mut next_checkbox_id = || {
+                let id = format!("{step_id}/cb-{cb_index}");
+                cb_index += 1;
+                Some(id)
+            };
             let content: Vec<StepContent> = step
                 .content
                 .iter()
@@ -591,16 +605,36 @@ impl ExecutionState {
                         checked,
                         nesting_level,
                         ..
-                    } => {
-                        let id = format!("{step_id}/cb-{cb_index}");
-                        cb_index += 1;
-                        StepContent::Checkbox {
-                            id: Some(id),
-                            text: text.clone(),
-                            checked: *checked,
-                            nesting_level: *nesting_level,
-                        }
-                    }
+                    } => StepContent::Checkbox {
+                        id: next_checkbox_id(),
+                        text: text.clone(),
+                        checked: *checked,
+                        nesting_level: *nesting_level,
+                    },
+                    StepContent::Table {
+                        alignments,
+                        header,
+                        rows,
+                    } => StepContent::Table {
+                        alignments: alignments.clone(),
+                        header: header.clone(),
+                        rows: rows
+                            .iter()
+                            .map(|row| {
+                                row.iter()
+                                    .map(|cell| match cell {
+                                        TableCell::Checkbox { checked, .. } => {
+                                            TableCell::Checkbox {
+                                                id: next_checkbox_id(),
+                                                checked: *checked,
+                                            }
+                                        }
+                                        other => other.clone(),
+                                    })
+                                    .collect()
+                            })
+                            .collect(),
+                    },
                     // InputDefinition already has its own `id` from the template YAML.
                     other => other.clone(),
                 })
@@ -1180,12 +1214,31 @@ fn execution_content_with_checkbox_ids(
 ) -> Vec<ExecutionStepContent> {
     let mut used_ids: HashSet<String> = content
         .iter()
-        .filter_map(|item| match item {
-            StepContent::Checkbox { id: Some(id), .. } => Some(id.clone()),
-            _ => None,
+        .flat_map(|item| match item {
+            StepContent::Checkbox { id: Some(id), .. } => vec![id.clone()],
+            StepContent::Table { rows, .. } => rows
+                .iter()
+                .flatten()
+                .filter_map(|cell| match cell {
+                    TableCell::Checkbox { id: Some(id), .. } => Some(id.clone()),
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
         })
         .collect();
     let mut checkbox_index = 0usize;
+    let mut checkbox_id = |id: &Option<String>| {
+        id.clone().unwrap_or_else(|| {
+            loop {
+                let candidate = format!("{step_id}/cb-{checkbox_index}");
+                checkbox_index += 1;
+                if used_ids.insert(candidate.clone()) {
+                    break candidate;
+                }
+            }
+        })
+    };
 
     content
         .iter()
@@ -1196,27 +1249,47 @@ fn execution_content_with_checkbox_ids(
                 text,
                 checked,
                 nesting_level,
-            } => {
-                let id = id.clone().unwrap_or_else(|| {
-                    loop {
-                        let candidate = format!("{step_id}/cb-{checkbox_index}");
-                        checkbox_index += 1;
-                        if used_ids.insert(candidate.clone()) {
-                            break candidate;
-                        }
-                    }
-                });
-                ExecutionStepContent::Checkbox(ExecutionCheckbox {
-                    id,
-                    text: text.clone(),
-                    initial_checked: *checked,
-                    checked: *checked,
-                    nesting_level: nesting_level.unwrap_or_default(),
-                    toggled_at: None,
-                })
-            }
+            } => ExecutionStepContent::Checkbox(ExecutionCheckbox {
+                id: checkbox_id(id),
+                text: text.clone(),
+                initial_checked: *checked,
+                checked: *checked,
+                nesting_level: nesting_level.unwrap_or_default(),
+                toggled_at: None,
+            }),
             StepContent::InputBlock { inputs } => ExecutionStepContent::InputBlock {
                 inputs: inputs.clone(),
+            },
+            StepContent::Table {
+                alignments,
+                header,
+                rows,
+            } => ExecutionStepContent::Table {
+                alignments: alignments.clone(),
+                header: header.clone(),
+                rows: rows
+                    .iter()
+                    .map(|row| {
+                        row.iter()
+                            .map(|cell| match cell {
+                                TableCell::Text { text } => ExecutionTableCell::Text(text.clone()),
+                                TableCell::Input { input_id } => {
+                                    ExecutionTableCell::Input(input_id.clone())
+                                }
+                                TableCell::Checkbox { id, checked } => {
+                                    ExecutionTableCell::Checkbox(ExecutionCheckbox {
+                                        id: checkbox_id(id),
+                                        text: String::new(),
+                                        initial_checked: *checked,
+                                        checked: *checked,
+                                        nesting_level: 0,
+                                        toggled_at: None,
+                                    })
+                                }
+                            })
+                            .collect()
+                    })
+                    .collect(),
             },
         })
         .collect()
@@ -1375,12 +1448,40 @@ impl StepState {
         !self.inputs.is_empty()
             || self.attachments.values().any(|files| !files.is_empty())
             || !self.notes.is_empty()
-            || self.content.iter().any(|item| match item {
-                ExecutionStepContent::Checkbox(checkbox) => {
-                    checkbox.initial_checked != checkbox.checked
-                }
-                _ => false,
-            })
+            || self
+                .checkboxes()
+                .any(|checkbox| checkbox.initial_checked != checkbox.checked)
+    }
+
+    /// The step's checkboxes, including those in table cells, in document order.
+    pub fn checkboxes(&self) -> impl Iterator<Item = &ExecutionCheckbox> {
+        self.content.iter().flat_map(|item| match item {
+            ExecutionStepContent::Checkbox(checkbox) => vec![checkbox],
+            ExecutionStepContent::Table { rows, .. } => rows
+                .iter()
+                .flatten()
+                .filter_map(|cell| match cell {
+                    ExecutionTableCell::Checkbox(checkbox) => Some(checkbox),
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        })
+    }
+
+    fn checkboxes_mut(&mut self) -> impl Iterator<Item = &mut ExecutionCheckbox> {
+        self.content.iter_mut().flat_map(|item| match item {
+            ExecutionStepContent::Checkbox(checkbox) => vec![checkbox],
+            ExecutionStepContent::Table { rows, .. } => rows
+                .iter_mut()
+                .flatten()
+                .filter_map(|cell| match cell {
+                    ExecutionTableCell::Checkbox(checkbox) => Some(checkbox),
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        })
     }
 }
 
@@ -1503,6 +1604,45 @@ mod tests {
             ExecutionState::from_events(&events).unwrap().applied_events,
             6
         );
+    }
+
+    #[test]
+    fn table_cells_are_filled_with_inputs_and_checkboxes() {
+        let template = crate::template::parse_template(
+            "---\nid: X\ntitle: T\nversion: '1'\n---\n\n## S\n\n- [ ] before\n\n\
+             | A | V | OK |\n| - | - | - |\n| a | `input:v` | [ ] |\n| b |  | [x] |\n\n\
+             ```inputs\n- id: v\n  type: measurement\n  label: V\n  unit: V\n```\n",
+        )
+        .unwrap();
+        let mut state = ExecutionState::new();
+        let events = state.start(&template).unwrap();
+
+        let ids: Vec<String> = state.steps["step-0"]
+            .checkboxes()
+            .map(|checkbox| checkbox.id.clone())
+            .collect();
+        assert_eq!(ids, ["step-0/cb-0", "step-0/cb-1", "step-0/cb-2"]);
+
+        state.record_input("step-0", "v", "5.0", Some("V")).unwrap();
+        state
+            .toggle_checkbox("step-0", "step-0/cb-1", true)
+            .unwrap();
+        state
+            .toggle_checkbox("step-0", "step-0/cb-2", false)
+            .unwrap();
+
+        let step = &state.steps["step-0"];
+        assert_eq!(step.inputs["v"].value, "5.0");
+        let checked: Vec<bool> = step.checkboxes().map(|checkbox| checkbox.checked).collect();
+        assert_eq!(checked, [false, true, false]);
+        assert!(step.has_captured_data());
+        // The IDs are in the log, so replaying gives the same checkboxes.
+        let replayed = ExecutionState::from_events(&events).unwrap();
+        let replayed_ids: Vec<String> = replayed.steps["step-0"]
+            .checkboxes()
+            .map(|checkbox| checkbox.id.clone())
+            .collect();
+        assert_eq!(replayed_ids, ids);
     }
 
     #[test]

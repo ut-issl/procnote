@@ -44,7 +44,7 @@ export function readTableAlignments(markdown: string, blocks: DocBlock[]): DocBl
 }
 
 /** The column alignment of a table block, from its header row. */
-function columnAlignments(block: DocBlock): Alignment[] {
+export function columnAlignments(block: DocBlock): Alignment[] {
   const header = (block.content as TableContent | undefined)?.rows?.[0]?.cells ?? [];
   return header.map((cell) => {
     const alignment =

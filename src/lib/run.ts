@@ -14,8 +14,41 @@ export interface StepProgress {
   complete: boolean;
 }
 
+/** A step's inputs in document order, including those in table cells. */
 export function stepInputs(step: StepSummary): InputDefinitionSummary[] {
-  return step.content.flatMap((block) => (block.type === "InputBlock" ? block.inputs : []));
+  return step.content.flatMap((block) => {
+    if (block.type === "InputBlock") return block.inputs;
+    if (block.type !== "Table") return [];
+    return block.rows.flat().flatMap((cell) => (cell.type === "Input" ? [cell.input] : []));
+  });
+}
+
+export interface StepCheckbox {
+  id?: string;
+  text: string;
+  checked: boolean;
+  nesting_level: number;
+}
+
+/**
+ * A step's checkboxes in document order. A checkbox in a table cell is
+ * named by its row's first text cell and its column's header.
+ */
+export function stepCheckboxes(step: StepSummary): StepCheckbox[] {
+  return step.content.flatMap((block): StepCheckbox[] => {
+    if (block.type === "Checkbox") return [block];
+    if (block.type !== "Table") return [];
+    return block.rows.flatMap((row) => {
+      const rowText = row.find((cell) => cell.type === "Text" && cell.text.trim());
+      return row.flatMap((cell, column) => {
+        if (cell.type !== "Checkbox") return [];
+        const text = [rowText?.type === "Text" ? rowText.text : "", block.header[column] ?? ""]
+          .filter((part) => part.trim())
+          .join(" — ");
+        return [{ id: cell.id, text, checked: cell.checked, nesting_level: 0 }];
+      });
+    });
+  });
 }
 
 export function isInputFilled(input: InputDefinitionSummary): boolean {
@@ -23,7 +56,7 @@ export function isInputFilled(input: InputDefinitionSummary): boolean {
 }
 
 export function stepProgress(step: StepSummary): StepProgress {
-  const boxes = step.content.filter((block) => block.type === "Checkbox");
+  const boxes = stepCheckboxes(step);
   const inputs = stepInputs(step);
   const checkedBoxes = boxes.filter((box) => box.checked).length;
   const filledInputs = inputs.filter(isInputFilled).length;
@@ -44,8 +77,9 @@ export function isOpen(step: StepSummary): boolean {
 }
 
 /** Whether a recorded value falls outside the expected value. */
-export function isOutOfRange(expected: ExpectedValue | undefined, value: string): boolean {
-  if (expected === undefined || value.trim() === "") return false;
+export function isOutOfRange(expected: ExpectedValue | null | undefined, value: string): boolean {
+  // Absent in the generated type, but `null` in JSON from the backend.
+  if (expected == null || value.trim() === "") return false;
   if (typeof expected === "string") return value.trim() !== expected;
   const n = Number(value);
   return !Number.isFinite(n) || n < expected.min || n > expected.max;

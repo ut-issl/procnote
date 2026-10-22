@@ -4,10 +4,10 @@ use chrono::{DateTime, Utc};
 
 use crate::event::types::{CompletionStatus, ExecutionId};
 use crate::execution::{
-    ExecutionState, ExecutionStatus, ExecutionStepContent, RecordedAttachment, StepState,
-    StepStatus,
+    ExecutionState, ExecutionStatus, ExecutionStepContent, ExecutionTableCell, RecordedAttachment,
+    StepState, StepStatus,
 };
-use crate::template::types::{InputDefinition, InputType};
+use crate::template::types::{InputDefinition, InputType, TableAlignment};
 
 /// Render a human-readable Markdown snapshot from the current execution state.
 ///
@@ -209,6 +209,11 @@ fn render_step(number: usize, step: &StepState, output: &mut String) {
                 push_fmt(output, format_args!("\n"));
             }
             ExecutionStepContent::InputBlock { inputs } => render_input_block(step, inputs, output),
+            ExecutionStepContent::Table {
+                alignments,
+                header,
+                rows,
+            } => render_table(step, alignments, header, rows, output),
         }
     }
 
@@ -217,6 +222,53 @@ fn render_step(number: usize, step: &StepState, output: &mut String) {
 
 fn render_prose(text: &str, output: &mut String) {
     push_fmt(output, format_args!("{}\n\n", text.trim()));
+}
+
+/// A table with its input cells' recorded values and checkbox states.
+fn render_table(
+    step: &StepState,
+    alignments: &[TableAlignment],
+    header: &[String],
+    rows: &[Vec<ExecutionTableCell>],
+    output: &mut String,
+) {
+    let line = |cells: Vec<String>| format!("| {} |\n", cells.join(" | "));
+    push_fmt(output, format_args!("{}", line(header.to_vec())));
+    let delimiters = alignments
+        .iter()
+        .map(|alignment| {
+            match alignment {
+                TableAlignment::None => "---",
+                TableAlignment::Left => ":--",
+                TableAlignment::Center => ":-:",
+                TableAlignment::Right => "--:",
+            }
+            .to_string()
+        })
+        .collect();
+    push_fmt(output, format_args!("{}", line(delimiters)));
+    for row in rows {
+        let cells = row
+            .iter()
+            .map(|cell| match cell {
+                ExecutionTableCell::Text(text) => text.clone(),
+                ExecutionTableCell::Input(input_id) => {
+                    step.inputs.get(input_id).map_or_else(dash, |input| {
+                        let value = input.unit.as_ref().map_or_else(
+                            || input.value.clone(),
+                            |unit| format!("{} {unit}", input.value),
+                        );
+                        escape_table_cell(&inline_code(&value))
+                    })
+                }
+                ExecutionTableCell::Checkbox(checkbox) => {
+                    if checkbox.checked { "[x]" } else { "[ ]" }.to_string()
+                }
+            })
+            .collect();
+        push_fmt(output, format_args!("{}", line(cells)));
+    }
+    push_fmt(output, format_args!("\n"));
 }
 
 fn render_input_block(step: &StepState, inputs: &[InputDefinition], output: &mut String) {

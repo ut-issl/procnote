@@ -1,5 +1,6 @@
 // A recorded event in words, for showing conflicts: what the operator did,
 // with step, checkbox, and input names taken from the execution.
+import { stepCheckboxes, stepInputs } from "#lib/run.js";
 import type { EventRecord, ExecutionSummary } from "#lib/types/index.js";
 
 function stepHeading(summary: ExecutionSummary, stepId: string): string {
@@ -8,21 +9,16 @@ function stepHeading(summary: ExecutionSummary, stepId: string): string {
 
 function checkboxText(summary: ExecutionSummary, checkboxId: string): string {
   for (const step of summary.steps) {
-    for (const item of step.content) {
-      if (item.type === "Checkbox" && item.id === checkboxId) return item.text;
-    }
+    const checkbox = stepCheckboxes(step).find((box) => box.id === checkboxId);
+    if (checkbox) return checkbox.text;
   }
   return checkboxId;
 }
 
 function inputLabel(summary: ExecutionSummary, stepId: string, inputId: string): string {
   const step = summary.steps.find((s) => s.id === stepId);
-  for (const item of step?.content ?? []) {
-    if (item.type !== "InputBlock") continue;
-    const input = item.inputs.find((i) => i.definition.id === inputId);
-    if (input) return input.definition.label;
-  }
-  return inputId;
+  const input = step && stepInputs(step).find((i) => i.definition.id === inputId);
+  return input?.definition.label ?? inputId;
 }
 
 export function describeEvent(record: EventRecord, summary: ExecutionSummary): string {
