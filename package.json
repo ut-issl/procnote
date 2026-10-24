@@ -55,7 +55,7 @@
     "yjs": "^13.6.33"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "2.12.3",
+    "@tauri-apps/cli": "2.12.4",
     "@types/node": "26.6.5",
     "@types/pg": "8.23.1",
     "@types/qrcode": "1.5.6",
