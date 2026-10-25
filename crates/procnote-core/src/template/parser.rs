@@ -2,7 +2,7 @@ use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 
 use super::types::{
     ExpectedValue, InputDefinition, InputType, ProcedureMetadata, ProcedureTemplate, Step,
-    StepContent,
+    StepContent, TableAlignment, TableCell,
 };
 
 /// Errors that can occur during template parsing.
@@ -18,6 +18,8 @@ pub enum ParseError {
     ContentBeforeFirstStep,
     #[error("template body must contain at least one `##` step heading")]
     MissingStepHeading,
+    #[error("invalid table: {0}")]
+    InvalidTable(String),
 }
 
 /// Parse a procedure Markdown file (with YAML frontmatter) into a `ProcedureTemplate`.
@@ -105,6 +107,7 @@ struct ContentSegment {
 fn markdown_events(source: &str) -> Vec<MarkdownEvent<'_>> {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_TASKLISTS);
+    options.insert(Options::ENABLE_TABLES);
     Parser::new_ext(source, options)
         .into_offset_iter()
         .collect()
@@ -161,7 +164,7 @@ fn collect_heading_text(
 
 fn parse_step_content(section: &str) -> Result<Vec<StepContent>, ParseError> {
     let events = markdown_events(section);
-    let segments = content_segments(&events)?;
+    let segments = content_segments(section, &events)?;
     let mut content = Vec::new();
     let mut cursor = 0;
 
@@ -172,7 +175,55 @@ fn parse_step_content(section: &str) -> Result<Vec<StepContent>, ParseError> {
     }
     push_prose(section, cursor, section.len(), &mut content);
 
+    validate_table_inputs(&content)?;
     Ok(content)
+}
+
+/// Check that every input cell refers to a scalar input of the step's
+/// `inputs` blocks, and that no input is in more than one cell.
+fn validate_table_inputs(content: &[StepContent]) -> Result<(), ParseError> {
+    let definitions: Vec<&InputDefinition> = content
+        .iter()
+        .filter_map(|item| match item {
+            StepContent::InputBlock { inputs } => Some(inputs),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    let mut referenced = std::collections::HashSet::new();
+    let input_ids = content
+        .iter()
+        .filter_map(|item| match item {
+            StepContent::Table { rows, .. } => Some(rows),
+            _ => None,
+        })
+        .flatten()
+        .flatten()
+        .filter_map(|cell| match cell {
+            TableCell::Input { input_id } => Some(input_id),
+            _ => None,
+        });
+    for input_id in input_ids {
+        let definition = definitions
+            .iter()
+            .find(|definition| &definition.id == input_id)
+            .ok_or_else(|| {
+                ParseError::InvalidTable(format!(
+                    "`input:{input_id}` is not defined in an `inputs` block of the step"
+                ))
+            })?;
+        if definition.input_type == InputType::Attachment {
+            return Err(ParseError::InvalidTable(format!(
+                "attachment input `{input_id}` can't be a table cell"
+            )));
+        }
+        if !referenced.insert(input_id) {
+            return Err(ParseError::InvalidTable(format!(
+                "input `{input_id}` is in more than one cell"
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn push_prose(section: &str, start: usize, end: usize, content: &mut Vec<StepContent>) {
@@ -184,12 +235,38 @@ fn push_prose(section: &str, start: usize, end: usize, content: &mut Vec<StepCon
     }
 }
 
-fn content_segments(events: &[MarkdownEvent<'_>]) -> Result<Vec<ContentSegment>, ParseError> {
+fn content_segments(
+    source: &str,
+    events: &[MarkdownEvent<'_>],
+) -> Result<Vec<ContentSegment>, ParseError> {
     let mut segments = Vec::new();
     let mut index = 0;
+    // Tables inside block quotes stay prose.
+    let mut quote_depth = 0usize;
 
     while index < events.len() {
         match &events[index].0 {
+            Event::Start(Tag::BlockQuote(_)) => {
+                quote_depth += 1;
+                index += 1;
+            }
+            Event::End(TagEnd::BlockQuote(_)) => {
+                quote_depth = quote_depth.saturating_sub(1);
+                index += 1;
+            }
+            Event::Start(Tag::Table(alignments)) if quote_depth == 0 => {
+                let Some(end_index) = matching_table_end(events, index) else {
+                    index += 1;
+                    continue;
+                };
+                if let Some(table) = parse_table(source, events, index, end_index, alignments)? {
+                    segments.push(ContentSegment {
+                        range: events[index].1.start..events[end_index].1.end,
+                        content: vec![table],
+                    });
+                }
+                index = end_index + 1;
+            }
             Event::Start(Tag::List(_)) => {
                 let Some(end_index) = matching_list_end(events, index) else {
                     index += 1;
@@ -243,6 +320,104 @@ fn matching_list_end(events: &[MarkdownEvent<'_>], list_start_index: usize) -> O
             }
             _ => None,
         })
+}
+
+fn matching_table_end(events: &[MarkdownEvent<'_>], start_index: usize) -> Option<usize> {
+    events
+        .iter()
+        .enumerate()
+        .skip(start_index + 1)
+        .find_map(|(index, (event, _))| matches!(event, Event::End(TagEnd::Table)).then_some(index))
+}
+
+/// Read a table as [`StepContent::Table`], or `None` if it has no input or
+/// checkbox cells (it is then prose).
+fn parse_table(
+    source: &str,
+    events: &[MarkdownEvent<'_>],
+    start_index: usize,
+    end_index: usize,
+    alignments: &[pulldown_cmark::Alignment],
+) -> Result<Option<StepContent>, ParseError> {
+    let mut header = Vec::new();
+    let mut rows: Vec<Vec<TableCell>> = Vec::new();
+    let mut in_head = false;
+    let mut index = start_index + 1;
+    while index < end_index {
+        match &events[index].0 {
+            Event::Start(Tag::TableHead) => in_head = true,
+            Event::End(TagEnd::TableHead) => in_head = false,
+            Event::Start(Tag::TableRow) => rows.push(Vec::new()),
+            Event::Start(Tag::TableCell) => {
+                let cell_end = events
+                    .iter()
+                    .enumerate()
+                    .skip(index + 1)
+                    .find_map(|(i, (event, _))| {
+                        matches!(event, Event::End(TagEnd::TableCell)).then_some(i)
+                    })
+                    .unwrap_or(end_index);
+                let text = source[events[index].1.clone()].trim();
+                match rows.last_mut() {
+                    _ if in_head => header.push(text.to_string()),
+                    Some(row) => row.push(table_cell(text, &events[index + 1..cell_end])?),
+                    None => {}
+                }
+                index = cell_end;
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+
+    let fillable = rows
+        .iter()
+        .flatten()
+        .any(|cell| !matches!(cell, TableCell::Text { .. }));
+    Ok(fillable.then(|| StepContent::Table {
+        alignments: alignments.iter().copied().map(table_alignment).collect(),
+        header,
+        rows,
+    }))
+}
+
+/// A body cell from its trimmed source and the events inside it.
+fn table_cell(text: &str, inner: &[MarkdownEvent<'_>]) -> Result<TableCell, ParseError> {
+    if let [(Event::Code(code), _)] = inner
+        && let Some(input_id) = code.strip_prefix("input:")
+    {
+        let input_id = input_id.trim();
+        if input_id.is_empty() {
+            return Err(ParseError::InvalidTable(
+                "`input:` cell without an input ID".to_string(),
+            ));
+        }
+        return Ok(TableCell::Input {
+            input_id: input_id.to_string(),
+        });
+    }
+    Ok(match text {
+        "[ ]" => TableCell::Checkbox {
+            id: None,
+            checked: false,
+        },
+        "[x]" | "[X]" => TableCell::Checkbox {
+            id: None,
+            checked: true,
+        },
+        _ => TableCell::Text {
+            text: text.to_string(),
+        },
+    })
+}
+
+const fn table_alignment(alignment: pulldown_cmark::Alignment) -> TableAlignment {
+    match alignment {
+        pulldown_cmark::Alignment::None => TableAlignment::None,
+        pulldown_cmark::Alignment::Left => TableAlignment::Left,
+        pulldown_cmark::Alignment::Center => TableAlignment::Center,
+        pulldown_cmark::Alignment::Right => TableAlignment::Right,
+    }
 }
 
 fn matching_code_block_end(events: &[MarkdownEvent<'_>], start_index: usize) -> Option<usize> {
@@ -1031,5 +1206,131 @@ version: "0.1"
         // pulldown-cmark treats all 4 items as one list → mixed → prose
         assert_eq!(content.len(), 1, "expected 1 prose block: {content:?}");
         assert!(matches!(content[0], StepContent::Prose { .. }));
+    }
+
+    const TABLE_TEMPLATE: &str = r#"---
+id: TABLE-001
+title: "Table"
+version: "0.1"
+---
+
+## Measure
+
+Before.
+
+| Parameter | Actual | OK |
+| --- | --: | :-: |
+| Voltage | `input:voltage` | [ ] |
+| Current \| DC | `input:current` | [x] |
+
+```inputs
+- id: voltage
+  type: measurement
+  label: Voltage
+  unit: V
+- id: current
+  type: text
+  label: Current
+```
+"#;
+
+    fn text_cell(text: &str) -> TableCell {
+        TableCell::Text {
+            text: text.to_string(),
+        }
+    }
+
+    #[test]
+    fn table_with_input_and_checkbox_cells() {
+        let template = parse_template(TABLE_TEMPLATE).unwrap();
+        let content = &template.steps[0].content;
+
+        assert_eq!(content.len(), 3, "{content:?}");
+        assert_eq!(
+            content[0],
+            StepContent::Prose {
+                text: "Before.".to_string()
+            }
+        );
+        assert_eq!(
+            content[1],
+            StepContent::Table {
+                alignments: vec![
+                    TableAlignment::None,
+                    TableAlignment::Right,
+                    TableAlignment::Center
+                ],
+                header: vec!["Parameter".into(), "Actual".into(), "OK".into()],
+                rows: vec![
+                    vec![
+                        text_cell("Voltage"),
+                        TableCell::Input {
+                            input_id: "voltage".to_string()
+                        },
+                        TableCell::Checkbox {
+                            id: None,
+                            checked: false
+                        },
+                    ],
+                    vec![
+                        text_cell(r"Current \| DC"),
+                        TableCell::Input {
+                            input_id: "current".to_string()
+                        },
+                        TableCell::Checkbox {
+                            id: None,
+                            checked: true
+                        },
+                    ],
+                ],
+            }
+        );
+        assert!(matches!(content[2], StepContent::InputBlock { .. }));
+    }
+
+    #[test]
+    fn tables_without_fillable_cells_are_prose() {
+        let bodies = [
+            "| A | B |\n| - | - |\n| a | `code` |",
+            "> | A |\n> | - |\n> | [ ] |",
+        ];
+        for body in bodies {
+            let source = format!("---\nid: X\ntitle: T\nversion: '1'\n---\n\n## S\n\n{body}\n");
+            let content = &parse_template(&source).unwrap().steps[0].content;
+
+            assert_eq!(
+                content,
+                &vec![StepContent::Prose {
+                    text: body.to_string()
+                }],
+                "{body}"
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_input_cells_are_errors() {
+        let text_input = "```inputs\n- id: v\n  type: text\n  label: V\n```\n";
+        let cases = [
+            ("| A |\n| - |\n| `input:nope` |\n", text_input),
+            (
+                "| A |\n| - |\n| `input:photo` |\n",
+                "```inputs\n- id: photo\n  type: attachment\n  label: Photo\n```\n",
+            ),
+            (
+                "| A | B |\n| - | - |\n| `input:v` | `input:v` |\n",
+                text_input,
+            ),
+            ("| A |\n| - |\n| `input:` |\n", text_input),
+        ];
+        for (table, inputs) in cases {
+            let source =
+                format!("---\nid: X\ntitle: T\nversion: '1'\n---\n\n## S\n\n{table}\n{inputs}");
+
+            assert!(
+                matches!(parse_template(&source), Err(ParseError::InvalidTable(_))),
+                "{table}"
+            );
+        }
     }
 }

@@ -10,7 +10,7 @@ use serde::Serialize;
 use super::parse_template;
 use super::types::{
     ExpectedValue, InputDefinition, InputType, ProcedureMetadata, ProcedureTemplate, Step,
-    StepContent,
+    StepContent, TableAlignment, TableCell,
 };
 
 /// Errors that can occur when writing a template as Markdown.
@@ -67,6 +67,11 @@ pub fn to_markdown(template: &ProcedureTemplate) -> Result<String, MarkdownError
                         serde_yaml_ng::to_string(&fields)?
                     ));
                 }
+                StepContent::Table {
+                    alignments,
+                    header,
+                    rows,
+                } => blocks.push(table_markdown(alignments, header, rows)),
                 StepContent::Checkbox { .. } => {}
             }
         }
@@ -120,6 +125,21 @@ fn normalized(template: &ProcedureTemplate) -> ProcedureTemplate {
                             inputs: inputs.clone(),
                         });
                     }
+                    (
+                        _,
+                        StepContent::Table {
+                            alignments,
+                            header,
+                            rows,
+                        },
+                    ) => content.push(StepContent::Table {
+                        alignments: alignments.clone(),
+                        header: header.iter().map(|text| text.trim().to_string()).collect(),
+                        rows: rows
+                            .iter()
+                            .map(|row| row.iter().map(normalized_cell).collect())
+                            .collect(),
+                    }),
                 }
             }
             Step {
@@ -133,6 +153,57 @@ fn normalized(template: &ProcedureTemplate) -> ProcedureTemplate {
         metadata: template.metadata.clone(),
         steps,
     }
+}
+
+fn normalized_cell(cell: &TableCell) -> TableCell {
+    match cell {
+        TableCell::Text { text } => TableCell::Text {
+            text: text.trim().to_string(),
+        },
+        TableCell::Input { input_id } => TableCell::Input {
+            input_id: input_id.trim().to_string(),
+        },
+        TableCell::Checkbox { checked, .. } => TableCell::Checkbox {
+            id: None,
+            checked: *checked,
+        },
+    }
+}
+
+/// A table as a Markdown pipe table; text cells are Markdown source.
+fn table_markdown(
+    alignments: &[TableAlignment],
+    header: &[String],
+    rows: &[Vec<TableCell>],
+) -> String {
+    let line = |cells: Vec<String>| format!("| {} |", cells.join(" | "));
+    let delimiters = alignments
+        .iter()
+        .map(|alignment| {
+            match alignment {
+                TableAlignment::None => "---",
+                TableAlignment::Left => ":--",
+                TableAlignment::Center => ":-:",
+                TableAlignment::Right => "--:",
+            }
+            .to_string()
+        })
+        .collect();
+    let mut lines = vec![line(header.to_vec()), line(delimiters)];
+    lines.extend(rows.iter().map(|row| {
+        line(
+            row.iter()
+                .map(|cell| match cell {
+                    TableCell::Text { text } => text.clone(),
+                    TableCell::Input { input_id } => format!("`input:{input_id}`"),
+                    TableCell::Checkbox { checked, .. } => {
+                        if *checked { "[x]" } else { "[ ]" }.to_string()
+                    }
+                })
+                .collect(),
+        )
+    }));
+    lines.join("\n")
 }
 
 /// Where the read-back template first differs, in words.
@@ -326,6 +397,16 @@ mod tests {
             to_markdown(&template),
             Err(MarkdownError::NotRepresentable(_))
         ));
+    }
+
+    #[test]
+    fn tables_round_trip() {
+        round_trip(
+            "---\nid: X\ntitle: T\nversion: '1'\n---\n\n## S\n\n\
+             | A | Value | OK | Note |\n| --- | --: | :-: | :-- |\n\
+             | a \\| b | `input:v` | [ ] | *x* |\n| c |  | [x] | `code` |\n\n\
+             ```inputs\n- id: v\n  type: text\n  label: V\n```\n",
+        );
     }
 
     #[test]

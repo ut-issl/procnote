@@ -10,6 +10,7 @@
 // - `checkListItem` (nested children = deeper nesting levels) -> Checkbox
 // - `procnoteInput` (props only) -> InputDefinition; consecutive ones form one
 //   InputBlock
+// - `table` with input (`` `input:<id>` ``) or checkbox (`[ ]`) cells -> Table
 // - any other run of blocks -> one Prose item, serialized to Markdown
 import type {
   ExpectedValue,
@@ -19,7 +20,10 @@ import type {
   ProcedureTemplate,
   Step,
   StepContent,
+  TableAlignment,
+  TableCell,
 } from "#lib/types/index.js";
+import { columnAlignments } from "./tables.js";
 
 /** The structural subset of a BlockNote block this module reads and writes. */
 export interface DocBlock {
@@ -113,6 +117,8 @@ function stepChildren(content: StepContent[], md: MarkdownConverter): DocBlock[]
     flushChecklist();
     if (item.type === "Prose") {
       blocks.push(...md.toBlocks(item.text));
+    } else if (item.type === "Table") {
+      blocks.push(...md.toBlocks(tableMarkdown(item)));
     } else {
       blocks.push(
         ...item.inputs.map((input) => ({
@@ -133,6 +139,34 @@ export function templateToBlocks(template: ProcedureTemplate, md: MarkdownConver
     content: step.heading,
     children: stepChildren(step.content, md),
   }));
+}
+
+type TableItem = Extract<StepContent, { type: "Table" }>;
+
+/** A Table item as a Markdown pipe table, as procnote-core writes it. */
+export function tableMarkdown(table: TableItem): string {
+  const line = (cells: string[]) => `| ${cells.join(" | ")} |`;
+  const delimiter: Record<TableAlignment, string> = {
+    none: "---",
+    left: ":--",
+    center: ":-:",
+    right: "--:",
+  };
+  const cell = (c: TableCell) => {
+    switch (c.type) {
+      case "Text":
+        return c.text;
+      case "Input":
+        return `\`input:${c.input_id}\``;
+      case "Checkbox":
+        return c.checked ? "[x]" : "[ ]";
+    }
+  };
+  return [
+    line(table.header),
+    line(table.alignments.map((alignment) => delimiter[alignment])),
+    ...table.rows.map((row) => line(row.map(cell))),
+  ].join("\n");
 }
 
 // --- Blocks -> template ---
@@ -218,6 +252,80 @@ export function propsToInput(
   return { input, issues };
 }
 
+const INPUT_CELL_PREFIX = "input:";
+
+/** Inline content of a table cell (a `tableCell`, or bare inline content). */
+function cellContent(cell: unknown): unknown {
+  if (Array.isArray(cell)) return cell;
+  return typeof cell === "object" && cell !== null
+    ? (cell as { content?: unknown }).content
+    : undefined;
+}
+
+/** The input ID of a cell holding only the inline code `input:<id>`. */
+function cellInputId(content: unknown): string | undefined {
+  if (!Array.isArray(content) || content.length !== 1) return undefined;
+  const node = content[0] as { type?: string; text?: unknown; styles?: { code?: unknown } };
+  if (node.type !== "text" || node.styles?.code !== true || typeof node.text !== "string") {
+    return undefined;
+  }
+  return node.text.startsWith(INPUT_CELL_PREFIX)
+    ? node.text.slice(INPUT_CELL_PREFIX.length).trim()
+    : undefined;
+}
+
+/** Backslash-escape the pipes not escaped yet, so a cell stays one cell. */
+function escapePipes(text: string): string {
+  let out = "";
+  let previous = "";
+  for (const char of text) {
+    if (char === "|" && previous !== "\\") out += "\\";
+    out += char;
+    previous = char;
+  }
+  return out;
+}
+
+function cellMarkdown(content: unknown, md: MarkdownConverter): string {
+  if (!inlineText(content).trim()) return "";
+  return escapePipes(md.fromBlocks([{ type: "paragraph", content }]).trim());
+}
+
+function bodyCell(content: unknown, md: MarkdownConverter): TableCell {
+  const inputId = cellInputId(content);
+  if (inputId !== undefined) return { type: "Input", input_id: inputId };
+  const text = inlineText(content).trim();
+  if (text === "[ ]") return { type: "Checkbox", checked: false };
+  if (text === "[x]" || text === "[X]") return { type: "Checkbox", checked: true };
+  return { type: "Text", text: cellMarkdown(content, md) };
+}
+
+/**
+ * A table block as a Table item, or undefined when it has no input or
+ * checkbox cells (it is then prose). Which cells are inputs or checkboxes is
+ * read from the blocks, never from converted Markdown, so the answer is the
+ * same in both passes of an asynchronous conversion.
+ */
+function tableItem(block: DocBlock, md: MarkdownConverter): TableItem | undefined {
+  const rows = (block.content as { rows?: { cells?: unknown[] }[] } | undefined)?.rows ?? [];
+  const [header, ...body] = rows.map((row) => (row.cells ?? []).map(cellContent));
+  const fillable = body.some((row) =>
+    row.some((content) => {
+      const text = inlineText(content).trim();
+      return cellInputId(content) !== undefined || ["[ ]", "[x]", "[X]"].includes(text);
+    }),
+  );
+  if (!header || !fillable) return undefined;
+  return {
+    type: "Table",
+    alignments: columnAlignments(block).map((alignment) =>
+      alignment === "left" ? "none" : alignment,
+    ),
+    header: header.map((content) => cellMarkdown(content, md)),
+    rows: body.map((row) => row.map((content) => bodyCell(content, md))),
+  };
+}
+
 function convertStepChildren(
   children: DocBlock[],
   md: MarkdownConverter,
@@ -274,6 +382,16 @@ function convertStepChildren(
         flushProse();
         issues.push({ blockId: block.id, message: "Steps cannot be nested inside steps." });
         break;
+      case "table": {
+        const table = tableItem(block, md);
+        if (!table) {
+          prose.push(block);
+          break;
+        }
+        flushProse();
+        content.push(table);
+        break;
+      }
       default:
         prose.push(block);
     }

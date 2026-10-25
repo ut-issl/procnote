@@ -5,6 +5,7 @@ import {
   nextStep,
   previousStep,
   runProgress,
+  stepCheckboxes,
   stepInputs,
   stepProgress,
 } from "#lib/run.js";
@@ -55,7 +56,7 @@ function StepOverview({
   const rowRef = useRef<HTMLDivElement>(null);
   const state = stepState(step);
   const progress = stepProgress(step);
-  const checkboxes = step.content.filter((block) => block.type === "Checkbox");
+  const checkboxes = stepCheckboxes(step);
 
   useEffect(() => {
     if (focused) rowRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
