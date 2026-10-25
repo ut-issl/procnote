@@ -6,6 +6,7 @@
 //! verifies Access's token on every API request except upload links.
 
 pub mod access;
+pub mod catalog;
 pub mod collab;
 pub mod device_tokens;
 mod live;
@@ -30,7 +31,8 @@ use tokio::io::AsyncWriteExt;
 use tower_http::services::{ServeDir, ServeFile};
 
 use access::{AccessConfig, AccessVerifier, Identity, token_from_headers};
-use collab::{CollabTemplateSummary, CollabTemplates};
+use catalog::CatalogEntry;
+use collab::{CollabTemplates, CreateError};
 use device_tokens::{DeviceToken, DeviceTokens};
 use live::LiveUpdates;
 use procnote_app::action::{ActionMeta, AttachmentSource, ExecutionAction};
@@ -116,10 +118,12 @@ pub fn router(config: ServerConfig) -> std::io::Result<Router> {
         .route("/device-tokens/{id}", delete(revoke_device_token))
         .route("/templates", get(list_templates))
         .route("/templates/content", get(get_template))
-        .route(
-            "/collab/templates",
-            get(list_collab_templates).post(create_collab_template),
-        )
+        .route("/template-catalog", get(template_catalog))
+        .route("/collab/templates", post(open_collab_template))
+        .route("/collab/templates/blank", post(create_blank_template))
+        .route("/collab/templates/{id}/duplicate", post(duplicate_template))
+        .route("/collab/templates/{id}/archive", post(archive_template))
+        .route("/collab/templates/{id}/reset", post(reset_template))
         .route("/collab/templates/{id}/token", post(collab_token))
         .route(
             "/collab/templates/{id}/executions",
@@ -389,46 +393,83 @@ fn collab(state: &AppState) -> Result<&CollabTemplates, ApiError> {
 }
 
 #[derive(Serialize)]
-struct CollabTemplateList {
+struct TemplateCatalog {
     /// Whether this server has collaborative editing at all.
-    enabled: bool,
-    templates: Vec<CollabTemplateSummary>,
+    collab: bool,
+    entries: Vec<CatalogEntry>,
 }
 
-async fn list_collab_templates(
+/// Every procedure's template: the workspace's files joined with the shared
+/// templates, noting where a shared template no longer matches its file.
+async fn template_catalog(
     State(state): State<SharedState>,
-) -> Result<Json<CollabTemplateList>, ApiError> {
+) -> Result<Json<TemplateCatalog>, ApiError> {
+    let files = blocking({
+        let state = state.clone();
+        move || procnote_app::template::list_templates(&state.procedures_dir)
+    })
+    .await?;
     let Some(collab) = &state.collab else {
-        return Ok(Json(CollabTemplateList {
-            enabled: false,
-            templates: Vec::new(),
+        return Ok(Json(TemplateCatalog {
+            collab: false,
+            entries: catalog::entries(files, Vec::new(), &[]),
         }));
     };
-    let templates = collab
-        .list()
-        .await
-        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
-    Ok(Json(CollabTemplateList {
-        enabled: true,
-        templates,
+    let internal = |e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e);
+    let shared = collab.list().await.map_err(internal)?;
+    let archived = collab.archived_procedure_ids().await.map_err(internal)?;
+    let mut entries = catalog::entries(files, shared, &archived);
+    for entry in &mut entries {
+        let (Some(path), Some(shared)) = (&entry.file, &entry.shared) else {
+            continue;
+        };
+        let file = blocking({
+            let state = state.clone();
+            let path = path.clone();
+            move || {
+                procnote_app::template::get_template(
+                    &state.procedures_dir,
+                    std::path::Path::new(&path),
+                )
+            }
+        })
+        .await?;
+        match collab.current(shared.id).await {
+            Ok(current) => entry.differs_from_file = current.template != file,
+            Err(e) => log::warn!("could not compare shared template {}: {e}", shared.id),
+        }
+    }
+    Ok(Json(TemplateCatalog {
+        collab: true,
+        entries,
     }))
 }
 
+fn create_error(error: CreateError) -> ApiError {
+    match error {
+        CreateError::Taken(_) | CreateError::Archived(_) => {
+            ApiError::new(StatusCode::CONFLICT, error.to_string())
+        }
+        CreateError::Failed(e) => ApiError::new(StatusCode::BAD_GATEWAY, e),
+    }
+}
+
 #[derive(Deserialize)]
-struct CreateCollabTemplateRequest {
-    /// Workspace template to start the document from.
+struct OpenCollabTemplateRequest {
+    /// Workspace template whose procedure's shared template to open, started
+    /// from this file when there is none yet.
     template_path: String,
 }
 
 #[derive(Serialize)]
-struct CreatedCollabTemplate {
+struct CollabTemplateId {
     id: uuid::Uuid,
 }
 
-async fn create_collab_template(
+async fn open_collab_template(
     State(state): State<SharedState>,
-    Json(request): Json<CreateCollabTemplateRequest>,
-) -> Result<Json<CreatedCollabTemplate>, ApiError> {
+    Json(request): Json<OpenCollabTemplateRequest>,
+) -> Result<Json<CollabTemplateId>, ApiError> {
     collab(&state)?;
     let template = blocking({
         let state = state.clone();
@@ -440,11 +481,146 @@ async fn create_collab_template(
         }
     })
     .await?;
+    collab::procedure_name(&template.metadata.id).map_err(ApiError::bad_request)?;
+    let id = collab(&state)?
+        .open_or_create(&template)
+        .await
+        .map_err(create_error)?;
+    Ok(Json(CollabTemplateId { id }))
+}
+
+#[derive(Deserialize)]
+struct NewTemplateRequest {
+    procedure_id: String,
+    title: String,
+}
+
+/// Check that a new shared template may take `procedure_id`: it must be
+/// usable as a directory name and not be a workspace template's (whose
+/// shared template it would become). Taken and archived IDs are refused when
+/// the template is created.
+async fn check_new_procedure_id(state: &SharedState, procedure_id: &str) -> Result<(), ApiError> {
+    collab::procedure_name(procedure_id).map_err(ApiError::bad_request)?;
+    let files = blocking({
+        let state = state.clone();
+        move || procnote_app::template::list_templates(&state.procedures_dir)
+    })
+    .await?;
+    if files.iter().any(|file| file.id == procedure_id) {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            format!("procedure ID \"{procedure_id}\" is already used by a workspace template"),
+        ));
+    }
+    Ok(())
+}
+
+/// Create a shared template from scratch, with no steps yet.
+async fn create_blank_template(
+    State(state): State<SharedState>,
+    Json(request): Json<NewTemplateRequest>,
+) -> Result<Json<CollabTemplateId>, ApiError> {
+    collab(&state)?;
+    check_new_procedure_id(&state, &request.procedure_id).await?;
+    let template = ProcedureTemplate {
+        metadata: procnote_core::template::types::ProcedureMetadata {
+            id: request.procedure_id,
+            title: request.title,
+            version: "1".to_string(),
+            author: None,
+            equipment: Vec::new(),
+            requirement_traces: Vec::new(),
+        },
+        steps: Vec::new(),
+    };
     let id = collab(&state)?
         .create(&template)
         .await
+        .map_err(create_error)?;
+    Ok(Json(CollabTemplateId { id }))
+}
+
+/// Create a shared template as a copy of shared template `id` as it is now,
+/// under a new procedure ID and title.
+async fn duplicate_template(
+    State(state): State<SharedState>,
+    Path(id): Path<uuid::Uuid>,
+    Json(request): Json<NewTemplateRequest>,
+) -> Result<Json<CollabTemplateId>, ApiError> {
+    let collab = collab(&state)?;
+    active_template(collab, id).await?;
+    check_new_procedure_id(&state, &request.procedure_id).await?;
+    let mut template = collab
+        .current(id)
+        .await
+        .map_err(|e| ApiError::new(StatusCode::BAD_GATEWAY, e))?
+        .template;
+    template.metadata.id = request.procedure_id;
+    template.metadata.title = request.title;
+    let id = collab.create(&template).await.map_err(create_error)?;
+    Ok(Json(CollabTemplateId { id }))
+}
+
+/// The procedure ID of shared template `id`, or not found if it doesn't
+/// exist or was archived.
+async fn active_template(collab: &CollabTemplates, id: uuid::Uuid) -> Result<String, ApiError> {
+    collab
+        .procedure_of(id)
+        .await
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?
+        .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, format!("no template {id}")))
+}
+
+/// Archive shared template `id`: it is kept, but no longer listed, edited,
+/// or executed, and its procedure ID isn't reused.
+async fn archive_template(
+    State(state): State<SharedState>,
+    Path(id): Path<uuid::Uuid>,
+    identity: Option<Extension<Identity>>,
+) -> Result<StatusCode, ApiError> {
+    let by = identity
+        .map(|Extension(identity)| identity.email)
+        .unwrap_or_default();
+    let archived = collab(&state)?
+        .archive(id, &by)
+        .await
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    if archived {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(ApiError::new(
+            StatusCode::NOT_FOUND,
+            format!("no template {id}"),
+        ))
+    }
+}
+
+/// Replace shared template `id` with its procedure's workspace file.
+async fn reset_template(
+    State(state): State<SharedState>,
+    Path(id): Path<uuid::Uuid>,
+) -> Result<StatusCode, ApiError> {
+    let procedure_id = active_template(collab(&state)?, id).await?;
+    let template = blocking({
+        let state = state.clone();
+        move || {
+            let files = procnote_app::template::list_templates(&state.procedures_dir)?;
+            let file = files
+                .into_iter()
+                .find(|file| file.id == procedure_id)
+                .ok_or_else(|| format!("procedure \"{procedure_id}\" has no workspace template"))?;
+            procnote_app::template::get_template(
+                &state.procedures_dir,
+                std::path::Path::new(&file.path),
+            )
+        }
+    })
+    .await?;
+    collab(&state)?
+        .reset(id, &template)
+        .await
         .map_err(|e| ApiError::new(StatusCode::BAD_GATEWAY, e))?;
-    Ok(Json(CreatedCollabTemplate { id }))
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Deserialize)]
@@ -460,6 +636,7 @@ async fn start_collab_execution(
     identity: Option<Extension<Identity>>,
     Json(request): Json<StartCollabExecutionRequest>,
 ) -> Result<Json<ExecutionSummary>, ApiError> {
+    active_template(collab(&state)?, id).await?;
     let template = collab(&state)?
         .current(id)
         .await

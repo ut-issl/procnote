@@ -15,6 +15,8 @@ import {
   documentToTemplate,
   type Editor,
   isEmptyDocument,
+  keepProcedureId,
+  replaceContent,
   templateToUpdate,
 } from "./document.js";
 import { verifyToken } from "./token.js";
@@ -97,6 +99,16 @@ export function createCollabServer(config: CollabServerConfig, pool: pg.Pool): S
       }),
     ],
 
+    async afterLoadDocument({ documentName, document }) {
+      const result = await pool.query<{ procedure_id: string }>(
+        "SELECT procedure_id FROM templates WHERE id = $1",
+        [documentName],
+      );
+      const row = result.rows[0];
+      if (!row) throw new Error(`no template ${documentName}`);
+      keepProcedureId(document, row.procedure_id);
+    },
+
     async onUpgrade({ request, socket }) {
       if (pathOf(request) !== COLLAB_PATH) {
         socket.destroy();
@@ -120,6 +132,11 @@ export function createCollabServer(config: CollabServerConfig, pool: pg.Pool): S
           // POST /internal/templates/{id}: seed an empty document.
           const template = (await readJson(request)) as ProcedureTemplate;
           await seed(server, id, await templateToUpdate(editor, template));
+          respond(response, 200, { id });
+        } else if (request.method === "PUT" && resource === undefined) {
+          // PUT /internal/templates/{id}: replace the document's content.
+          const template = (await readJson(request)) as ProcedureTemplate;
+          await replace(server, id, await templateToUpdate(editor, template));
           respond(response, 200, { id });
         } else if (request.method === "GET" && resource === "template" && rest.length === 0) {
           // GET /internal/templates/{id}/template: what the document describes now.
@@ -175,5 +192,20 @@ async function seed(server: Server, id: string, update: Uint8Array) {
     if (!empty) throw new HttpError(409, `template ${id} already has content`);
   } finally {
     await connection.disconnect();
+  }
+}
+
+/** Replace the content of a template document, and store it. */
+async function replace(server: Server, id: string, update: Uint8Array) {
+  const source = new Y.Doc();
+  Y.applyUpdate(source, update);
+  const connection = await server.hocuspocus.openDirectConnection(id, {
+    user: "procnote-server",
+  } satisfies ConnectionContext);
+  try {
+    await connection.transact((doc) => replaceContent(doc, source));
+  } finally {
+    await connection.disconnect();
+    source.destroy();
   }
 }

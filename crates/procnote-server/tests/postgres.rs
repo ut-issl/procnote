@@ -380,14 +380,16 @@ async fn a_workspace_round_trips_through_import_and_export() {
 }
 
 /// A stand-in for the collab service's internal API: records the templates
-/// it is asked to seed, answering with `status`, and describes every
-/// document as the test template with `issues`.
+/// it is asked to seed (by ID) or to replace a document with (as
+/// `reset {id}`), answering with `status`, and describes every document as
+/// the test template with `issues`.
 async fn stub_collab_service(
     status: StatusCode,
     issues: &[&str],
 ) -> (String, Arc<std::sync::Mutex<Vec<(String, Value)>>>) {
     let seeded = Arc::new(std::sync::Mutex::new(Vec::new()));
     let recorded = seeded.clone();
+    let reset = seeded.clone();
     let current = json!({ "template": parse_template(TEMPLATE).unwrap(), "issues": issues });
     let app = axum::Router::new()
         .route(
@@ -398,6 +400,16 @@ async fn stub_collab_service(
                       axum::Json(template): axum::Json<Value>| async move {
                     assert_eq!(headers["authorization"], "Bearer stub-secret");
                     recorded.lock().unwrap().push((id, template));
+                    status
+                },
+            )
+            .put(
+                move |axum::extract::Path(id): axum::extract::Path<String>,
+                      axum::Json(template): axum::Json<Value>| async move {
+                    reset
+                        .lock()
+                        .unwrap()
+                        .push((format!("reset {id}"), template));
                     status
                 },
             ),
@@ -413,17 +425,24 @@ async fn stub_collab_service(
 }
 
 /// A workspace with the test template, and an API on it whose collab
-/// service is at `service_url`. Returns the workspace's template path too.
+/// service is at `service_url`. Returns the workspace's template path and
+/// its procedure ID too: one of its own, since the database is shared and
+/// holds one shared template per procedure ID.
 fn collab_app(
     temp: &tempfile::TempDir,
     store: &PostgresStore,
     service_url: String,
-) -> (axum::Router, PathBuf) {
+) -> (axum::Router, PathBuf, String) {
     use procnote_server::collab::{CollabConfig, CollabTemplates};
 
+    let procedure_id = format!("postgres-test-{}", uuid::Uuid::new_v4());
     let workspace = temp.path().join("procedures");
     std::fs::create_dir_all(workspace.join("postgres-test")).unwrap();
-    std::fs::write(workspace.join("postgres-test/template.md"), TEMPLATE).unwrap();
+    std::fs::write(
+        workspace.join("postgres-test/template.md"),
+        TEMPLATE.replacen("id: postgres-test", &format!("id: {procedure_id}"), 1),
+    )
+    .unwrap();
     let workspace = workspace.canonicalize().unwrap();
     let app = router(ServerConfig {
         procedures_dir: workspace.clone(),
@@ -441,7 +460,11 @@ fn collab_app(
         )),
     })
     .unwrap();
-    (app, workspace.join("postgres-test/template.md"))
+    (
+        app,
+        workspace.join("postgres-test/template.md"),
+        procedure_id,
+    )
 }
 
 async fn call(
@@ -470,7 +493,7 @@ async fn shared_templates_are_seeded_through_the_collab_service() {
     let temp = tempfile::tempdir().unwrap();
     let store = store(&url).await;
     let (service, seeded) = stub_collab_service(StatusCode::OK, &[]).await;
-    let (app, template_path) = collab_app(&temp, &store, service);
+    let (app, template_path, procedure_id) = collab_app(&temp, &store, service);
 
     let (status, created) = call(
         &app,
@@ -481,6 +504,13 @@ async fn shared_templates_are_seeded_through_the_collab_service() {
     .await;
     assert_eq!(status, StatusCode::OK, "{created}");
     let id = created["id"].as_str().unwrap().to_string();
+    let (_, opened_again) = call(
+        &app,
+        "POST",
+        "/api/collab/templates",
+        Some(json!({ "template_path": template_path })),
+    )
+    .await;
     let (status, token) = call(
         &app,
         "POST",
@@ -495,24 +525,27 @@ async fn shared_templates_are_seeded_through_the_collab_service() {
         Some(json!({})),
     )
     .await;
-    let (_, list) = call(&app, "GET", "/api/collab/templates", None).await;
+    let (_, catalog) = call(&app, "GET", "/api/template-catalog", None).await;
 
     {
         let seeded = seeded.lock().unwrap();
         assert_eq!(seeded.len(), 1);
         assert_eq!(seeded[0].0, id);
-        assert_eq!(seeded[0].1["metadata"]["id"], "postgres-test");
+        assert_eq!(seeded[0].1["metadata"]["id"], procedure_id.as_str());
     }
+    // The procedure already has its shared template: the same one opens.
+    assert_eq!(opened_again["id"], id.as_str());
     assert_eq!(status, StatusCode::OK);
     assert!(token["token"].as_str().unwrap().contains('.'));
     assert_eq!(unknown, StatusCode::NOT_FOUND);
-    assert_eq!(list["enabled"], true);
+    assert_eq!(catalog["collab"], true);
     assert!(
-        list["templates"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|template| template["id"] == id.as_str())
+        catalog["entries"].as_array().unwrap().iter().any(|entry| {
+            entry["shared"]["id"] == id.as_str()
+                && entry["procedure_id"] == procedure_id.as_str()
+                && entry["file"] == template_path.to_str().unwrap()
+        }),
+        "{catalog}"
     );
 }
 
@@ -522,7 +555,7 @@ async fn a_template_the_collab_service_refuses_is_not_kept() {
     let temp = tempfile::tempdir().unwrap();
     let store = store(&url).await;
     let (service, asked) = stub_collab_service(StatusCode::INTERNAL_SERVER_ERROR, &[]).await;
-    let (app, template_path) = collab_app(&temp, &store, service);
+    let (app, template_path, _) = collab_app(&temp, &store, service);
 
     let (status, _) = call(
         &app,
@@ -531,18 +564,183 @@ async fn a_template_the_collab_service_refuses_is_not_kept() {
         Some(json!({ "template_path": template_path })),
     )
     .await;
-    let (_, list) = call(&app, "GET", "/api/collab/templates", None).await;
+    let (_, catalog) = call(&app, "GET", "/api/template-catalog", None).await;
 
     assert_eq!(status, StatusCode::BAD_GATEWAY);
     let refused = asked.lock().unwrap()[0].0.clone();
     assert!(
-        list["templates"]
+        catalog["entries"]
             .as_array()
             .unwrap()
             .iter()
-            .all(|template| template["id"] != refused.as_str()),
-        "{list}"
+            .all(|entry| entry["shared"]["id"] != refused.as_str()),
+        "{catalog}"
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn archived_templates_are_hidden_and_their_ids_stay_taken() {
+    let Some(url) = database_url() else { return };
+    let temp = tempfile::tempdir().unwrap();
+    let store = store(&url).await;
+    let (service, _) = stub_collab_service(StatusCode::OK, &[]).await;
+    let (app, template_path, procedure_id) = collab_app(&temp, &store, service);
+    let open = json!({ "template_path": template_path });
+    let (_, created) = call(&app, "POST", "/api/collab/templates", Some(open.clone())).await;
+    let id = created["id"].as_str().unwrap();
+
+    let archive = format!("/api/collab/templates/{id}/archive");
+    let request = Request::post(&archive).body(Body::empty()).unwrap();
+    let archived = app.clone().oneshot(request).await.unwrap().status();
+    let (_, catalog) = call(&app, "GET", "/api/template-catalog", None).await;
+    let (reopened, _) = call(&app, "POST", "/api/collab/templates", Some(open)).await;
+    let (token, _) = call(
+        &app,
+        "POST",
+        &format!("/api/collab/templates/{id}/token"),
+        Some(json!({})),
+    )
+    .await;
+    let (started, _) = call(
+        &app,
+        "POST",
+        &format!("/api/collab/templates/{id}/executions"),
+        Some(json!({})),
+    )
+    .await;
+    let (again, _) = call(&app, "POST", &archive, None).await;
+
+    assert_eq!(archived, StatusCode::NO_CONTENT);
+    // Neither the shared template nor the workspace file it came from is listed.
+    assert!(
+        catalog["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|entry| entry["procedure_id"] != procedure_id.as_str()),
+        "{catalog}"
+    );
+    assert_eq!(reopened, StatusCode::CONFLICT);
+    assert_eq!(token, StatusCode::NOT_FOUND);
+    assert_eq!(started, StatusCode::NOT_FOUND);
+    assert_eq!(again, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn new_and_duplicated_templates_take_unused_procedure_ids() {
+    let Some(url) = database_url() else { return };
+    let temp = tempfile::tempdir().unwrap();
+    let store = store(&url).await;
+    let (service, seeded) = stub_collab_service(StatusCode::OK, &[]).await;
+    let (app, _, workspace_id) = collab_app(&temp, &store, service);
+    let blank_id = format!("blank-{}", uuid::Uuid::new_v4());
+    let copy_id = format!("copy-{}", uuid::Uuid::new_v4());
+    let blank = |procedure_id: &str| json!({ "procedure_id": procedure_id, "title": "Blank" });
+
+    let (status, created) = call(
+        &app,
+        "POST",
+        "/api/collab/templates/blank",
+        Some(blank(&blank_id)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let id = created["id"].as_str().unwrap();
+    let (taken, _) = call(
+        &app,
+        "POST",
+        "/api/collab/templates/blank",
+        Some(blank(&blank_id)),
+    )
+    .await;
+    let (in_workspace, _) = call(
+        &app,
+        "POST",
+        "/api/collab/templates/blank",
+        Some(blank(&workspace_id)),
+    )
+    .await;
+    let (unusable, _) = call(
+        &app,
+        "POST",
+        "/api/collab/templates/blank",
+        Some(blank("../escape")),
+    )
+    .await;
+    let (status, copied) = call(
+        &app,
+        "POST",
+        &format!("/api/collab/templates/{id}/duplicate"),
+        Some(json!({ "procedure_id": copy_id, "title": "Copy" })),
+    )
+    .await;
+
+    assert_eq!(taken, StatusCode::CONFLICT);
+    assert_eq!(in_workspace, StatusCode::CONFLICT);
+    assert_eq!(unusable, StatusCode::BAD_REQUEST);
+    assert_eq!(status, StatusCode::OK, "{copied}");
+    let seeded = seeded.lock().unwrap();
+    assert_eq!(seeded.len(), 2);
+    assert_eq!(seeded[0].1["metadata"]["id"], blank_id.as_str());
+    assert_eq!(seeded[0].1["steps"], json!([]));
+    // The copy is what the (stub) collab service describes the original as.
+    assert_eq!(seeded[1].0, copied["id"].as_str().unwrap());
+    assert_eq!(seeded[1].1["metadata"]["id"], copy_id.as_str());
+    assert_eq!(seeded[1].1["metadata"]["title"], "Copy");
+    assert_eq!(
+        seeded[1].1["steps"],
+        serde_json::to_value(parse_template(TEMPLATE).unwrap().steps).unwrap()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn shared_templates_reset_from_their_workspace_file() {
+    let Some(url) = database_url() else { return };
+    let temp = tempfile::tempdir().unwrap();
+    let store = store(&url).await;
+    let (service, recorded) = stub_collab_service(StatusCode::OK, &[]).await;
+    let (app, template_path, procedure_id) = collab_app(&temp, &store, service);
+    let (_, created) = call(
+        &app,
+        "POST",
+        "/api/collab/templates",
+        Some(json!({ "template_path": template_path })),
+    )
+    .await;
+    let id = created["id"].as_str().unwrap();
+    let (_, blank) = call(
+        &app,
+        "POST",
+        "/api/collab/templates/blank",
+        Some(
+            json!({ "procedure_id": format!("blank-{}", uuid::Uuid::new_v4()), "title": "Blank" }),
+        ),
+    )
+    .await;
+
+    let reset = |id: &str| {
+        Request::post(format!("/api/collab/templates/{id}/reset"))
+            .body(Body::empty())
+            .unwrap()
+    };
+    let status = app.clone().oneshot(reset(id)).await.unwrap().status();
+    let without_file = app
+        .clone()
+        .oneshot(reset(blank["id"].as_str().unwrap()))
+        .await
+        .unwrap()
+        .status();
+
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(without_file, StatusCode::BAD_REQUEST);
+    let template = recorded
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(what, _)| *what == format!("reset {id}"))
+        .map(|(_, template)| template.clone())
+        .unwrap();
+    assert_eq!(template["metadata"]["id"], procedure_id.as_str());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -551,7 +749,7 @@ async fn executions_start_from_a_shared_template_as_it_is_now() {
     let temp = tempfile::tempdir().unwrap();
     let store = store(&url).await;
     let (service, _) = stub_collab_service(StatusCode::OK, &[]).await;
-    let (app, template_path) = collab_app(&temp, &store, service);
+    let (app, template_path, _) = collab_app(&temp, &store, service);
     let (_, created) = call(
         &app,
         "POST",
@@ -588,7 +786,7 @@ async fn a_shared_template_with_issues_does_not_start() {
     let temp = tempfile::tempdir().unwrap();
     let store = store(&url).await;
     let (service, _) = stub_collab_service(StatusCode::OK, &["The procedure has no title."]).await;
-    let (app, template_path) = collab_app(&temp, &store, service);
+    let (app, template_path, _) = collab_app(&temp, &store, service);
     let (_, created) = call(
         &app,
         "POST",
@@ -659,7 +857,7 @@ async fn shared_templates_export_as_procnote_markdown() {
     let temp = tempfile::tempdir().unwrap();
     let store = store(&url).await;
     let (service, _) = stub_collab_service(StatusCode::OK, &[]).await;
-    let (app, template_path) = collab_app(&temp, &store, service.clone());
+    let (app, template_path, _) = collab_app(&temp, &store, service.clone());
     let (_, created) = call(
         &app,
         "POST",

@@ -1,12 +1,15 @@
 import { lexer, type Tokens } from "marked";
 import { describe, expect, it } from "vite-plus/test";
 import * as Y from "yjs";
+import { METADATA_MAP } from "../src/lib/blocknote/blocks.js";
 import { diffPaths } from "../src/lib/blocknote/convert.js";
 import type { ProcedureTemplate } from "../src/lib/types/index.js";
 import {
   createEditor,
   documentToTemplate,
   isEmptyDocument,
+  keepProcedureId,
+  replaceContent,
   templateToUpdate,
   withAsyncMarkdown,
 } from "./document.js";
@@ -102,5 +105,42 @@ describe("withAsyncMarkdown", () => {
     );
 
     expect(result).toEqual([[{ type: "paragraph", content: "A" }], "x"]);
+  });
+});
+
+describe("keepProcedureId", () => {
+  it("undoes changes to the ID but leaves an empty document alone", async () => {
+    const doc = new Y.Doc();
+    keepProcedureId(doc, "DOC-001");
+    expect(isEmptyDocument(doc)).toBe(true);
+
+    Y.applyUpdate(doc, await templateToUpdate(createEditor(), TEMPLATE));
+    const metadata = doc.getMap(METADATA_MAP);
+    metadata.set("id", "RENAMED");
+    metadata.delete("id");
+    metadata.set("title", "Renamed");
+
+    expect(metadata.toJSON()).toMatchObject({ id: "DOC-001", title: "Renamed" });
+  });
+});
+
+describe("replaceContent", () => {
+  it("makes a document describe another template", async () => {
+    const editor = createEditor();
+    const doc = new Y.Doc();
+    Y.applyUpdate(doc, await templateToUpdate(editor, TEMPLATE));
+    doc.getMap(METADATA_MAP).set("author", "Someone");
+    const replacement: ProcedureTemplate = {
+      metadata: { ...TEMPLATE.metadata, title: "Replaced" },
+      steps: [{ heading: "Only", content: [{ type: "Checkbox", text: "Done", checked: false }] }],
+    };
+    const source = new Y.Doc();
+    Y.applyUpdate(source, await templateToUpdate(editor, replacement));
+
+    replaceContent(doc, source);
+    const { template } = await documentToTemplate(editor, doc);
+
+    expect(diffPaths(replacement, template)).toEqual([]);
+    expect(doc.getMap(METADATA_MAP).has("author")).toBe(false);
   });
 });
