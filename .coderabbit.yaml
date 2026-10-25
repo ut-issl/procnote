@@ -1,0 +1,47 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# CodeRabbit configuration. Reference: https://docs.coderabbit.ai/reference/configuration
+# CodeRabbit also reads CLAUDE.md / AGENTS.md as coding guidelines.
+language: "en-US"
+
+reviews:
+  # Lockfiles and generated output are not worth reviewing and count against
+  # the per-review file limit.
+  path_filters:
+    - "!**/Cargo.lock"
+    - "!**/pnpm-lock.yaml"
+    - "!target/**"
+    - "!build/**"
+    - "!site/**"
+    - "!src/lib/types/generated/**"
+    - "!src-tauri/gen/**"
+    - "!**/*.min.js"
+
+  path_instructions:
+    - path: "crates/procnote-core/src/**/*.rs"
+      instructions: >-
+        Event types must follow the schema evolution rules in
+        EVENT_LOG_COMPAT.md: never rename or remove fields or event "type"
+        values, never change field types, and new fields must be Option<T>
+        with #[serde(default)]. New event variants must be handled explicitly
+        in ExecutionState::apply().
+    - path: "crates/{procnote-core,procnote-app,procnote-server,procnote-sync,procnote-wasm,procnote-launcher}/**"
+      instructions: >-
+        These crates must never depend on Tauri. procnote-core must stay free
+        of I/O. Flag regex-based parsing or decisions where a proper data
+        structure would do (see CLAUDE.md), and in-memory caches of state that
+        belongs in durable storage. Do not repeat issues that clippy or
+        rustfmt already report.
+
+  auto_review:
+    auto_incremental_review: false
+    auto_pause_after_reviewed_commits: 2
+    # Dependency-update PRs would quickly exhaust the review rate limit.
+    ignore_usernames:
+      - "renovate[bot]"
+
+  # Already enforced in CI (cargo clippy, vp check).
+  tools:
+    clippy:
+      enabled: false
+    oxc:
+      enabled: false
