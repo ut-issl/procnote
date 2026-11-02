@@ -18,6 +18,9 @@
       ],
       depNameTemplate: "wasm-bindgen-cli",
       datasourceTemplate: "crate",
+      // The crate datasource defaults to cargo versioning, which would read a
+      // bare 0.2.129 as ^0.2.129; these pins are exact versions.
+      versioningTemplate: "semver",
     },
   ],
   packageRules: [
