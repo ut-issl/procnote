@@ -6,7 +6,26 @@
     enabled: true,
   },
   labels: ["dependencies"],
+  customManagers: [
+    {
+      // The wasm-bindgen CLI installed in CI and the Docker image must match
+      // the wasm-bindgen crate's version exactly.
+      customType: "regex",
+      managerFilePatterns: ["/^\\.github/workflows/.+\\.ya?ml$/", "/(^|/)Dockerfile$/"],
+      matchStrings: [
+        "tool: wasm-bindgen@(?<currentValue>\\d+\\.\\d+\\.\\d+)",
+        "ARG WASM_BINDGEN_VERSION=(?<currentValue>\\d+\\.\\d+\\.\\d+)",
+      ],
+      depNameTemplate: "wasm-bindgen-cli",
+      datasourceTemplate: "crate",
+    },
+  ],
   packageRules: [
+    {
+      // Bump the crate (pinned with "=" in Cargo.toml) and the CLI together.
+      matchPackageNames: ["wasm-bindgen", "wasm-bindgen-cli"],
+      groupName: "wasm-bindgen",
+    },
     {
       matchUpdateTypes: ["lockFileMaintenance"],
       minimumReleaseAge: null,
