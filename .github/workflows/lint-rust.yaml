@@ -143,7 +143,12 @@ jobs:
           extra-args: --all-files
 
   collect-lint-rust:
+    # Run even when a needed job fails, so this required check reports failure instead of being skipped.
+    if: ${{ always() }}
     needs: [clippy, fmt, test, test-windows, doc, check-types, typos, prek]
     runs-on: ubuntu-latest
     steps:
-      - run: echo "All Rust checks passed!"
+      - name: Require every job to succeed
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: echo "$RESULTS" | jq -e 'all(.[]; .result == "success")'
