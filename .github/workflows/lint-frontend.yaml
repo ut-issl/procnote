@@ -113,7 +113,12 @@ jobs:
       - run: pnpm run build:collab
 
   collect-lint-frontend:
+    # Run even when a needed job fails, so this required check reports failure instead of being skipped.
+    if: ${{ always() }}
     needs: [vp-check, typecheck, test, build]
     runs-on: ubuntu-latest
     steps:
-      - run: echo "All frontend checks passed!"
+      - name: Require every job to succeed
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: echo "$RESULTS" | jq -e 'all(.[]; .result == "success")'
