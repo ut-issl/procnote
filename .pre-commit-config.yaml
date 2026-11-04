@@ -1,7 +1,3 @@
-ci:
-  autoupdate_schedule: monthly
-  autofix_prs: false
-
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c # frozen: v6.0.0
@@ -10,6 +6,7 @@ repos:
         exclude: ^src/lib/types/generated/ # Allow generated files to have trailing whitespace
       - id: end-of-file-fixer
       - id: check-yaml
+        exclude: ^pnpm-lock\.yaml$ # pnpm writes multiple YAML documents into its lockfile
       - id: check-json
         exclude: ^tsconfig\.json$
       - id: check-toml

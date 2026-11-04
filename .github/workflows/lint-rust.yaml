@@ -129,8 +129,21 @@ jobs:
           persist-credentials: false
       - uses: crate-ci/typos@v1.51.1
 
+  prek:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: j178/prek-action@v3.1.0
+        with:
+          # Follow the prek version bundled with the action (updated by Renovate).
+          prek-version: latest-known
+          extra-args: --all-files
+
   collect-lint-rust:
-    needs: [clippy, fmt, test, test-windows, doc, check-types, typos]
+    needs: [clippy, fmt, test, test-windows, doc, check-types, typos, prek]
     runs-on: ubuntu-latest
     steps:
       - run: echo "All Rust checks passed!"
