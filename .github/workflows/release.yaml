@@ -64,7 +64,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2.9.3
 
       # The frontend build compiles crates/procnote-wasm and generates its bindings.
-      - uses: taiki-e/install-action@v2.87.31
+      - uses: taiki-e/install-action@v2.88.0
         with:
           tool: wasm-bindgen@0.2.129
 
