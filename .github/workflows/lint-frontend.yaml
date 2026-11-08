@@ -48,7 +48,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2.9.3
       - uses: taiki-e/install-action@v2.88.0
         with:
-          tool: wasm-bindgen@0.2.129
+          tool: wasm-bindgen@0.2.130
       - run: pnpm install
       - run: pnpm run build:wasm
       - run: pnpm run check
@@ -85,7 +85,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2.9.3
       - uses: taiki-e/install-action@v2.88.0
         with:
-          tool: wasm-bindgen@0.2.129
+          tool: wasm-bindgen@0.2.130
       - run: pnpm install
       - run: pnpm run build:wasm
       - run: pnpm test
@@ -107,7 +107,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2.9.3
       - uses: taiki-e/install-action@v2.88.0
         with:
-          tool: wasm-bindgen@0.2.129
+          tool: wasm-bindgen@0.2.130
       - run: pnpm install
       - run: pnpm run build
       - run: pnpm run build:collab
