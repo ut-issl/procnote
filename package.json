@@ -26,10 +26,10 @@
     "test": "vp test run"
   },
   "dependencies": {
-    "@blocknote/core": "^0.56.0",
-    "@blocknote/mantine": "^0.56.0",
-    "@blocknote/react": "^0.56.0",
-    "@blocknote/server-util": "^0.56.0",
+    "@blocknote/core": "^0.57.0",
+    "@blocknote/mantine": "^0.57.0",
+    "@blocknote/react": "^0.57.0",
+    "@blocknote/server-util": "^0.57.0",
     "@hocuspocus/extension-database": "^4.7.1",
     "@hocuspocus/provider": "^4.7.1",
     "@hocuspocus/server": "^4.7.1",
