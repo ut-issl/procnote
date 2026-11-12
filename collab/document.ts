@@ -3,6 +3,7 @@
 // ProcedureTemplate with the browser's converter (convert.ts).
 import type { PartialBlock } from "@blocknote/core";
 import { ServerBlockNoteEditor } from "@blocknote/server-util";
+import { getDocument } from "@blocknote/server-util/dom";
 import * as Y from "yjs";
 import { DOCUMENT_FRAGMENT, METADATA_MAP } from "../src/lib/blocknote/blocks.js";
 import {
@@ -16,8 +17,12 @@ import { readTableAlignments, writeTableAlignments } from "../src/lib/blocknote/
 import type { ProcedureMetadata, ProcedureTemplate } from "../src/lib/types/index.js";
 import { serverSchema } from "./schema.js";
 
+// One jsdom document for the process: the editor binds it as the DOM globals
+// on first use and refuses a different one afterwards.
+const domDocument = getDocument();
+
 export function createEditor() {
-  return ServerBlockNoteEditor.create({ schema: serverSchema });
+  return ServerBlockNoteEditor.create({ schema: serverSchema }, domDocument);
 }
 
 export type Editor = ReturnType<typeof createEditor>;
