@@ -260,13 +260,10 @@ pub fn create_started(
     let state = ExecutionState::from_events(&events).map_err(|e| e.to_string())?;
     // The starting events share the starter's metadata, without event IDs:
     // creating the execution is what deduplicates them.
-    let meta = records
-        .first()
-        .map(|record| EventMeta {
-            event_id: None,
-            ..record.meta.clone()
-        })
-        .unwrap_or_default();
+    let meta = records.first().map_or_default(|record| EventMeta {
+        event_id: None,
+        ..record.meta.clone()
+    });
     repository.create(NewExecution {
         procedure,
         template,

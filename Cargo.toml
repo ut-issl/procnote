@@ -98,4 +98,4 @@ unimplemented = { level = "warn", priority = 1 }
 unwrap_used = { level = "warn", priority = 1 }
 
 [workspace.lints.rust]
-unsafe-code = "warn"
+unsafe_code = "warn"

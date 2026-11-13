@@ -500,8 +500,7 @@ fn validate_sender_links(session: &ActiveDropPointSession, base_url: &Url) -> Re
     .map_err(|_| "DropPoint private state has an invalid sender link".to_string())?;
     let segments = drop_link
         .path_segments()
-        .map(Iterator::collect::<Vec<_>>)
-        .unwrap_or_default();
+        .map_or_default(Iterator::collect::<Vec<_>>);
     if !same_origin(base_url, &drop_link)
         || !drop_link.username().is_empty()
         || drop_link.password().is_some()
