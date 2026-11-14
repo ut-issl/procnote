@@ -312,10 +312,7 @@ impl Event {
                 format!("Cleared input {input_id}: {reason}")
             }
             Self::NoteAdded { text, step_id, .. } => {
-                let scope = step_id
-                    .as_ref()
-                    .map(|id| format!(" to {id}"))
-                    .unwrap_or_default();
+                let scope = step_id.as_ref().map_or_default(|id| format!(" to {id}"));
                 let truncated = if text.chars().count() > 50 {
                     let head: String = text.chars().take(50).collect();
                     format!("{head}...")

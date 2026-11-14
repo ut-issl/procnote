@@ -212,8 +212,7 @@ fn input_summary(step: &StepState, definition: &InputDefinition) -> InputDefinit
     let attachments = step
         .attachments
         .get(&definition.id)
-        .map(|files| files.iter().map(attachment_state).collect())
-        .unwrap_or_default();
+        .map_or_default(|files| files.iter().map(attachment_state).collect());
     InputDefinitionSummary {
         definition: definition.clone(),
         recorded,

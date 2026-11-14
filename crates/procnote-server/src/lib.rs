@@ -578,9 +578,7 @@ async fn archive_template(
     Path(id): Path<uuid::Uuid>,
     identity: Option<Extension<Identity>>,
 ) -> Result<StatusCode, ApiError> {
-    let by = identity
-        .map(|Extension(identity)| identity.email)
-        .unwrap_or_default();
+    let by = identity.map_or_default(|Extension(identity)| identity.email);
     let archived = collab(&state)?
         .archive(id, &by)
         .await
@@ -708,9 +706,7 @@ async fn collab_token(
     Path(id): Path<uuid::Uuid>,
     identity: Option<Extension<Identity>>,
 ) -> Result<Json<CollabToken>, ApiError> {
-    let subject = identity
-        .map(|Extension(identity)| identity.email)
-        .unwrap_or_default();
+    let subject = identity.map_or_default(|Extension(identity)| identity.email);
     collab(&state)?
         .token(id, &subject)
         .await
@@ -809,9 +805,7 @@ async fn issue_device_token(
     if request.device.trim().is_empty() {
         return Err(ApiError::bad_request("name the device"));
     }
-    let email = identity
-        .map(|Extension(identity)| identity.email)
-        .unwrap_or_default();
+    let email = identity.map_or_default(|Extension(identity)| identity.email);
     let (token, info) = state
         .devices
         .issue(&email, &request.device, chrono::Utc::now())
@@ -823,9 +817,7 @@ async fn list_device_tokens(
     State(state): State<SharedState>,
     identity: Option<Extension<Identity>>,
 ) -> Result<Json<Vec<DeviceToken>>, ApiError> {
-    let email = identity
-        .map(|Extension(identity)| identity.email)
-        .unwrap_or_default();
+    let email = identity.map_or_default(|Extension(identity)| identity.email);
     state
         .devices
         .list(&email)
@@ -838,9 +830,7 @@ async fn revoke_device_token(
     Path(id): Path<uuid::Uuid>,
     identity: Option<Extension<Identity>>,
 ) -> Result<StatusCode, ApiError> {
-    let email = identity
-        .map(|Extension(identity)| identity.email)
-        .unwrap_or_default();
+    let email = identity.map_or_default(|Extension(identity)| identity.email);
     match state.devices.revoke(&email, id) {
         Ok(true) => Ok(StatusCode::NO_CONTENT),
         Ok(false) => Err(ApiError::new(StatusCode::NOT_FOUND, "no such device token")),

@@ -690,8 +690,7 @@ fn validate_drop_link(value: &str, base_url: &Url) -> Result<(), DropPointClient
     }
     let segments = link
         .path_segments()
-        .map(Iterator::collect::<Vec<_>>)
-        .unwrap_or_default();
+        .map_or_default(Iterator::collect::<Vec<_>>);
     if segments.len() != 2
         || segments.first().copied() != Some("drop")
         || segments

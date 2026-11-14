@@ -89,11 +89,7 @@ impl ServerSync {
 
     /// The status, with a fresh count of what's waiting.
     pub fn status(&self, store: &ExecutionStore) -> SyncStatus {
-        let mut status = self
-            .status
-            .lock()
-            .map(|status| status.clone())
-            .unwrap_or_default();
+        let mut status = self.status.lock().map_or_default(|status| status.clone());
         status.connected = self.link().ok().flatten().map(|link| ServerInfo {
             server: link.server,
             email: link.email,
